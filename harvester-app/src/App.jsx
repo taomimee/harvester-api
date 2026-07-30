@@ -179,7 +179,7 @@ function App() {
 // ฟังก์ชันดึงรายชื่อรถจากฐานข้อมูล
   const fetchVehicles = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/vehicles');
+      const res = await fetch('https://harvester-api-server.onrender.com/api/vehicles');
       const data = await res.json();
       setVehicles(data);
     } catch (err) {
@@ -195,7 +195,7 @@ function App() {
   const handleAddVehicle = async () => {
     if (!newVehicle.name.trim()) return alert("กรุณาใส่ชื่อรถหรือชื่อคนขับครับ");
     try {
-      const res = await fetch('http://localhost:3000/api/vehicles', {
+      const res = await fetch('https://harvester-api-server.onrender.com/api/vehicles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newVehicle)
@@ -212,7 +212,7 @@ function App() {
   const handleDeleteVehicle = async (id) => {
     if(!window.confirm('⚠️ ลบรถคันนี้ออกจากระบบหรือไม่?')) return;
     try {
-      const res = await fetch(`http://localhost:3000/api/vehicles/${id}`, { method: 'DELETE' });
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/vehicles/${id}`, { method: 'DELETE' });
       if (res.ok) {
         fetchVehicles();
         if(formData.vehicle_id === id) setFormData({...formData, vehicle_id: 0});
@@ -228,7 +228,7 @@ function App() {
   };
 
   const fetchJobs = () => {
-    fetch('http://localhost:3000/api/jobs')
+    fetch('https://harvester-api-server.onrender.com/api/jobs')
       .then(res => res.json())
       .then(data => {
         setJobs(data);
@@ -321,7 +321,7 @@ function App() {
   const handleDeleteJob = async (id) => {
     if (!window.confirm('⚠️ แน่ใจหรือไม่ว่าต้องการ "ลบ" คิวงานนี้?')) return;
     try {
-      const response = await fetch(`http://localhost:3000/api/jobs/${id}`, { method: 'DELETE' });
+      const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}`, { method: 'DELETE' });
       if (response.ok) { 
         alert('🗑️ ลบคิวงานเรียบร้อย'); 
         fetchJobs();
@@ -333,7 +333,7 @@ function App() {
   const handleAddJob = async (e) => {
     e.preventDefault();
     try {
-      const url = editingId ? `http://localhost:3000/api/jobs/${editingId}` : 'http://localhost:3000/api/jobs';
+      const url = editingId ? `https://harvester-api-server.onrender.com/api/jobs/${editingId}` : 'https://harvester-api-server.onrender.com/api/jobs';
       const method = editingId ? 'PUT' : 'POST';
 
       const response = await fetch(url, {
@@ -354,7 +354,7 @@ function App() {
 
   const updateStatus = async (id, newStatus) => {
     try {
-      const response = await fetch(`http://localhost:3000/api/jobs/${id}/status`, {
+      const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
