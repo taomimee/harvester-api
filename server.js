@@ -94,6 +94,52 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
 });
+
+// API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
+app.put('/api/jobs/:id', async (req, res) => {
+    const { id } = req.params;
+    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id } = req.body;
+
+    try {
+        // 1. ค้นหา customer_id ของคิวงานนี้
+        const { data: jobInfo, error: findError } = await supabase
+            .from('jobs')
+            .select('customer_id')
+            .eq('id', id)
+            .single();
+            
+        if (findError) throw findError;
+
+        // 2. อัปเดตข้อมูลลูกค้า (ชื่อ, เบอร์โทร, หมายเหตุ)
+        if (jobInfo.customer_id) {
+            await supabase.from('customers')
+                .update({ name: customer_name, phone: phone, address_note: address_note })
+                .eq('id', jobInfo.customer_id);
+        }
+
+        // 3. อัปเดตข้อมูลคิวงาน
+        const { data: updatedJob, error: jobError } = await supabase
+            .from('jobs')
+            .update({
+                vehicle_id: vehicle_id === 0 ? null : vehicle_id,
+                crop_type,
+                area_size,
+                job_date,
+                latitude,
+                longitude
+            })
+            .eq('id', id)
+            .select();
+
+        if (jobError) throw jobError;
+
+        res.json({ message: 'อัปเดตข้อมูลสำเร็จ!', data: updatedJob });
+    } catch (err) {
+        console.error('Error updating job:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // API สำหรับลบคิวงาน
 app.delete('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
