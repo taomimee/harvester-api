@@ -31,7 +31,8 @@ app.get('/api/jobs', async (req, res) => {
 
 // API สำหรับเพิ่มคิวงานใหม่
 app.post('/api/jobs', async (req, res) => {
-    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id } = req.body;
+    // 💡 1. เพิ่มตัวแปร price_per_rai, total_price, payment_status มารับค่าจากหน้าเว็บ
+    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
 
     try {
         // 1. เช็คว่ามีลูกค้านี้ในระบบหรือยัง (เช็คจากเบอร์โทร)
@@ -68,7 +69,11 @@ app.post('/api/jobs', async (req, res) => {
                 job_date,
                 latitude: latitude || 15.7001234, // ค่าพิกัดสำรอง
                 longitude: longitude || 101.1001234,
-                status: 'PENDING'
+                status: 'PENDING',
+                // 💡 2. เพิ่มการบันทึกข้อมูลเงินลงฐานข้อมูลตรงนี้
+                price_per_rai: price_per_rai || 0,
+                total_price: total_price || 0,
+                payment_status: payment_status || 'UNPAID'
             }])
             .select();
 
@@ -98,26 +103,16 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
 // API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
-    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id } = req.body;
+    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
 
     try {
-        // 1. ค้นหา customer_id ของคิวงานนี้
-        const { data: jobInfo, error: findError } = await supabase
-            .from('jobs')
-            .select('customer_id')
-            .eq('id', id)
-            .single();
-            
+        const { data: jobInfo, error: findError } = await supabase.from('jobs').select('customer_id').eq('id', id).single();
         if (findError) throw findError;
 
-        // 2. อัปเดตข้อมูลลูกค้า (ชื่อ, เบอร์โทร, หมายเหตุ)
         if (jobInfo.customer_id) {
-            await supabase.from('customers')
-                .update({ name: customer_name, phone: phone, address_note: address_note })
-                .eq('id', jobInfo.customer_id);
+            await supabase.from('customers').update({ name: customer_name, phone: phone, address_note: address_note }).eq('id', jobInfo.customer_id);
         }
 
-        // 3. อัปเดตข้อมูลคิวงาน
         const { data: updatedJob, error: jobError } = await supabase
             .from('jobs')
             .update({
@@ -126,13 +121,16 @@ app.put('/api/jobs/:id', async (req, res) => {
                 area_size,
                 job_date,
                 latitude,
-                longitude
+                longitude,
+                // 💡 อัปเดตค่าเงิน
+                price_per_rai,
+                total_price,
+                payment_status
             })
             .eq('id', id)
             .select();
 
         if (jobError) throw jobError;
-
         res.json({ message: 'อัปเดตข้อมูลสำเร็จ!', data: updatedJob });
     } catch (err) {
         console.error('Error updating job:', err.message);
