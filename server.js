@@ -172,8 +172,14 @@ app.get('/api/vehicles', async (req, res) => {
 
 // เพิ่มรายชื่อรถเกี่ยวคันใหม่
 app.post('/api/vehicles', async (req, res) => {
-    const { name, phone } = req.body;
-    const { data, error } = await supabase.from('vehicles').insert([{ name, phone }]).select();
+    // เปลี่ยนจาก phone เป็น driver_name
+    const { name, driver_name } = req.body;
+    
+    const { data, error } = await supabase
+        .from('vehicles')
+        .insert([{ name, driver_name }]) // เปลี่ยนเป็น driver_name
+        .select();
+        
     if (error) return res.status(500).json({ error: error.message });
     res.status(201).json({ message: 'เพิ่มรถสำเร็จ', data });
 });
