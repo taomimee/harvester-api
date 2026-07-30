@@ -158,6 +158,11 @@ function App() {
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
   
+  // 👇 เพิ่ม 2 บรรทัดนี้ สำหรับระบบแบ่งหน้า (สเต็ปที่ 1) 👇
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10; 
+  // 👆 --------------------------------------- 👆
+
   const [editingId, setEditingId] = useState(null);
   const [currentCoords, setCurrentCoords] = useState([15.7012, 101.1012]); 
 
@@ -431,13 +436,21 @@ function App() {
     }
   }
 
+  // --- จุดที่ 2: จัดการข้อมูลที่จะแสดงผล & แบ่งหน้า ---
   const activeJobs = jobs.filter(j => j.status !== 'DONE').sort((a, b) => {
     const priority = { 'IN_PROGRESS': 1, 'PAUSED': 2, 'PENDING': 3 };
     if (priority[a.status] !== priority[b.status]) return priority[a.status] - priority[b.status];
     return new Date(a.job_date) - new Date(b.job_date);
   });
-  const historyJobs = jobs.filter(j => j.status === 'DONE').sort((a, b) => new Date(b.job_date) - new Date(a.job_date));
-  const displayJobs = activeTab === 'active' ? activeJobs : historyJobs;
+  
+ const historyJobs = jobs.filter(j => j.status === 'DONE').sort((a, b) => new Date(b.job_date) - new Date(a.job_date));
+
+  // 👇 เพิ่มระบบคำนวณแบ่งหน้าตรงนี้
+  const totalPages = Math.ceil(historyJobs.length / itemsPerPage);
+  const currentHistoryJobs = historyJobs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  // 👇 เปลี่ยนให้ไปใช้ currentHistoryJobs แทนเวลาอยู่หน้าประวัติ
+  const displayJobs = activeTab === 'active' ? activeJobs : currentHistoryJobs;
 
   const searchKeyword = formData.customer_name.trim().toLowerCase();
   
@@ -507,7 +520,7 @@ function App() {
         <div className="flex bg-white rounded-xl p-1 mb-5 shadow-sm border border-gray-200">
           <button onClick={() => setActiveTab('active')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'active' ? 'bg-green-100 text-green-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
           <button onClick={() => setActiveTab('calendar')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'calendar' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
-          <button onClick={() => setActiveTab('history')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'history' ? 'bg-gray-200 text-gray-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>📋 ประวัติ</button>
+          <button onClick={() => { setActiveTab('history'); setCurrentPage(1); }} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'history' ? 'bg-gray-200 text-gray-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>📋 ประวัติ</button>
         </div>
 
         {activeTab === 'calendar' && renderCalendar()}
@@ -611,45 +624,44 @@ function App() {
                     </div>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${job.latitude},${job.longitude}`} target="_blank" className="bg-blue-600 text-white text-xs font-bold py-2 px-4 rounded-lg" onClick={(e) => e.stopPropagation()}>📍 นำทาง</a>
                   </div>
-                  {/* 👆 สิ้นสุดส่วนที่แก้ไข */}
+                  {/* 👆 สิ้นสุดส่วนที่แก้ไข (ชื่อคนขับ) 👆 */}
                 </div>
               )
             })}
           </div>
         )}
 
-        {selectedDayJobs && (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100]">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold text-gray-800">📋 คิวงานวันที่ {selectedDayJobs.date.toLocaleDateString('th-TH')}</h2>
-                <button onClick={() => setSelectedDayJobs(null)} className="text-gray-500 font-bold text-xl">❌</button>
-              </div>
-              <div className="space-y-3">
-                {selectedDayJobs.jobs.map(job => (
-                  <div key={job.id} onClick={() => { setSelectedDayJobs(null); openEditForm(job); }} className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <div className="flex justify-between items-center"><span className="font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</span></div>
-                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {job.area_size} ไร่</p>
-                  </div>
-                ))}
-              </div>
-              <button onClick={() => { setSelectedDayJobs(null); openAddFormForDate(selectedDayJobs.date); }} className="w-full mt-4 bg-orange-500 text-white py-2 rounded-lg font-bold shadow-md">+ เพิ่มคิวงานวันนี้</button>
-            </div>
+        {/* 👇👇👇 ก๊อปปี้โค้ดปุ่มแบ่งหน้าทั้งหมดนี้ มาวางแทรกตรงนี้เลยครับ 👇👇👇 */}
+        {activeTab === 'history' && historyJobs.length > 0 && (
+          <div className="flex justify-between items-center mt-6 bg-white p-3 rounded-xl shadow-sm border border-gray-200">
+            <button 
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
+                currentPage === 1 
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                  : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'
+              }`}
+            >
+              ◀ ก่อนหน้า
+            </button>
+            <span className="text-sm font-bold text-gray-600">
+              หน้า {currentPage} / {totalPages || 1}
+            </span>
+            <button 
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
+                currentPage === totalPages 
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
+                  : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'
+              }`}
+            >
+              ถัดไป ▶
+            </button>
           </div>
         )}
-
-        {activeTab !== 'calendar' && (
-          <button 
-            onClick={() => { 
-              setEditingId(null); 
-              setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [] });
-              setShowAddForm(true); 
-            }} 
-            className="fixed bottom-6 right-6 bg-green-600 text-white p-4 rounded-full shadow-xl font-bold text-2xl w-14 h-14 flex items-center justify-center"
-          >
-            +
-          </button>
-        )}
+        {/* 👆👆👆 สิ้นสุดโค้ดปุ่มแบ่งหน้า 👆👆👆 */}
 
         {/* 📝 ฟอร์ม เพิ่ม/แก้ไข คิวงาน */}
         {showAddForm && !showMapPicker && (
