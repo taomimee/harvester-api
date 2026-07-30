@@ -503,12 +503,19 @@ function App() {
                       </div>
                     </div>
                   )}
+                  {/* 👇 ส่วนที่แก้ไข: เพิ่มชื่อคนขับไว้ใต้ชื่อรถ */}
                   <div className="text-sm flex justify-between items-center border-t pt-3 mt-3">
-                    <p>🚜 รถ: <span className="font-semibold text-blue-700">
-                      {assignedVehicle ? assignedVehicle.name : '⏳ ยังไม่จัดรถ'}
-                    </span></p>
+                    <div>
+                      <p>🚜 รถ: <span className="font-semibold text-blue-700">
+                        {assignedVehicle ? assignedVehicle.name : '⏳ ยังไม่จัดรถ'}
+                      </span></p>
+                      {assignedVehicle && assignedVehicle.driver_name && (
+                        <p className="text-xs text-gray-500 mt-1">👨‍🌾 คนขับ: {assignedVehicle.driver_name}</p>
+                      )}
+                    </div>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${job.latitude},${job.longitude}`} target="_blank" className="bg-blue-600 text-white text-xs font-bold py-2 px-4 rounded-lg" onClick={(e) => e.stopPropagation()}>📍 นำทาง</a>
                   </div>
+                  {/* 👆 สิ้นสุดส่วนที่แก้ไข */}
                 </div>
               )
             })}
