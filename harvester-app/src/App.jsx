@@ -164,7 +164,10 @@ function App() {
   const [formData, setFormData] = useState({
     customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว',
     area_size: '', job_date: '', latitude: '', longitude: '',
-    vehicle_id: 0, boundaries: [] 
+    vehicle_id: 0, boundaries: [],
+    price_per_rai: '', // <-- เพิ่มราคาต่อไร่
+    total_price: '',   // <-- เพิ่มยอดรวม
+    payment_status: 'UNPAID' // <-- เพิ่มสถานะจ่ายเงิน
   })
 
   // 📅 State สำหรับปฏิทิน
@@ -305,7 +308,11 @@ function App() {
       latitude: job.latitude || '',
       longitude: job.longitude || '',
       vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
-      boundaries: job.boundaries || []
+      boundaries: job.boundaries || [],
+      // 👇 3 บรรทัดที่เพิ่มเข้ามา เพื่อดึงข้อมูลเงินมาโชว์ครับ
+      price_per_rai: job.price_per_rai || '',
+      total_price: job.total_price || '',
+      payment_status: job.payment_status || 'UNPAID'
     });
     if (job.latitude && job.longitude) setCurrentCoords([job.latitude, job.longitude]);
     setShowAddForm(true);
@@ -488,7 +495,23 @@ function App() {
                       <div className="bg-gray-50 p-2 rounded-lg"><span className="block text-gray-500 text-xs">ประเภทพืช</span><span className="font-semibold text-gray-800">{job.crop_type}</span></div>
                       <div className="bg-gray-50 p-2 rounded-lg"><span className="block text-gray-500 text-xs">พื้นที่</span><span className="font-semibold text-gray-800">{job.area_size} ไร่</span></div>
                     </div>
+                    
+                    {/* 💰 เพิ่มกล่องโชว์ยอดเงินตรงนี้ครับ */}
+                    {(job.price_per_rai || job.total_price) && (
+                      <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
+                        <div>
+                          <span className="block text-green-700 text-xs">ยอดรวม ({job.price_per_rai || 0} บ./ไร่)</span>
+                          <span className="font-bold text-green-800 text-lg">{job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท</span>
+                        </div>
+                        <div>
+                          <span className={`px-2 py-1 rounded-md text-xs font-bold ${job.payment_status === 'PAID' ? 'bg-green-200 text-green-800' : job.payment_status === 'DEPOSIT' ? 'bg-yellow-200 text-yellow-800' : 'bg-red-200 text-red-800'}`}>
+                            {job.payment_status === 'PAID' ? '✅ จ่ายแล้ว' : job.payment_status === 'DEPOSIT' ? '💰 มัดจำ' : '❌ ยังไม่จ่าย'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
+                  
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
                       <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-3 border border-yellow-200"><span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>{job.customers?.address_note || 'ไม่มีข้อมูล'}</div>
@@ -645,8 +668,44 @@ function App() {
                   </div>
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">จำนวนไร่</label>
-                    <input type="number" step="0.01" required className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="0.00" value={formData.area_size} onChange={(e) => setFormData({...formData, area_size: e.target.value})} />
+                    <input type="number" step="0.01" required className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="0.00" 
+                      value={formData.area_size} 
+                      onChange={(e) => {
+                        const area = e.target.value;
+                        // ให้มันคูณเลขให้อัตโนมัติเวลาเราพิมพ์จำนวนไร่
+                        const total = (area && formData.price_per_rai) ? (parseFloat(area) * parseFloat(formData.price_per_rai)).toFixed(2) : '';
+                        setFormData({...formData, area_size: area, total_price: total});
+                      }} 
+                    />
                   </div>
+                </div>
+                
+                {/* 💰 ส่วนจัดการเงินๆ ทองๆ */}
+                <div className="grid grid-cols-2 gap-3 mt-3 border-t border-gray-200 pt-3">
+                  <div>
+                    <label className="block text-gray-700 mb-1 font-semibold">ราคาต่อไร่ (บาท)</label>
+                    <input type="number" className="w-full border p-2 rounded-lg bg-white" placeholder="เช่น 600" 
+                      value={formData.price_per_rai} 
+                      onChange={(e) => {
+                        const price = e.target.value;
+                        const total = (formData.area_size && price) ? (parseFloat(formData.area_size) * parseFloat(price)).toFixed(2) : '';
+                        setFormData({...formData, price_per_rai: price, total_price: total});
+                      }} 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 mb-1 font-semibold">ยอดรวม (บาท)</label>
+                    <input type="number" readOnly className="w-full border p-2 rounded-lg bg-gray-100 text-gray-600 font-bold" placeholder="0.00" value={formData.total_price} />
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <label className="block text-gray-700 mb-1 font-semibold">สถานะการจ่ายเงิน</label>
+                  <select className="w-full border p-2 rounded-lg bg-white font-bold" value={formData.payment_status} onChange={(e) => setFormData({...formData, payment_status: e.target.value})}>
+                    <option value="UNPAID">❌ ยังไม่จ่าย</option>
+                    <option value="DEPOSIT">💰 มัดจำแล้ว</option>
+                    <option value="PAID">✅ จ่ายครบแล้ว</option>
+                  </select>
                 </div>
 
                 <div className="flex gap-3 mt-4">
