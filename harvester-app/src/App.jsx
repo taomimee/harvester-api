@@ -174,7 +174,7 @@ function App() {
   // 🚜 State สำหรับจัดการรถเกี่ยว
   const [vehicles, setVehicles] = useState([]);
   const [showVehicleManager, setShowVehicleManager] = useState(false);
-  const [newVehicle, setNewVehicle] = useState({ name: '', phone: '' });
+  const [newVehicle, setNewVehicle] = useState({ name: '', driver_name: '' });
 
 // ฟังก์ชันดึงรายชื่อรถจากฐานข้อมูล
   const fetchVehicles = async () => {
@@ -193,7 +193,7 @@ function App() {
   }, []);
 
   const handleAddVehicle = async () => {
-    if (!newVehicle.name.trim()) return alert("กรุณาใส่ชื่อรถหรือชื่อคนขับครับ");
+    if (!newVehicle.name.trim()) return alert("กรุณาใส่ชื่อรถครับ");
     try {
       const res = await fetch('https://harvester-api-server.onrender.com/api/vehicles', {
         method: 'POST',
@@ -201,8 +201,10 @@ function App() {
         body: JSON.stringify(newVehicle)
       });
       if (res.ok) {
-        fetchVehicles(); // โหลดข้อมูลใหม่
-        setNewVehicle({ name: '', phone: '' });
+        fetchVehicles(); // โหลดข้อมูลใหม่มาแสดง
+        
+        // 💡 จุดที่ 2.3: เปลี่ยนจาก phone เป็น driver_name เพื่อล้างค่าให้ถูกต้อง
+        setNewVehicle({ name: '', driver_name: '' }); 
       }
     } catch (err) {
       alert("เพิ่มรถไม่สำเร็จ");
@@ -662,15 +664,21 @@ function App() {
               <div className="space-y-2 mb-4 max-h-48 overflow-y-auto">
                 {vehicles.map(v => (
                   <div key={v.id} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border">
-                    <div><p className="font-bold text-sm text-gray-800">{v.name}</p>{v.phone && <p className="text-xs text-gray-500">📞 {v.phone}</p>}</div>
+                    <div>
+                      <p className="font-bold text-sm text-gray-800">{v.name}</p>
+                      {/* เปลี่ยนตรงนี้ให้โชว์ชื่อคนขับ */}
+                      {v.driver_name && <p className="text-xs text-gray-500">👨‍🌾 คนขับ: {v.driver_name}</p>}
+                    </div>
                     <button onClick={() => handleDeleteVehicle(v.id)} className="bg-red-100 text-red-600 px-2 py-1 rounded-md text-xs font-bold">ลบ</button>
                   </div>
                 ))}
               </div>
               <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
                 <h3 className="font-bold text-orange-800 mb-2 text-sm">➕ เพิ่มรถคันใหม่</h3>
-                <input type="text" placeholder="ชื่อรถ / ชื่อคุณเอง" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.name} onChange={e => setNewVehicle({...newVehicle, name: e.target.value})} />
-                <input type="text" placeholder="เบอร์โทร (ถ้ามี)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.phone} onChange={e => setNewVehicle({...newVehicle, phone: e.target.value})} />
+                <input type="text" placeholder="ชื่อรถ (เช่น คันที่ 1)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.name} onChange={e => setNewVehicle({...newVehicle, name: e.target.value})} />
+                {/* เปลี่ยนช่องนี้เป็นให้กรอกชื่อคนขับ */}
+                <input type="text" placeholder="ชื่อคนขับ (ถ้ามี)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.driver_name} onChange={e => setNewVehicle({...newVehicle, driver_name: e.target.value})} />
+                
                 <button onClick={handleAddVehicle} className="w-full bg-orange-500 text-white font-bold py-2 rounded-lg text-sm">เพิ่มข้อมูล</button>
               </div>
             </div>
