@@ -679,8 +679,8 @@ function App() {
                   </div>
                 </div>
                 
-                {/* 💰 ส่วนจัดการเงินๆ ทองๆ */}
-                <div className="grid grid-cols-2 gap-3 mt-3 border-t border-gray-200 pt-3">
+                {/* 💰 ส่วนจัดการเงินๆ ทองๆ ขยับขึ้นมาตรงนี้ให้เห็นชัดๆ */}
+                <div className="grid grid-cols-2 gap-3 mt-3 pt-2">
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">ราคาต่อไร่ (บาท)</label>
                     <input type="number" className="w-full border p-2 rounded-lg bg-white" placeholder="เช่น 600" 
