@@ -663,6 +663,41 @@ function App() {
         )}
         {/* 👆👆👆 สิ้นสุดโค้ดปุ่มแบ่งหน้า 👆👆👆 */}
 
+        {/* 👇👇 ส่วนที่โดนลบทับไป เอากลับมาวางตรงนี้ครับ 👇👇 */}
+        {selectedDayJobs && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100]">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold text-gray-800">📋 คิวงานวันที่ {selectedDayJobs.date.toLocaleDateString('th-TH')}</h2>
+                <button onClick={() => setSelectedDayJobs(null)} className="text-gray-500 font-bold text-xl">❌</button>
+              </div>
+              <div className="space-y-3">
+                {selectedDayJobs.jobs.map(job => (
+                  <div key={job.id} onClick={() => { setSelectedDayJobs(null); openEditForm(job); }} className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <div className="flex justify-between items-center"><span className="font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</span></div>
+                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {job.area_size} ไร่</p>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => { setSelectedDayJobs(null); openAddFormForDate(selectedDayJobs.date); }} className="w-full mt-4 bg-orange-500 text-white py-2 rounded-lg font-bold shadow-md">+ เพิ่มคิวงานวันนี้</button>
+            </div>
+          </div>
+        )}
+
+        {activeTab !== 'calendar' && (
+          <button 
+            onClick={() => { 
+              setEditingId(null); 
+              setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
+              setShowAddForm(true); 
+            }} 
+            className="fixed bottom-6 right-6 bg-green-600 text-white p-4 rounded-full shadow-xl font-bold text-2xl w-14 h-14 flex items-center justify-center"
+          >
+            +
+          </button>
+        )}
+        {/* 👆👆 สิ้นสุดส่วนที่ดึงกลับมา 👆👆 */}
+
         {/* 📝 ฟอร์ม เพิ่ม/แก้ไข คิวงาน */}
         {showAddForm && !showMapPicker && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100]">
