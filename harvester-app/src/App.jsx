@@ -341,6 +341,47 @@ function App() {
 
   const handleAddJob = async (e) => {
     e.preventDefault();
+
+    // 🛑 1. เริ่มระบบเช็คคิวซ้อน (Double Booking Prevention)
+    if (formData.vehicle_id && formData.vehicle_id !== 0 && formData.job_date) {
+      // แปลงวันที่ที่กำลังจะบันทึกให้อยู่ในรูปแบบ String เพื่อเทียบเฉพาะ "วัน/เดือน/ปี"
+      const selectedDate = new Date(formData.job_date).toDateString();
+
+      const conflictingJobs = jobs.filter(job => {
+        // - ข้ามคิวที่กำลังกดแก้ไขอยู่ (ไม่งั้นมันจะเตือนชนกับตัวเอง)
+        if (editingId && job.id === editingId) return false;
+        // - ข้ามคิวที่เกี่ยวเสร็จไปแล้ว (รถว่างแล้ว)
+        if (job.status === 'DONE') return false;
+        
+        // - เช็คว่าเลือกรถคันเดียวกันไหม
+        const currentVehicleId = job.vehicles?.id || job.vehicle_id;
+        if (currentVehicleId !== formData.vehicle_id) return false;
+
+        // - เช็คว่าลงคิววันเดียวกันไหม
+        const jobDate = new Date(job.job_date).toDateString();
+        return jobDate === selectedDate;
+      });
+
+      // ถ้าเจอคิวชนอย่างน้อย 1 คิว ให้เด้ง Alert
+      if (conflictingJobs.length > 0) {
+        const cJob = conflictingJobs[0]; // ดึงคิวแรกที่ชนมาโชว์เตือน
+        const time = new Date(cJob.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+        const location = cJob.customers?.address_note || cJob.customers?.name || 'ไม่ระบุพิกัด/สถานที่';
+
+        // เด้งกล่องถามความมั่นใจ
+        const isConfirm = window.confirm(
+          `🛑 แจ้งเตือนรถคิวทับซ้อน!\n\nรถคันนี้มีคิวงานของวันนี้อยู่แล้วที่:\n📍 ${location}\n⏰ เวลา ${time} น.\n\nคุณต้องการยืนยันที่จะ "แทรกคิว" นี้จริงๆ หรือไม่?`
+        );
+
+        // ถ้าผู้ใช้กด "ยกเลิก" ให้หยุดการทำงานทันที ไม่เซฟลง DB
+        if (!isConfirm) {
+          return; 
+        }
+      }
+    }
+    // 🟢 จบระบบเช็คคิวซ้อน (ถ้ากดตกลง หรือคิวไม่ชน ก็จะไหลมาทำงานโค้ดเซฟด้านล่างต่อ)
+
+    // 2. โค้ดบันทึกลงฐานข้อมูล (โค้ดเดิมของคุณ)
     try {
       const url = editingId ? `https://harvester-api-server.onrender.com/api/jobs/${editingId}` : 'https://harvester-api-server.onrender.com/api/jobs';
       const method = editingId ? 'PUT' : 'POST';
@@ -355,7 +396,7 @@ function App() {
         setShowAddForm(false);
         setEditingId(null);
         setSelectedDayJobs(null);
-        setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [] });
+        setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
         fetchJobs();
       } else { alert('❌ บันทึกไม่สำเร็จ'); }
     } catch (err) { console.error(err); alert('❌ เกิดข้อผิดพลาดเซิร์ฟเวอร์'); }
