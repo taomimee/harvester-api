@@ -484,33 +484,65 @@ function App() {
               const assignedVehicle = vehicles.find(v => v.id === job.vehicle_id);
 
               return (
-                <div key={job.id} className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2 mb-3"><div className="text-indigo-800 font-bold text-sm flex justify-between px-1"><span>📅 {jobDateTime.date}</span><span>⏰ {jobDateTime.time} น.</span></div></div>
-                  <div className="cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : job.id)}>
-                    <div className="flex justify-between items-start mb-3">
-                      <div><h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2><p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p></div>
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>{statusObj.text}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
-                      <div className="bg-gray-50 p-2 rounded-lg"><span className="block text-gray-500 text-xs">ประเภทพืช</span><span className="font-semibold text-gray-800">{job.crop_type}</span></div>
-                      <div className="bg-gray-50 p-2 rounded-lg"><span className="block text-gray-500 text-xs">พื้นที่</span><span className="font-semibold text-gray-800">{job.area_size} ไร่</span></div>
-                    </div>
-                    
-                    {/* 💰 เพิ่มกล่องโชว์ยอดเงินตรงนี้ครับ */}
-                    {(job.price_per_rai || job.total_price) && (
-                      <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
-                        <div>
-                          <span className="block text-green-700 text-xs">ยอดรวม ({job.price_per_rai || 0} บ./ไร่)</span>
-                          <span className="font-bold text-green-800 text-lg">{job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท</span>
-                        </div>
-                        <div>
-                          <span className={`px-2 py-1 rounded-md text-xs font-bold ${job.payment_status === 'PAID' ? 'bg-green-200 text-green-800' : job.payment_status === 'DEPOSIT' ? 'bg-yellow-200 text-yellow-800' : 'bg-red-200 text-red-800'}`}>
-                            {job.payment_status === 'PAID' ? '✅ จ่ายแล้ว' : job.payment_status === 'DEPOSIT' ? '💰 มัดจำ' : '❌ ยังไม่จ่าย'}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+      <div key={job.id} className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
+        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2 mb-3">
+          <div className="text-indigo-800 font-bold text-sm flex justify-between px-1">
+            <span>📅 {jobDateTime.date}</span>
+            <span>⏰ {jobDateTime.time} น.</span>
+          </div>
+        </div>
+
+        <div className="cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : job.id)}>
+          <div className="flex justify-between items-start mb-3">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2>
+              <p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p>
+            </div>
+            <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>
+              {statusObj.text}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
+            <div className="bg-gray-50 p-2 rounded-lg">
+              <span className="block text-gray-500 text-xs">ประเภทพืช</span>
+              <span className="font-semibold text-gray-800">{job.crop_type}</span>
+            </div>
+            <div className="bg-gray-50 p-2 rounded-lg">
+              <span className="block text-gray-500 text-xs">พื้นที่</span>
+              <span className="font-semibold text-gray-800">{job.area_size} ไร่</span>
+            </div>
+          </div>
+          
+          {/* 💰 กล่องโชว์ยอดเงิน */}
+          {(job.price_per_rai || job.total_price) && (
+            <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
+              <div>
+                <span className="block text-green-700 text-xs">
+                  ยอดรวม ({job.price_per_rai || 0} บ./ไร่)
+                </span>
+                <span className="font-bold text-green-800 text-lg">
+                  {job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท
+                </span>
+              </div>
+              <div>
+                <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${
+                  job.payment_status === 'PAID'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : job.payment_status === 'DEPOSIT'
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                    : 'bg-slate-100 text-slate-700 border border-slate-300'
+                }`}>
+                  {job.payment_status === 'PAID'
+                    ? '✅ ชำระเรียบร้อย'
+                    : job.payment_status === 'DEPOSIT'
+                    ? '💳 มัดจำแล้ว'
+                    : '⏳ รอชำระเงิน'}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
                   
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
@@ -702,9 +734,9 @@ function App() {
                 <div className="mt-3">
                   <label className="block text-gray-700 mb-1 font-semibold">สถานะการจ่ายเงิน</label>
                   <select className="w-full border p-2 rounded-lg bg-white font-bold" value={formData.payment_status} onChange={(e) => setFormData({...formData, payment_status: e.target.value})}>
-                    <option value="UNPAID">❌ ยังไม่จ่าย</option>
-                    <option value="DEPOSIT">💰 มัดจำแล้ว</option>
-                    <option value="PAID">✅ จ่ายครบแล้ว</option>
+                    <option value="UNPAID">⏳ รอชำระเงิน</option>
+                    <option value="DEPOSIT">💳 มัดจำแล้ว</option>
+                    <option value="PAID">✅ ชำระเรียบร้อย</option>
                   </select>
                 </div>
 
