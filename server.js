@@ -94,6 +94,24 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
 });
+// API สำหรับลบคิวงาน
+app.delete('/api/jobs/:id', async (req, res) => {
+    const { id } = req.params;
+    
+    try {
+        const { error } = await supabase
+            .from('jobs')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        
+        res.json({ message: 'ลบข้อมูลคิวงานสำเร็จเรียบร้อย' });
+    } catch (err) {
+        console.error('Error deleting job:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // ==========================================
 // 🚜 API สำหรับจัดการรถเกี่ยว (Vehicles)
