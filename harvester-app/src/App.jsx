@@ -751,7 +751,7 @@ function App() {
           </div>
         )}
 
-        {/* 🗺️ หน้าจอแผนที่เต็มจอ */}
+        {/* 🗺️ หน้าจอแผนที่เต็มจอย */}
         {showMapPicker && (
           <div className="fixed inset-0 bg-black z-[200] flex flex-col">
              <LingStyleMap 
