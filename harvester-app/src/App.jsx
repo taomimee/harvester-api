@@ -165,9 +165,9 @@ function App() {
     customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว',
     area_size: '', job_date: '', latitude: '', longitude: '',
     vehicle_id: 0, boundaries: [],
-    price_per_rai: '', // <-- เพิ่มราคาต่อไร่
-    total_price: '',   // <-- เพิ่มยอดรวม
-    payment_status: 'UNPAID' // <-- เพิ่มสถานะจ่ายเงิน
+    price_per_rai: '', 
+    total_price: '',   
+    payment_status: 'UNPAID' 
   })
 
   // 📅 State สำหรับปฏิทิน
@@ -179,7 +179,6 @@ function App() {
   const [showVehicleManager, setShowVehicleManager] = useState(false);
   const [newVehicle, setNewVehicle] = useState({ name: '', driver_name: '' });
 
-// ฟังก์ชันดึงรายชื่อรถจากฐานข้อมูล
   const fetchVehicles = async () => {
     try {
       const res = await fetch('https://harvester-api-server.onrender.com/api/vehicles');
@@ -192,7 +191,7 @@ function App() {
 
   useEffect(() => { 
     fetchJobs();
-    fetchVehicles(); // เรียกใช้ตอนเปิดแอป
+    fetchVehicles();
   }, []);
 
   const handleAddVehicle = async () => {
@@ -204,9 +203,7 @@ function App() {
         body: JSON.stringify(newVehicle)
       });
       if (res.ok) {
-        fetchVehicles(); // โหลดข้อมูลใหม่มาแสดง
-        
-        // 💡 จุดที่ 2.3: เปลี่ยนจาก phone เป็น driver_name เพื่อล้างค่าให้ถูกต้อง
+        fetchVehicles();
         setNewVehicle({ name: '', driver_name: '' }); 
       }
     } catch (err) {
@@ -227,11 +224,6 @@ function App() {
     }
   };
 
-  const saveVehicles = (updatedVehicles) => {
-    setVehicles(updatedVehicles);
-    localStorage.setItem('harvester_vehicles', JSON.stringify(updatedVehicles));
-  };
-
   const fetchJobs = () => {
     fetch('https://harvester-api-server.onrender.com/api/jobs')
       .then(res => res.json())
@@ -249,8 +241,6 @@ function App() {
       })
       .catch(err => console.error("ดึงข้อมูลไม่ได้:", err))
   }
-
-  useEffect(() => { fetchJobs() }, [])
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -280,13 +270,18 @@ function App() {
     const polygon = turf.polygon([turfCoords]);
     const center = turf.centerOfMass(polygon).geometry.coordinates; 
 
-    setFormData(prev => ({
-      ...prev,
-      area_size: areaRai,
-      latitude: center[1].toFixed(6), 
-      longitude: center[0].toFixed(6),
-      boundaries: points
-    }));
+    setFormData(prev => {
+      const area = areaRai;
+      const total = (area && prev.price_per_rai) ? (parseFloat(area) * parseFloat(prev.price_per_rai)).toFixed(2) : prev.total_price;
+      return {
+        ...prev,
+        area_size: area,
+        latitude: center[1].toFixed(6), 
+        longitude: center[0].toFixed(6),
+        boundaries: points,
+        total_price: total
+      };
+    });
     setShowMapPicker(false);
   };
 
@@ -309,7 +304,6 @@ function App() {
       longitude: job.longitude || '',
       vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
       boundaries: job.boundaries || [],
-      // 👇 3 บรรทัดที่เพิ่มเข้ามา เพื่อดึงข้อมูลเงินมาโชว์ครับ
       price_per_rai: job.price_per_rai || '',
       total_price: job.total_price || '',
       payment_status: job.payment_status || 'UNPAID'
@@ -323,7 +317,11 @@ function App() {
     d.setHours(8, 0, 0, 0);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     setEditingId(null);
-    setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: d.toISOString().slice(0, 16), latitude: '', longitude: '', vehicle_id: 0, boundaries: [] });
+    setFormData({ 
+      customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', 
+      area_size: '', job_date: d.toISOString().slice(0, 16), latitude: '', longitude: '', 
+      vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' 
+    });
     setShowAddForm(true);
   }
 
@@ -355,7 +353,11 @@ function App() {
         setShowAddForm(false);
         setEditingId(null);
         setSelectedDayJobs(null);
-        setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [] });
+        setFormData({ 
+          customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', 
+          area_size: '', job_date: '', latitude: '', longitude: '', 
+          vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' 
+        });
         fetchJobs();
       } else { alert('❌ บันทึกไม่สำเร็จ'); }
     } catch (err) { console.error(err); alert('❌ เกิดข้อผิดพลาดเซิร์ฟเวอร์'); }
@@ -399,11 +401,7 @@ function App() {
   const displayJobs = activeTab === 'active' ? activeJobs : historyJobs;
 
   const searchKeyword = formData.customer_name.trim().toLowerCase();
-  
-  // เช็กว่าข้อมูลในช่องพิมพ์ ตรงเป๊ะกับลูกค้าในฐานข้อมูลแล้วหรือยัง (แปลว่าผู้ใช้เพิ่งกดเลือก)
   const isExactMatch = customersList.some(c => c.name === formData.customer_name && c.phone === formData.phone);
-
-  // ถ้าพิมพ์ค้นหาอยู่ และ "ยังไม่ได้เลือกจนตรงเป๊ะ" ถึงจะแสดงกล่อง
   const filteredCustomers = (searchKeyword.length > 0 && !isExactMatch) ? customersList.filter(c => {
     const nameLower = c.name.toLowerCase();
     const phoneStr = c.phone;
@@ -496,7 +494,7 @@ function App() {
                       <div className="bg-gray-50 p-2 rounded-lg"><span className="block text-gray-500 text-xs">พื้นที่</span><span className="font-semibold text-gray-800">{job.area_size} ไร่</span></div>
                     </div>
                     
-                    {/* 💰 เพิ่มกล่องโชว์ยอดเงินตรงนี้ครับ */}
+                    {/* 💰 โชว์ยอดเงินและสถานะการจ่ายเงิน */}
                     {(job.price_per_rai || job.total_price) && (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
@@ -526,7 +524,7 @@ function App() {
                       </div>
                     </div>
                   )}
-                  {/* 👇 ส่วนที่แก้ไข: เพิ่มชื่อคนขับไว้ใต้ชื่อรถ */}
+
                   <div className="text-sm flex justify-between items-center border-t pt-3 mt-3">
                     <div>
                       <p>🚜 รถ: <span className="font-semibold text-blue-700">
@@ -538,7 +536,6 @@ function App() {
                     </div>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${job.latitude},${job.longitude}`} target="_blank" className="bg-blue-600 text-white text-xs font-bold py-2 px-4 rounded-lg" onClick={(e) => e.stopPropagation()}>📍 นำทาง</a>
                   </div>
-                  {/* 👆 สิ้นสุดส่วนที่แก้ไข */}
                 </div>
               )
             })}
@@ -569,7 +566,11 @@ function App() {
           <button 
             onClick={() => { 
               setEditingId(null); 
-              setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [] });
+              setFormData({ 
+                customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', 
+                area_size: '', job_date: '', latitude: '', longitude: '', 
+                vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' 
+              });
               setShowAddForm(true); 
             }} 
             className="fixed bottom-6 right-6 bg-green-600 text-white p-4 rounded-full shadow-xl font-bold text-2xl w-14 h-14 flex items-center justify-center"
@@ -621,7 +622,6 @@ function App() {
                   <input type="datetime-local" required className="w-full border p-2 rounded-lg" value={formData.job_date} onChange={(e) => setFormData({...formData, job_date: e.target.value})} />
                 </div>
 
-                {/* 🚜 จัดการและเลือกรถเกี่ยว (แบบไดนามิกตัวเดียวจบ) */}
                 <div className="bg-orange-50 p-3 rounded-lg border border-orange-200 mt-3">
                   <div className="flex justify-between items-center mb-2">
                     <label className="block text-orange-800 font-semibold">🚜 จัดรถเกี่ยว</label>
@@ -672,7 +672,6 @@ function App() {
                       value={formData.area_size} 
                       onChange={(e) => {
                         const area = e.target.value;
-                        // ให้มันคูณเลขให้อัตโนมัติเวลาเราพิมพ์จำนวนไร่
                         const total = (area && formData.price_per_rai) ? (parseFloat(area) * parseFloat(formData.price_per_rai)).toFixed(2) : '';
                         setFormData({...formData, area_size: area, total_price: total});
                       }} 
@@ -732,7 +731,6 @@ function App() {
                   <div key={v.id} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border">
                     <div>
                       <p className="font-bold text-sm text-gray-800">{v.name}</p>
-                      {/* เปลี่ยนตรงนี้ให้โชว์ชื่อคนขับ */}
                       {v.driver_name && <p className="text-xs text-gray-500">👨‍🌾 คนขับ: {v.driver_name}</p>}
                     </div>
                     <button onClick={() => handleDeleteVehicle(v.id)} className="bg-red-100 text-red-600 px-2 py-1 rounded-md text-xs font-bold">ลบ</button>
@@ -742,7 +740,6 @@ function App() {
               <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
                 <h3 className="font-bold text-orange-800 mb-2 text-sm">➕ เพิ่มรถคันใหม่</h3>
                 <input type="text" placeholder="ชื่อรถ (เช่น คันที่ 1)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.name} onChange={e => setNewVehicle({...newVehicle, name: e.target.value})} />
-                {/* เปลี่ยนช่องนี้เป็นให้กรอกชื่อคนขับ */}
                 <input type="text" placeholder="ชื่อคนขับ (ถ้ามี)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.driver_name} onChange={e => setNewVehicle({...newVehicle, driver_name: e.target.value})} />
                 
                 <button onClick={handleAddVehicle} className="w-full bg-orange-500 text-white font-bold py-2 rounded-lg text-sm">เพิ่มข้อมูล</button>
