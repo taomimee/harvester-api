@@ -390,7 +390,12 @@ function App() {
   const displayJobs = activeTab === 'active' ? activeJobs : historyJobs;
 
   const searchKeyword = formData.customer_name.trim().toLowerCase();
-  const filteredCustomers = searchKeyword.length > 0 ? customersList.filter(c => {
+  
+  // เช็กว่าข้อมูลในช่องพิมพ์ ตรงเป๊ะกับลูกค้าในฐานข้อมูลแล้วหรือยัง (แปลว่าผู้ใช้เพิ่งกดเลือก)
+  const isExactMatch = customersList.some(c => c.name === formData.customer_name && c.phone === formData.phone);
+
+  // ถ้าพิมพ์ค้นหาอยู่ และ "ยังไม่ได้เลือกจนตรงเป๊ะ" ถึงจะแสดงกล่อง
+  const filteredCustomers = (searchKeyword.length > 0 && !isExactMatch) ? customersList.filter(c => {
     const nameLower = c.name.toLowerCase();
     const phoneStr = c.phone;
     const keywords = searchKeyword.split(/\s+/);
@@ -565,7 +570,7 @@ function App() {
                     <div className="absolute left-0 right-0 bg-white border border-gray-300 rounded-lg shadow-lg mt-1 z-20 max-h-40 overflow-y-auto">
                       <p className="text-xs text-gray-400 p-2 bg-gray-50 border-b">💡 พบลูกค้าเก่า คลิกเพื่อเลือก:</p>
                       {filteredCustomers.map((cust, idx) => (
-                        <div key={idx} onClick={() => setFormData({ ...formData, customer_name: cust.name, phone: cust.phone })} className="p-2 hover:bg-green-50 cursor-pointer border-b flex justify-between">
+                        <div key={idx} onMouseDown={() => setFormData({ ...formData, customer_name: cust.name, phone: cust.phone })} className="p-2 hover:bg-green-50 cursor-pointer border-b flex justify-between">
                           <span className="font-semibold text-gray-800">{cust.name}</span>
                           <span className="text-gray-500 text-xs">📞 {cust.phone}</span>
                         </div>
