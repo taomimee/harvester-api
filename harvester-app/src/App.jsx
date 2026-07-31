@@ -516,9 +516,8 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
-{/* 🐘 Header ช้างขาวเจริญทรัพย์ - ประกายเน้นตรงไอคอนช้าง (ดาว 4 มุมครบถ้วน) */}
+{/* 🐘 Header ช้างขาวเจริญทรัพย์ - ช้างขาวแท้ 100% ไม่เปลี่ยนสีตามระบบ */}
 <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
-  
   <div className="relative z-10 flex flex-col items-center">
     
     {/* 🐘 กล่องช้าง + ประกายแสงทองล้อมรอบตัวช้าง */}
@@ -532,9 +531,14 @@ function App() {
       <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
       <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
 
-      {/* 🐘 3. ไอคอนช้าง */}
+      {/* 🐘 3. ไอคอนช้างขาว SVG (แสดงผลสีขาวบนทุกอุปกรณ์) */}
       <div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
-        <span className="text-2xl drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]">🐘</span>
+        <svg 
+          className="w-7 h-7 fill-white drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
+          viewBox="0 0 24 24"
+        >
+          <path d="M19.5 8.25c-.83 0-1.5.67-1.5 1.5v2.25c0 .41-.34.75-.75.75s-.75-.34-.75-.75V9c0-2.48-2.02-4.5-4.5-4.5H11C7.13 4.5 4 7.63 4 11.5V18c0 .83.67 1.5 1.5 1.5S7 18.83 7 18v-2h3v2c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-2h2v2c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-4.09c1.19-.69 2-1.97 2-3.41v-.75c0-.83-.67-1.5-1.5-1.5zM6 10c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
+        </svg>
       </div>
     </div>
     
@@ -550,7 +554,6 @@ function App() {
     </div>
   </div>
 </div>
-
         {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) สไตล์มินิมอล */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100">
           <button 
