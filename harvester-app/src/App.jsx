@@ -516,8 +516,9 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
-{/* 🐘 Header ช้างขาวเจริญทรัพย์ - ช้างขาวแท้ 100% ไม่เปลี่ยนสีตามระบบ */}
+{/* 🐘 Header ช้างขาวเจริญทรัพย์ - ประกายเน้นตรงไอคอนช้าง (ดาว 4 มุมครบถ้วน) */}
 <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
+  
   <div className="relative z-10 flex flex-col items-center">
     
     {/* 🐘 กล่องช้าง + ประกายแสงทองล้อมรอบตัวช้าง */}
@@ -531,14 +532,10 @@ function App() {
       <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
       <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
 
-      {/* 🐘 3. ไอคอนช้างขาว (ดึงรูปออนไลน์มาใช้ หมดปัญหาช้างกลายร่าง 100%) */}
-<div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40 p-1.5">
-  <img 
-    src="https://cdn-icons-png.flaticon.com/512/37/37122.png" 
-    alt="ช้างขาว" 
-    className="w-full h-full object-contain brightness-0 invert drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
-  />
-</div>
+      {/* 🐘 3. ไอคอนช้าง */}
+      <div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
+        <span className="text-2xl drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]">🐘</span>
+      </div>
     </div>
     
     {/* ชื่อแบรนด์สีทอง */}
@@ -553,6 +550,7 @@ function App() {
     </div>
   </div>
 </div>
+
         {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) สไตล์มินิมอล */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100">
           <button 
