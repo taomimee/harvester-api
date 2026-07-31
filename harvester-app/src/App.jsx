@@ -170,7 +170,7 @@ function App() {
     customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว',
     area_size: '', job_date: '', latitude: '', longitude: '',
     vehicle_id: 0, boundaries: [],
-    price_per_rai: '', // <-- เพิ่มราคาต่อไร่
+    price_per_rai: '', // <-- เพิ่มราคาต่อไร
     total_price: '',   // <-- เพิ่มยอดรวม
     payment_status: 'UNPAID' // <-- เพิ่มสถานะจ่ายเงิน
   })

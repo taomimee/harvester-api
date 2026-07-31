@@ -1,3 +1,6 @@
+/* 🔤 ดึงฟอนต์ Prompt มาใช้งาน */
+@import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;800;900&display=swap');
+
 :root {
   --text: #6b6375;
   --text-h: #08060d;
@@ -11,8 +14,9 @@
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* 💡 ใส่ 'Prompt' เข้าไปข้างหน้าสุด เพื่อให้เป็นฟอนต์หลักของแอป */
+  --sans: 'Prompt', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: 'Prompt', system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
   font: 18px/145% var(--sans);
@@ -52,6 +56,7 @@
 
 body {
   margin: 0;
+  font-family: var(--sans); /* 👈 เพื่อความชัวร์ ให้ body ใช้ Prompt ด้วย */
 }
 
 #root {
@@ -69,7 +74,7 @@ body {
 h1,
 h2 {
   font-family: var(--heading);
-  font-weight: 500;
+  font-weight: 600; /* ปรับเป็น 600 หรือ 700 เพื่อให้ฟอนต์ Prompt หนาสวยกำลังดี */
   color: var(--text-h);
 }
 
