@@ -532,14 +532,14 @@ function App() {
       <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
       <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
 
-      {/* 🐘 3. ไอคอนช้างขาว (ใช้รูปภาพแทน ชัวร์ 100% ไม่กลายร่าง!) */}
-<div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40 p-1.5">
-  <img 
-    src="/elephant.png" 
-    alt="ช้างขาว" 
-    className="w-full h-full object-contain drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
-  />
-</div>
+      {/* 🐘 3. ไอคอนช้างขาว (ขยายกล่องและซูมตัวช้างให้ใหญ่เต็มตา) */}
+      <div className="relative inline-flex items-center justify-center w-14 h-14 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
+        <img 
+          src="/elephant.png" 
+          alt="ช้างขาว" 
+          className="w-full h-full object-contain scale-[1.25] drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
+        />
+      </div>
     </div>
     
     {/* ชื่อแบรนด์สีทอง */}
