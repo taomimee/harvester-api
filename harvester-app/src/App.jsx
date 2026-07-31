@@ -531,15 +531,16 @@ function App() {
       <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
       <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
 
-      {/* 🐘 3. ไอคอนช้างขาว SVG (แสดงผลสีขาวบนทุกอุปกรณ์) */}
-      <div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
-        <svg 
-          className="w-7 h-7 fill-white drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
-          viewBox="0 0 24 24"
-        >
-          <path d="M19.5 8.25c-.83 0-1.5.67-1.5 1.5v2.25c0 .41-.34.75-.75.75s-.75-.34-.75-.75V9c0-2.48-2.02-4.5-4.5-4.5H11C7.13 4.5 4 7.63 4 11.5V18c0 .83.67 1.5 1.5 1.5S7 18.83 7 18v-2h3v2c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-2h2v2c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-4.09c1.19-.69 2-1.97 2-3.41v-.75c0-.83-.67-1.5-1.5-1.5zM6 10c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
-        </svg>
-      </div>
+      {/* 🐘 3. ไอคอนช้างขาว SVG (แก้ไข Syntax ให้ถูกต้อง ไม่ขึ้นสีแดง) */}
+<div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
+  <svg 
+    className="w-7 h-7 fill-white drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
+    viewBox="0 0 24 24"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path d="M21 11c0-2.21-1.79-4-4-4h-2.18C13.88 5.21 11.8 4 9.5 4 6.46 4 4 6.46 4 9.5V18c0 .55.45 1 1 1s1-.45 1-1v-2h3v2c0 .55.45 1 1 1s1-.45 1-1v-2h3v2c0 .55.45 1 1 1s1-.45 1-1v-3.13c1.76-.41 3.08-1.89 3.23-3.72C19.82 12.06 20.38 12 21 12c.55 0 1-.45 1-1s-.45-1-1-1zm-13.5-2c.83 0 1.5.67 1.5 1.5S8.33 12 7.5 12 6 11.33 6 10.5 6.67 9 7.5 9z"></path>
+  </svg>
+</div>
     </div>
     
     {/* ชื่อแบรนด์สีทอง */}
