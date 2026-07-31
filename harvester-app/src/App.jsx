@@ -196,6 +196,7 @@ function App() {
   };
 
   useEffect(() => { 
+    document.documentElement.lang = 'th'; // บังคับเปลี่ยนภาษาเอกสารเป็นภาษาไทย
     fetchJobs();
     fetchVehicles(); // เรียกใช้ตอนเปิดแอป
   }, []);
@@ -515,12 +516,73 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
-        <h1 className="text-2xl font-bold text-gray-800 mb-4 text-center shadow-sm bg-white p-4 rounded-xl">🌾 ระบบคิวรถเกี่ยว</h1>
-        
-        <div className="flex bg-white rounded-xl p-1 mb-5 shadow-sm border border-gray-200">
-          <button onClick={() => setActiveTab('active')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'active' ? 'bg-green-100 text-green-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
-          <button onClick={() => setActiveTab('calendar')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'calendar' ? 'bg-orange-100 text-orange-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
-          <button onClick={() => { setActiveTab('history'); setCurrentPage(1); }} className={`flex-1 py-2 rounded-lg font-bold text-xs transition-colors ${activeTab === 'history' ? 'bg-gray-200 text-gray-700 shadow-sm' : 'text-gray-500 hover:bg-gray-50'}`}>📋 ประวัติ</button>
+{/* 🐘 Header ช้างขาวเจริญทรัพย์ - ประกายเน้นตรงไอคอนช้าง (ดาว 4 มุมครบถ้วน) */}
+<div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
+  
+  <div className="relative z-10 flex flex-col items-center">
+    
+    {/* 🐘 กล่องช้าง + ประกายแสงทองล้อมรอบตัวช้าง */}
+    <div className="relative mb-1">
+      {/* 🌟 1. แสงออร่าสีทองเปล่งประกายออกมาจากหลังตัวช้าง */}
+      <div className="absolute inset-0 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 rounded-xl blur-lg opacity-80 animate-pulse"></div>
+      
+      {/* ✨ 2. ดาววิ้งค์ประกายสีทองรอบตัวช้าง (ครบ 4 มุม) */}
+      <div className="absolute -top-2 -left-2 text-yellow-100 text-xs font-bold animate-pulse">✦</div>
+      <div className="absolute -top-2 -right-2 text-yellow-300 text-xs font-bold animate-pulse">✦</div>
+      <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
+      <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
+
+      {/* 🐘 3. ไอคอนช้าง */}
+      <div className="relative inline-flex items-center justify-center w-12 h-12 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
+        <span className="text-2xl drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]">🐘</span>
+      </div>
+    </div>
+    
+    {/* ชื่อแบรนด์สีทอง */}
+    <h1 className="text-xl font-black tracking-wide bg-gradient-to-r from-amber-200 via-yellow-300 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] leading-tight">
+      ช้างขาวเจริญทรัพย์
+    </h1>
+    
+    {/* ป้ายระบบคิวรถเกี่ยว */}
+    <div className="mt-1.5 inline-flex items-center gap-1.5 bg-black/30 backdrop-blur-md py-0.5 px-3 rounded-full border border-amber-300/30 text-sm font-semibold text-amber-200">
+      <span className="text-base">🌾</span>
+      <span>ระบบจัดการคิวรถเกี่ยว</span>
+    </div>
+  </div>
+</div>
+
+        {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) สไตล์มินิมอล */}
+        <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100">
+          <button 
+            onClick={() => setActiveTab('active')} 
+            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${
+              activeTab === 'active' 
+                ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' 
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            🚜 คิวงาน
+          </button>
+          <button 
+            onClick={() => setActiveTab('calendar')} 
+            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${
+              activeTab === 'calendar' 
+                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' 
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            📅 ปฏิทิน
+          </button>
+          <button 
+            onClick={() => setActiveTab('history')} 
+            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${
+              activeTab === 'history' 
+                ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' 
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            📋 ประวัติ
+          </button>
         </div>
 
         {activeTab === 'calendar' && renderCalendar()}
