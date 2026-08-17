@@ -16,55 +16,65 @@ app.get('/', (req, res) => {
     res.send('🚀 ระบบคิวรถเกี่ยว (Harvester API) กำลังทำงาน!');
 });
 
+// API สำหรับดึงข้อมูลคิวงานทั้งหมด
 app.get('/api/jobs', async (req, res) => {
     const { data, error } = await supabase
         .from('jobs')
         .select(`
             *,
             customers ( name, phone, address_note ),
-            vehicles ( name )
+            vehicles ( name, driver_name )
         `);
     
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
 });
 
-// API สำหรับเพิ่มคิวงานใหม่
+// ==========================================
+// 📝 API สำหรับเพิ่มคิวงานใหม่ (POST)
+// ==========================================
 app.post('/api/jobs', async (req, res) => {
     const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
 
     try {
         let customerId;
-        const { data: existingCustomer } = await supabase
-            .from('customers')
-            .select('id')
-            .eq('phone', phone)
-            .single();
+        let existingCustomer = null;
+
+        // 💡 เช็คก่อนว่ามีเบอร์โทรส่งมาไหม ถ้ามีค่อยไปค้นหาลูกค้าเก่า
+        if (phone && phone.trim() !== "") {
+            const { data } = await supabase
+                .from('customers')
+                .select('id')
+                .eq('phone', phone)
+                .single();
+            existingCustomer = data;
+        }
 
         if (existingCustomer) {
             customerId = existingCustomer.id;
-            // ถอด address_note ออก เพื่อไม่ให้ไปทับของเก่าลูกค้า
+            // อัปเดตแค่ชื่อลูกค้า ไม่เอาหมายเหตุไปทับ
             await supabase.from('customers').update({ name: customer_name }).eq('id', customerId); 
         } else {
-            // ถอด address_note ออกจากตอนสร้างลูกค้าใหม่เช่นกัน
+            // 💡 ถ้าไม่มีเบอร์ (หรือเบอร์ใหม่) ให้สร้างลูกค้าใหม่ โดยตั้งค่า phone เป็น null แทนช่องว่าง
             const { data: newCustomer, error: custError } = await supabase
                 .from('customers')
-                .insert([{ name: customer_name, phone }]) 
+                .insert([{ name: customer_name, phone: phone || null }]) 
                 .select()
                 .single();
             if (custError) throw custError;
             customerId = newCustomer.id;
         }
 
+        // บันทึกข้อมูลคิวงานลงตาราง jobs
         const { data: newJob, error: jobError } = await supabase
             .from('jobs')
             .insert([{
                 customer_id: customerId,
                 vehicle_id: vehicle_id || null,
                 crop_type,
-                area_size,
+                area_size: area_size || 0, // 💡 ถ้าไม่ใส่จำนวนไร่มา ให้บันทึกเป็น 0 ไว้ก่อน
                 job_date,
-                latitude: latitude || 15.7001234,
+                latitude: latitude || 15.7001234, 
                 longitude: longitude || 101.1001234,
                 status: 'PENDING',
                 price_per_rai: price_per_rai || 0,
@@ -97,7 +107,9 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
     res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
 });
 
-// API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
+// ==========================================
+// ✏️ API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
+// ==========================================
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
     const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
@@ -107,8 +119,8 @@ app.put('/api/jobs/:id', async (req, res) => {
         if (findError) throw findError;
 
         if (jobInfo.customer_id) {
-            // ถอด address_note ออก เพื่อไม่ให้ไปทับของเก่าลูกค้า
-            await supabase.from('customers').update({ name: customer_name, phone: phone }).eq('id', jobInfo.customer_id);
+            // อัปเดตข้อมูลลูกค้า (เปลี่ยนเบอร์โทรเป็น null ได้ถ้าลบเบอร์ออก)
+            await supabase.from('customers').update({ name: customer_name, phone: phone || null }).eq('id', jobInfo.customer_id);
         }
 
         const { data: updatedJob, error: jobError } = await supabase
@@ -116,14 +128,14 @@ app.put('/api/jobs/:id', async (req, res) => {
             .update({
                 vehicle_id: vehicle_id === 0 ? null : vehicle_id,
                 crop_type,
-                area_size,
+                area_size: area_size || 0, // 💡 ถ้าไม่ใส่จำนวนไร่มา ให้บันทึกเป็น 0
                 job_date,
                 latitude,
                 longitude,
-                price_per_rai,
-                total_price,
+                price_per_rai: price_per_rai || 0,
+                total_price: total_price || 0,
                 payment_status,
-                address_note: address_note // 👈 โยกมาบันทึกลงตาราง jobs ตรงนี้
+                address_note: address_note // 👈 บันทึกหมายเหตุลงตาราง jobs
             })
             .eq('id', id)
             .select();
@@ -168,12 +180,11 @@ app.get('/api/vehicles', async (req, res) => {
 
 // เพิ่มรายชื่อรถเกี่ยวคันใหม่
 app.post('/api/vehicles', async (req, res) => {
-    // เปลี่ยนจาก phone เป็น driver_name
     const { name, driver_name } = req.body;
     
     const { data, error } = await supabase
         .from('vehicles')
-        .insert([{ name, driver_name }]) // เปลี่ยนเป็น driver_name
+        .insert([{ name, driver_name }])
         .select();
         
     if (error) return res.status(500).json({ error: error.message });
@@ -187,6 +198,10 @@ app.delete('/api/vehicles/:id', async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     res.json({ message: 'ลบรถสำเร็จ' });
 });
+
+// ==========================================
+// 🚀 การรันเซิร์ฟเวอร์
+// ==========================================
 
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {

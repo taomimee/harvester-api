@@ -820,7 +820,7 @@ function App() {
 
                 <div>
                   <label className="block text-gray-700 mb-1 font-semibold">เบอร์โทรศัพท์</label>
-                  <input type="tel" required className="w-full border p-2 rounded-lg bg-gray-50" placeholder="08xxxxxxxx" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} />
+                  <input type="tel" className="w-full border p-2 rounded-lg bg-gray-50" placeholder="ยังไม่มีข้อมูล (เว้นว่างได้)" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} />
                 </div>
 
                 <div>
@@ -875,11 +875,10 @@ function App() {
                   </div>
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">จำนวนไร่</label>
-                    <input type="number" step="0.01" required className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="0.00" 
+                    <input type="number" step="0.01" className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="ยังไม่ระบุ" 
                       value={formData.area_size} 
                       onChange={(e) => {
                         const area = e.target.value;
-                        // ให้มันคูณเลขให้อัตโนมัติเวลาเราพิมพ์จำนวนไร่
                         const total = (area && formData.price_per_rai) ? (parseFloat(area) * parseFloat(formData.price_per_rai)).toFixed(2) : '';
                         setFormData({...formData, area_size: area, total_price: total});
                       }} 
