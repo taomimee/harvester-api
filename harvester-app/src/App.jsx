@@ -158,10 +158,9 @@ function App() {
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
   
-  // 👇 เพิ่ม 2 บรรทัดนี้ สำหรับระบบแบ่งหน้า (สเต็ปที่ 1) 👇
+  // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10; 
-  // 👆 --------------------------------------- 👆
 
   const [editingId, setEditingId] = useState(null);
   const [currentCoords, setCurrentCoords] = useState([15.7012, 101.1012]); 
@@ -169,10 +168,7 @@ function App() {
   const [formData, setFormData] = useState({
     customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว',
     area_size: '', job_date: '', latitude: '', longitude: '',
-    vehicle_id: 0, boundaries: [],
-    price_per_rai: '', // <-- เพิ่มราคาต่อไร
-    total_price: '',   // <-- เพิ่มยอดรวม
-    payment_status: 'UNPAID' // <-- เพิ่มสถานะจ่ายเงิน
+    vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID'
   })
 
   // 📅 State สำหรับปฏิทิน
@@ -184,21 +180,34 @@ function App() {
   const [showVehicleManager, setShowVehicleManager] = useState(false);
   const [newVehicle, setNewVehicle] = useState({ name: '', driver_name: '' });
 
-// ฟังก์ชันดึงรายชื่อรถจากฐานข้อมูล
+  // 👥 State สำหรับจัดการลูกค้าในหน้าตั้งค่า
+  const [showCustomerManager, setShowCustomerManager] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address_note: '' });
+
+  // ฟังก์ชันดึงรายชื่อรถ
   const fetchVehicles = async () => {
     try {
       const res = await fetch('https://harvester-api-server.onrender.com/api/vehicles');
       const data = await res.json();
       setVehicles(data);
-    } catch (err) {
-      console.error("ดึงข้อมูลรถไม่ได้:", err);
-    }
+    } catch (err) { console.error("ดึงข้อมูลรถไม่ได้:", err); }
+  };
+
+  // ฟังก์ชันดึงรายชื่อลูกค้าทั้งหมด (ใช้กับค้นหาและหน้าตั้งค่า)
+  const fetchAllCustomers = async () => {
+    try {
+      const res = await fetch('https://harvester-api-server.onrender.com/api/customers');
+      const data = await res.json();
+      setCustomersList(data);
+    } catch (err) { console.error("ดึงข้อมูลลูกค้าไม่ได้:", err); }
   };
 
   useEffect(() => { 
-    document.documentElement.lang = 'th'; // บังคับเปลี่ยนภาษาเอกสารเป็นภาษาไทย
+    document.documentElement.lang = 'th'; 
     fetchJobs();
-    fetchVehicles(); // เรียกใช้ตอนเปิดแอป
+    fetchVehicles(); 
+    fetchAllCustomers(); // ดึงลูกค้ามาเตรียมไว้
   }, []);
 
   const handleAddVehicle = async () => {
@@ -210,14 +219,10 @@ function App() {
         body: JSON.stringify(newVehicle)
       });
       if (res.ok) {
-        fetchVehicles(); // โหลดข้อมูลใหม่มาแสดง
-        
-        // 💡 จุดที่ 2.3: เปลี่ยนจาก phone เป็น driver_name เพื่อล้างค่าให้ถูกต้อง
+        fetchVehicles(); 
         setNewVehicle({ name: '', driver_name: '' }); 
       }
-    } catch (err) {
-      alert("เพิ่มรถไม่สำเร็จ");
-    }
+    } catch (err) { alert("เพิ่มรถไม่สำเร็จ"); }
   };
 
   const handleDeleteVehicle = async (id) => {
@@ -228,44 +233,47 @@ function App() {
         fetchVehicles();
         if(formData.vehicle_id === id) setFormData({...formData, vehicle_id: 0});
       }
-    } catch (err) {
-      alert("ลบรถไม่สำเร็จ");
-    }
+    } catch (err) { alert("ลบรถไม่สำเร็จ"); }
   };
 
-  const saveVehicles = (updatedVehicles) => {
-    setVehicles(updatedVehicles);
-    localStorage.setItem('harvester_vehicles', JSON.stringify(updatedVehicles));
+  // ฟังก์ชันบันทึกข้อมูลลูกค้า (หน้าตั้งค่า)
+  const handleSaveCustomer = async () => {
+    if (!newCustomer.name.trim()) return alert("กรุณาใส่ชื่อลูกค้าครับ");
+    const method = editingCustomer ? 'PUT' : 'POST';
+    const url = editingCustomer 
+      ? `https://harvester-api-server.onrender.com/api/customers/${editingCustomer.id}` 
+      : 'https://harvester-api-server.onrender.com/api/customers';
+
+    try {
+      const res = await fetch(url, {
+        method, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCustomer)
+      });
+      if (res.ok) {
+        fetchAllCustomers();
+        setNewCustomer({ name: '', phone: '', address_note: '' });
+        setEditingCustomer(null);
+        alert(editingCustomer ? "อัปเดตลูกค้าสำเร็จ!" : "เพิ่มลูกค้าสำเร็จ!");
+      }
+    } catch (err) { alert("บันทึกข้อมูลลูกค้าไม่สำเร็จ"); }
+  };
+
+  // ฟังก์ชันลบลูกค้า (หน้าตั้งค่า)
+  const handleDeleteCustomer = async (id) => {
+    if(!window.confirm('⚠️ ลบลูกค้ารายนี้หรือไม่? (ถ้าลูกค้ามีคิวงานค้างอยู่อาจลบไม่ได้)')) return;
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/customers/${id}`, { method: 'DELETE' });
+      if (res.ok) { fetchAllCustomers(); alert("ลบสำเร็จ!"); }
+      else { alert("ลบไม่สำเร็จ (ลูกค้าอาจมีคิวงานผูกอยู่)"); }
+    } catch (err) { alert("ลบข้อมูลลูกค้าไม่สำเร็จ"); }
   };
 
   const fetchJobs = () => {
     fetch('https://harvester-api-server.onrender.com/api/jobs')
       .then(res => res.json())
-      .then(data => {
-        setJobs(data);
-        const uniqueCustomers = [];
-        const phoneSet = new Set();
-        data.forEach(job => {
-          if (job.customers && !phoneSet.has(job.customers.phone)) {
-            phoneSet.add(job.customers.phone);
-            uniqueCustomers.push(job.customers);
-          }
-        });
-        setCustomersList(uniqueCustomers);
-      })
-      .catch(err => console.error("ดึงข้อมูลไม่ได้:", err))
+      .then(data => { setJobs(data); })
+      .catch(err => console.error("ดึงข้อมูลงานไม่ได้:", err))
   }
-
-  useEffect(() => { fetchJobs() }, [])
-
-  useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => { setCurrentCoords([position.coords.latitude, position.coords.longitude]); },
-        (error) => { console.log("รอรับพิกัด GPS..."); }
-      );
-    }
-  }, []);
 
   const handleGetCurrentLocation = () => {
     if (navigator.geolocation) {
@@ -307,7 +315,7 @@ function App() {
     setFormData({
       customer_name: job.customers?.name || '',
       phone: job.customers?.phone || '',
-      address_note: job.address_note || job.customers?.address_note || '',
+      address_note: job.address_note || job.customers?.address_note || '', // 💡 ดึงหมายเหตุงานก่อน
       crop_type: job.crop_type || 'ข้าว',
       area_size: job.area_size || '',
       job_date: formattedDate,
@@ -315,7 +323,6 @@ function App() {
       longitude: job.longitude || '',
       vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
       boundaries: job.boundaries || [],
-      // 👇 3 บรรทัดที่เพิ่มเข้ามา เพื่อดึงข้อมูลเงินมาโชว์ครับ
       price_per_rai: job.price_per_rai || '',
       total_price: job.total_price || '',
       payment_status: job.payment_status || 'UNPAID'
@@ -329,7 +336,7 @@ function App() {
     d.setHours(8, 0, 0, 0);
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
     setEditingId(null);
-    setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: d.toISOString().slice(0, 16), latitude: '', longitude: '', vehicle_id: 0, boundaries: [] });
+    setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: d.toISOString().slice(0, 16), latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
     setShowAddForm(true);
   }
 
@@ -348,46 +355,27 @@ function App() {
   const handleAddJob = async (e) => {
     e.preventDefault();
 
-    // 🛑 1. เริ่มระบบเช็คคิวซ้อน (Double Booking Prevention)
+    // เช็คคิวซ้อน (Double Booking)
     if (formData.vehicle_id && formData.vehicle_id !== 0 && formData.job_date) {
-      // แปลงวันที่ที่กำลังจะบันทึกให้อยู่ในรูปแบบ String เพื่อเทียบเฉพาะ "วัน/เดือน/ปี"
       const selectedDate = new Date(formData.job_date).toDateString();
-
       const conflictingJobs = jobs.filter(job => {
-        // - ข้ามคิวที่กำลังกดแก้ไขอยู่ (ไม่งั้นมันจะเตือนชนกับตัวเอง)
         if (editingId && job.id === editingId) return false;
-        // - ข้ามคิวที่เกี่ยวเสร็จไปแล้ว (รถว่างแล้ว)
         if (job.status === 'DONE') return false;
-        
-        // - เช็คว่าเลือกรถคันเดียวกันไหม
         const currentVehicleId = job.vehicles?.id || job.vehicle_id;
         if (currentVehicleId !== formData.vehicle_id) return false;
-
-        // - เช็คว่าลงคิววันเดียวกันไหม
         const jobDate = new Date(job.job_date).toDateString();
         return jobDate === selectedDate;
       });
 
-      // ถ้าเจอคิวชนอย่างน้อย 1 คิว ให้เด้ง Alert
       if (conflictingJobs.length > 0) {
-        const cJob = conflictingJobs[0]; // ดึงคิวแรกที่ชนมาโชว์เตือน
+        const cJob = conflictingJobs[0]; 
         const time = new Date(cJob.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-        const location = cJob.customers?.address_note || cJob.customers?.name || 'ไม่ระบุพิกัด/สถานที่';
-
-        // เด้งกล่องถามความมั่นใจ
-        const isConfirm = window.confirm(
-          `🛑 แจ้งเตือนรถคิวทับซ้อน!\n\nรถคันนี้มีคิวงานของวันนี้อยู่แล้วที่:\n📍 ${location}\n⏰ เวลา ${time} น.\n\nคุณต้องการยืนยันที่จะ "แทรกคิว" นี้จริงๆ หรือไม่?`
-        );
-
-        // ถ้าผู้ใช้กด "ยกเลิก" ให้หยุดการทำงานทันที ไม่เซฟลง DB
-        if (!isConfirm) {
-          return; 
-        }
+        const location = cJob.address_note || cJob.customers?.name || 'ไม่ระบุพิกัด';
+        const isConfirm = window.confirm(`🛑 แจ้งเตือนรถคิวทับซ้อน!\n\nรถคันนี้มีคิวงานของวันนี้อยู่แล้วที่:\n📍 ${location}\n⏰ เวลา ${time} น.\n\nคุณต้องการยืนยันที่จะ "แทรกคิว" นี้จริงๆ หรือไม่?`);
+        if (!isConfirm) return; 
       }
     }
-    // 🟢 จบระบบเช็คคิวซ้อน (ถ้ากดตกลง หรือคิวไม่ชน ก็จะไหลมาทำงานโค้ดเซฟด้านล่างต่อ)
 
-    // 2. โค้ดบันทึกลงฐานข้อมูล (โค้ดเดิมของคุณ)
     try {
       const url = editingId ? `https://harvester-api-server.onrender.com/api/jobs/${editingId}` : 'https://harvester-api-server.onrender.com/api/jobs';
       const method = editingId ? 'PUT' : 'POST';
@@ -404,6 +392,7 @@ function App() {
         setSelectedDayJobs(null);
         setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
         fetchJobs();
+        fetchAllCustomers(); // ดึงลูกค้าใหม่เผื่อมีการสร้างใหม่
       } else { alert('❌ บันทึกไม่สำเร็จ'); }
     } catch (err) { console.error(err); alert('❌ เกิดข้อผิดพลาดเซิร์ฟเวอร์'); }
   }
@@ -437,31 +426,25 @@ function App() {
     }
   }
 
-  // --- จุดที่ 2: จัดการข้อมูลที่จะแสดงผล & แบ่งหน้า ---
+  // --- จัดการข้อมูลที่จะแสดงผล & แบ่งหน้า ---
   const activeJobs = jobs.filter(j => j.status !== 'DONE').sort((a, b) => {
     const priority = { 'IN_PROGRESS': 1, 'PAUSED': 2, 'PENDING': 3 };
     if (priority[a.status] !== priority[b.status]) return priority[a.status] - priority[b.status];
     return new Date(a.job_date) - new Date(b.job_date);
   });
   
- const historyJobs = jobs.filter(j => j.status === 'DONE').sort((a, b) => new Date(b.job_date) - new Date(a.job_date));
+  const historyJobs = jobs.filter(j => j.status === 'DONE').sort((a, b) => new Date(b.job_date) - new Date(a.job_date));
 
-  // 👇 เพิ่มระบบคำนวณแบ่งหน้าตรงนี้
   const totalPages = Math.ceil(historyJobs.length / itemsPerPage);
   const currentHistoryJobs = historyJobs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-  // 👇 เปลี่ยนให้ไปใช้ currentHistoryJobs แทนเวลาอยู่หน้าประวัติ
   const displayJobs = activeTab === 'active' ? activeJobs : currentHistoryJobs;
 
   const searchKeyword = formData.customer_name.trim().toLowerCase();
+  const isExactMatch = customersList.some(c => c.name === formData.customer_name && (c.phone || '') === formData.phone);
   
-  // เช็กว่าข้อมูลในช่องพิมพ์ ตรงเป๊ะกับลูกค้าในฐานข้อมูลแล้วหรือยัง (แปลว่าผู้ใช้เพิ่งกดเลือก)
-  const isExactMatch = customersList.some(c => c.name === formData.customer_name && c.phone === formData.phone);
-
-  // ถ้าพิมพ์ค้นหาอยู่ และ "ยังไม่ได้เลือกจนตรงเป๊ะ" ถึงจะแสดงกล่อง
   const filteredCustomers = (searchKeyword.length > 0 && !isExactMatch) ? customersList.filter(c => {
     const nameLower = c.name.toLowerCase();
-    const phoneStr = c.phone;
+    const phoneStr = c.phone || '';
     const keywords = searchKeyword.split(/\s+/);
     return keywords.every(kw => nameLower.includes(kw) || phoneStr.includes(kw));
   }) : [];
@@ -516,86 +499,63 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
-{/* 🐘 Header ช้างขาวเจริญทรัพย์ - ประกายเน้นตรงไอคอนช้าง (ดาว 4 มุมครบถ้วน) */}
-<div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
-  
-  <div className="relative z-10 flex flex-col items-center">
-    
-    {/* 🐘 กล่องช้าง + ประกายแสงทองล้อมรอบตัวช้าง */}
-    <div className="relative mb-1">
-      {/* 🌟 1. แสงออร่าสีทองเปล่งประกายออกมาจากหลังตัวช้าง */}
-      <div className="absolute inset-0 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 rounded-xl blur-lg opacity-80 animate-pulse"></div>
-      
-      {/* ✨ 2. ดาววิ้งค์ประกายสีทองรอบตัวช้าง (ครบ 4 มุม) */}
-      <div className="absolute -top-2 -left-2 text-yellow-100 text-xs font-bold animate-pulse">✦</div>
-      <div className="absolute -top-2 -right-2 text-yellow-300 text-xs font-bold animate-pulse">✦</div>
-      <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
-      <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
+        {/* 🐘 Header ช้างขาวเจริญทรัพย์ */}
+        <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="relative mb-1">
+              <div className="absolute inset-0 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 rounded-xl blur-lg opacity-80 animate-pulse"></div>
+              <div className="absolute -top-2 -left-2 text-yellow-100 text-xs font-bold animate-pulse">✦</div>
+              <div className="absolute -top-2 -right-2 text-yellow-300 text-xs font-bold animate-pulse">✦</div>
+              <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
+              <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
+              <div className="relative inline-flex items-center justify-center w-14 h-14 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
+                <img src="/elephant.png" alt="ช้างขาว" className="w-full h-full object-contain scale-[1.25] drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
+              </div>
+            </div>
+            <h1 className="text-xl font-black tracking-wide bg-gradient-to-r from-amber-200 via-yellow-300 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] leading-tight">
+              ช้างขาวเจริญทรัพย์
+            </h1>
+            <div className="mt-1.5 inline-flex items-center gap-1.5 bg-black/30 backdrop-blur-md py-0.5 px-3 rounded-full border border-amber-300/30 text-sm font-semibold text-amber-200">
+              <span className="text-base">🌾</span><span>ระบบจัดการคิวรถเกี่ยว</span>
+            </div>
+          </div>
+        </div>
 
-      {/* 🐘 3. ไอคอนช้างขาว (ขยายกล่องและซูมตัวช้างให้ใหญ่เต็มตา) */}
-      <div className="relative inline-flex items-center justify-center w-14 h-14 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
-        <img 
-          src="/elephant.png" 
-          alt="ช้างขาว" 
-          className="w-full h-full object-contain scale-[1.25] drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" 
-        />
-      </div>
-    </div>
-    
-    {/* ชื่อแบรนด์สีทอง */}
-    <h1 className="text-xl font-black tracking-wide bg-gradient-to-r from-amber-200 via-yellow-300 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] leading-tight">
-      ช้างขาวเจริญทรัพย์
-    </h1>
-    
-    {/* ป้ายระบบคิวรถเกี่ยว */}
-    <div className="mt-1.5 inline-flex items-center gap-1.5 bg-black/30 backdrop-blur-md py-0.5 px-3 rounded-full border border-amber-300/30 text-sm font-semibold text-amber-200">
-      <span className="text-base">🌾</span>
-      <span>ระบบจัดการคิวรถเกี่ยว</span>
-    </div>
-  </div>
-</div>
-
-        {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) สไตล์มินิมอล */}
-        <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100">
-          <button 
-            onClick={() => setActiveTab('active')} 
-            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${
-              activeTab === 'active' 
-                ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' 
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            🚜 คิวงาน
-          </button>
-          <button 
-            onClick={() => setActiveTab('calendar')} 
-            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${
-              activeTab === 'calendar' 
-                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' 
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            📅 ปฏิทิน
-          </button>
-          <button 
-            onClick={() => setActiveTab('history')} 
-            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${
-              activeTab === 'history' 
-                ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' 
-                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            📋 ประวัติ
-          </button>
+        {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) 4 เมนู */}
+        <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
+          <button onClick={() => setActiveTab('active')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
+          <button onClick={() => setActiveTab('calendar')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
+          <button onClick={() => setActiveTab('history')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'history' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📋 ประวัติ</button>
+          <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
         </div>
 
         {activeTab === 'calendar' && renderCalendar()}
 
-        {activeTab !== 'calendar' && displayJobs.length === 0 && (
+        {/* ⚙️ หน้าตั้งค่าระบบ */}
+        {activeTab === 'settings' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
+              <h2 className="text-lg font-bold text-gray-800 mb-4">🛠️ ตั้งค่าระบบ</h2>
+              <div className="space-y-3">
+                <button onClick={() => setShowCustomerManager(true)} className="w-full flex items-center justify-between p-4 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition">
+                  <span className="font-bold text-blue-800">👥 จัดการฐานข้อมูลลูกค้า</span>
+                  <span className="text-blue-500 font-bold">▶</span>
+                </button>
+                <button onClick={() => setShowVehicleManager(true)} className="w-full flex items-center justify-between p-4 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-xl transition">
+                  <span className="font-bold text-orange-800">🚜 จัดการรายชื่อรถเกี่ยว</span>
+                  <span className="text-orange-500 font-bold">▶</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* แสดงคิวงานและประวัติ */}
+        {(activeTab === 'active' || activeTab === 'history') && displayJobs.length === 0 && (
           <div className="text-center text-gray-500 mt-10"><p className="text-4xl mb-2">🍃</p><p>ยังไม่มีข้อมูลในหน้านี้ครับ</p></div>
         )}
 
-        {activeTab !== 'calendar' && (
+        {(activeTab === 'active' || activeTab === 'history') && (
           <div className="space-y-4">
             {displayJobs.map((job) => {
               const statusObj = getStatusDisplay(job.status);
@@ -604,89 +564,89 @@ function App() {
               const assignedVehicle = vehicles.find(v => v.id === job.vehicle_id);
 
               return (
-      <div key={job.id} className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
-        <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2 mb-3">
-          <div className="text-indigo-800 font-bold text-sm flex justify-between px-1">
-            <span>📅 {jobDateTime.date}</span>
-            <span>⏰ {jobDateTime.time} น.</span>
-          </div>
-        </div>
+                <div key={job.id} className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2 mb-3">
+                    <div className="text-indigo-800 font-bold text-sm flex justify-between px-1">
+                      <span>📅 {jobDateTime.date}</span>
+                      <span>⏰ {jobDateTime.time} น.</span>
+                    </div>
+                  </div>
 
-        <div className="cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : job.id)}>
-          <div className="flex justify-between items-start mb-3">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2>
-              <p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p>
-            </div>
-            <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>
-              {statusObj.text}
-            </span>
-          </div>
+                  <div className="cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : job.id)}>
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2>
+                        <p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>
+                        {statusObj.text}
+                      </span>
+                    </div>
 
-          {/* 👇 โค้ดกล่องประเภทพืชและพื้นที่แบบใหม่ 👇 */}
-          <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
-            {/* กล่องประเภทพืชแบบแยกสี + ไอคอน */}
-            <div className={`p-2 rounded-lg border ${
-              job.crop_type === 'ข้าว' ? 'bg-amber-50 border-amber-200' :
-              job.crop_type === 'ข้าวโพด' ? 'bg-orange-50 border-orange-200' :
-              job.crop_type === 'ถั่ว' ? 'bg-emerald-50 border-emerald-200' :
-              'bg-gray-50 border-gray-200'
-            }`}>
-              <span className="block text-gray-500 text-xs">ประเภทพืช</span>
-              <span className={`font-bold ${
-                job.crop_type === 'ข้าว' ? 'text-amber-700' :
-                job.crop_type === 'ข้าวโพด' ? 'text-orange-700' :
-                job.crop_type === 'ถั่ว' ? 'text-emerald-700' :
-                'text-gray-800'
-              }`}>
-                {job.crop_type === 'ข้าว' ? '🌾 ' : 
-                 job.crop_type === 'ข้าวโพด' ? '🌽 ' : 
-                 job.crop_type === 'ถั่ว' ? '🥜 ' : ''}
-                {job.crop_type}
-              </span>
-            </div>
-            
-            {/* กล่องพื้นที่ */}
-            <div className="bg-gray-50 border border-gray-200 p-2 rounded-lg">
-              <span className="block text-gray-500 text-xs">พื้นที่</span>
-              <span className="font-semibold text-gray-800">{job.area_size} ไร่</span>
-            </div>
-          </div>
-          {/* 👆 สิ้นสุดโค้ดกล่องประเภทพืช 👆 */}
-          
-          {/* 💰 กล่องโชว์ยอดเงิน */}
-          {(job.price_per_rai || job.total_price) && (
-            <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
-              <div>
-                <span className="block text-green-700 text-xs">
-                  ยอดรวม ({job.price_per_rai || 0} บ./ไร่)
-                </span>
-                <span className="font-bold text-green-800 text-lg">
-                  {job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท
-                </span>
-              </div>
-              <div>
-                <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${
-                  job.payment_status === 'PAID'
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                    : job.payment_status === 'DEPOSIT'
-                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                    : 'bg-slate-100 text-slate-700 border border-slate-300'
-                }`}>
-                  {job.payment_status === 'PAID'
-                    ? '✅ ชำระเรียบร้อย'
-                    : job.payment_status === 'DEPOSIT'
-                    ? '💳 มัดจำแล้ว'
-                    : '⏳ รอชำระเงิน'}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
+                    {/* 💡 กล่องประเภทพืชแบบแยกสี + ไอคอน */}
+                    <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
+                      <div className={`p-2 rounded-lg border ${
+                        job.crop_type === 'ข้าว' ? 'bg-amber-50 border-amber-200' :
+                        job.crop_type === 'ข้าวโพด' ? 'bg-orange-50 border-orange-200' :
+                        job.crop_type === 'ถั่ว' ? 'bg-emerald-50 border-emerald-200' :
+                        'bg-gray-50 border-gray-200'
+                      }`}>
+                        <span className="block text-gray-500 text-xs">ประเภทพืช</span>
+                        <span className={`font-bold ${
+                          job.crop_type === 'ข้าว' ? 'text-amber-700' :
+                          job.crop_type === 'ข้าวโพด' ? 'text-orange-700' :
+                          job.crop_type === 'ถั่ว' ? 'text-emerald-700' :
+                          'text-gray-800'
+                        }`}>
+                          {job.crop_type === 'ข้าว' ? '🌾 ' : 
+                           job.crop_type === 'ข้าวโพด' ? '🌽 ' : 
+                           job.crop_type === 'ถั่ว' ? '🥜 ' : ''}
+                          {job.crop_type}
+                        </span>
+                      </div>
+                      
+                      <div className="bg-gray-50 border border-gray-200 p-2 rounded-lg">
+                        <span className="block text-gray-500 text-xs">พื้นที่</span>
+                        <span className="font-semibold text-gray-800">{job.area_size || 0} ไร่</span>
+                      </div>
+                    </div>
+                    
+                    {/* 💰 กล่องโชว์ยอดเงิน (แก้บั๊กเลข 0 ลอยตัว) */}
+                    {(Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
+                      <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
+                        <div>
+                          <span className="block text-green-700 text-xs">
+                            ยอดรวม ({job.price_per_rai || 0} บ./ไร่)
+                          </span>
+                          <span className="font-bold text-green-800 text-lg">
+                            {job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท
+                          </span>
+                        </div>
+                        <div>
+                          <span className={`px-2.5 py-1 rounded-md text-xs font-bold ${
+                            job.payment_status === 'PAID'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : job.payment_status === 'DEPOSIT'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                              : 'bg-slate-100 text-slate-700 border border-slate-300'
+                          }`}>
+                            {job.payment_status === 'PAID'
+                              ? '✅ ชำระเรียบร้อย'
+                              : job.payment_status === 'DEPOSIT'
+                              ? '💳 มัดจำแล้ว'
+                              : '⏳ รอชำระเงิน'}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
                   
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
-                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-3 border border-yellow-200"><span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>{job.address_note || job.customers?.address_note || 'ไม่มีข้อมูล'}
+                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-3 border border-yellow-200">
+                        <span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>
+                        {/* 💡 ดึงหมายเหตุของคิวงานมาโชว์ */}
+                        {job.address_note || job.customers?.address_note || 'ไม่มีข้อมูล'}
                       </div>
                       <div className="flex gap-2 pt-2 border-t">
                         {job.status !== 'IN_PROGRESS' && <button onClick={() => updateStatus(job.id, 'IN_PROGRESS')} className="flex-1 bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">▶️ เริ่มเกี่ยว</button>}
@@ -699,7 +659,7 @@ function App() {
                       </div>
                     </div>
                   )}
-                  {/* 👇 ส่วนที่แก้ไข: เพิ่มชื่อคนขับไว้ใต้ชื่อรถ */}
+                  
                   <div className="text-sm flex justify-between items-center border-t pt-3 mt-3">
                     <div>
                       <p>🚜 รถ: <span className="font-semibold text-blue-700">
@@ -711,46 +671,22 @@ function App() {
                     </div>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${job.latitude},${job.longitude}`} target="_blank" className="bg-blue-600 text-white text-xs font-bold py-2 px-4 rounded-lg" onClick={(e) => e.stopPropagation()}>📍 นำทาง</a>
                   </div>
-                  {/* 👆 สิ้นสุดส่วนที่แก้ไข (ชื่อคนขับ) 👆 */}
                 </div>
               )
             })}
           </div>
         )}
 
-        {/* 👇👇👇 ก๊อปปี้โค้ดปุ่มแบ่งหน้าทั้งหมดนี้ มาวางแทรกตรงนี้เลยครับ 👇👇👇 */}
+        {/* ปุ่มแบ่งหน้า (ประวัติ) */}
         {activeTab === 'history' && historyJobs.length > 0 && (
           <div className="flex justify-between items-center mt-6 bg-white p-3 rounded-xl shadow-sm border border-gray-200">
-            <button 
-              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-              disabled={currentPage === 1}
-              className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
-                currentPage === 1 
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                  : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'
-              }`}
-            >
-              ◀ ก่อนหน้า
-            </button>
-            <span className="text-sm font-bold text-gray-600">
-              หน้า {currentPage} / {totalPages || 1}
-            </span>
-            <button 
-              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-              disabled={currentPage === totalPages}
-              className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
-                currentPage === totalPages 
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
-                  : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'
-              }`}
-            >
-              ถัดไป ▶
-            </button>
+            <button onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${currentPage === 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'}`}>◀ ก่อนหน้า</button>
+            <span className="text-sm font-bold text-gray-600">หน้า {currentPage} / {totalPages || 1}</span>
+            <button onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} disabled={currentPage === totalPages} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${currentPage === totalPages ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'}`}>ถัดไป ▶</button>
           </div>
         )}
-        {/* 👆👆👆 สิ้นสุดโค้ดปุ่มแบ่งหน้า 👆👆👆 */}
 
-        {/* 👇👇 ส่วนที่โดนลบทับไป เอากลับมาวางตรงนี้ครับ 👇👇 */}
+        {/* Popup คิวงานรายวันจากปฏิทิน */}
         {selectedDayJobs && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[100]">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
@@ -762,7 +698,7 @@ function App() {
                 {selectedDayJobs.jobs.map(job => (
                   <div key={job.id} onClick={() => { setSelectedDayJobs(null); openEditForm(job); }} className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer">
                     <div className="flex justify-between items-center"><span className="font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</span></div>
-                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {job.area_size} ไร่</p>
+                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {job.area_size || 0} ไร่</p>
                   </div>
                 ))}
               </div>
@@ -771,7 +707,8 @@ function App() {
           </div>
         )}
 
-        {activeTab !== 'calendar' && (
+        {/* ปุ่ม + เพิ่มคิวงาน */}
+        {(activeTab === 'active' || activeTab === 'history') && (
           <button 
             onClick={() => { 
               setEditingId(null); 
@@ -783,7 +720,6 @@ function App() {
             +
           </button>
         )}
-        {/* 👆👆 สิ้นสุดส่วนที่ดึงกลับมา 👆👆 */}
 
         {/* 📝 ฟอร์ม เพิ่ม/แก้ไข คิวงาน */}
         {showAddForm && !showMapPicker && (
@@ -809,9 +745,9 @@ function App() {
                     <div className="absolute left-0 right-0 bg-white border border-gray-300 rounded-lg shadow-lg mt-1 z-20 max-h-40 overflow-y-auto">
                       <p className="text-xs text-gray-400 p-2 bg-gray-50 border-b">💡 พบลูกค้าเก่า คลิกเพื่อเลือก:</p>
                       {filteredCustomers.map((cust, idx) => (
-                        <div key={idx} onMouseDown={() => setFormData({ ...formData, customer_name: cust.name, phone: cust.phone })} className="p-2 hover:bg-green-50 cursor-pointer border-b flex justify-between">
+                        <div key={idx} onMouseDown={() => setFormData({ ...formData, customer_name: cust.name, phone: cust.phone || '' })} className="p-2 hover:bg-green-50 cursor-pointer border-b flex justify-between">
                           <span className="font-semibold text-gray-800">{cust.name}</span>
-                          <span className="text-gray-500 text-xs">📞 {cust.phone}</span>
+                          <span className="text-gray-500 text-xs">📞 {cust.phone || 'ไม่มีเบอร์'}</span>
                         </div>
                       ))}
                     </div>
@@ -820,6 +756,7 @@ function App() {
 
                 <div>
                   <label className="block text-gray-700 mb-1 font-semibold">เบอร์โทรศัพท์</label>
+                  {/* 💡 เอา required ออก อนุญาตให้เว้นว่างได้ */}
                   <input type="tel" className="w-full border p-2 rounded-lg bg-gray-50" placeholder="ยังไม่มีข้อมูล (เว้นว่างได้)" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} />
                 </div>
 
@@ -828,7 +765,6 @@ function App() {
                   <input type="datetime-local" required className="w-full border p-2 rounded-lg" value={formData.job_date} onChange={(e) => setFormData({...formData, job_date: e.target.value})} />
                 </div>
 
-                {/* 🚜 จัดการและเลือกรถเกี่ยว (แบบไดนามิกตัวเดียวจบ) */}
                 <div className="bg-orange-50 p-3 rounded-lg border border-orange-200 mt-3">
                   <div className="flex justify-between items-center mb-2">
                     <label className="block text-orange-800 font-semibold">🚜 จัดรถเกี่ยว</label>
@@ -843,7 +779,7 @@ function App() {
                 </div>
 
                 <div>
-                  <label className="block text-gray-700 mb-1 font-semibold">หมายเหตุ / จุดสังเกต</label>
+                  <label className="block text-gray-700 mb-1 font-semibold">หมายเหตุ / จุดสังเกต (ของงานนี้)</label>
                   <textarea className="w-full border p-2 rounded-lg" rows="2" placeholder="เช่น แปลงติดคลองชลประทาน..." value={formData.address_note} onChange={(e) => setFormData({...formData, address_note: e.target.value})}></textarea>
                 </div>
 
@@ -855,12 +791,10 @@ function App() {
                       <button type="button" onClick={() => setShowMapPicker(true)} className="bg-orange-500 text-white text-xs py-1.5 px-2 rounded-lg font-bold shadow-md">🗺️ เปิดแผนที่วาดแปลง</button>
                     </div>
                   </div>
-                  
                   <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
                     <input type="text" placeholder="Latitude" readOnly value={formData.latitude} className="border p-1.5 rounded bg-gray-100 w-full" />
                     <input type="text" placeholder="Longitude" readOnly value={formData.longitude} className="border p-1.5 rounded bg-gray-100 w-full" />
                   </div>
-
                   <div className="text-xs text-green-700 font-bold">*{formData.area_size ? `พื้นที่คำนวณได้: ${formData.area_size} ไร่` : 'ยังไม่ได้ระบุแปลงบนแผนที่'}</div>
                 </div>
 
@@ -875,6 +809,7 @@ function App() {
                   </div>
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">จำนวนไร่</label>
+                    {/* 💡 เอา required ออก อนุญาตให้เว้นว่างได้ */}
                     <input type="number" step="0.01" className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="ยังไม่ระบุ" 
                       value={formData.area_size} 
                       onChange={(e) => {
@@ -886,7 +821,6 @@ function App() {
                   </div>
                 </div>
                 
-                {/* 💰 ส่วนจัดการเงินๆ ทองๆ */}
                 <div className="grid grid-cols-2 gap-3 mt-3 border-t border-gray-200 pt-3">
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">ราคาต่อไร่ (บาท)</label>
@@ -925,6 +859,49 @@ function App() {
           </div>
         )}
 
+        {/* 👥 Popup จัดการรายชื่อลูกค้า */}
+        {showCustomerManager && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold text-gray-800">👥 จัดการรายชื่อลูกค้า</h2>
+                <button onClick={() => { setShowCustomerManager(false); setEditingCustomer(null); setNewCustomer({name:'', phone:'', address_note:''}); }} className="text-gray-500 font-bold text-xl">❌</button>
+              </div>
+
+              {/* ฟอร์มเพิ่ม/แก้ไขลูกค้า */}
+              <div className="bg-blue-50 p-3 rounded-xl border border-blue-200 mb-4 shrink-0">
+                <h3 className="font-bold text-blue-800 mb-2 text-sm">{editingCustomer ? '✏️ แก้ไขข้อมูลลูกค้า' : '➕ เพิ่มลูกค้าใหม่'}</h3>
+                <input type="text" placeholder="ชื่อลูกค้า" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} />
+                <input type="tel" placeholder="เบอร์โทรศัพท์" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} />
+                <textarea placeholder="ข้อมูลที่อยู่ / จุดสังเกตบ้าน (ประจำตัวลูกค้า)" rows="2" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newCustomer.address_note} onChange={e => setNewCustomer({...newCustomer, address_note: e.target.value})}></textarea>
+                <div className="flex gap-2">
+                  {editingCustomer && <button onClick={() => { setEditingCustomer(null); setNewCustomer({name:'', phone:'', address_note:''}); }} className="w-1/3 bg-gray-400 text-white font-bold py-2 rounded-lg text-sm">ยกเลิก</button>}
+                  <button onClick={handleSaveCustomer} className="flex-1 bg-blue-600 text-white font-bold py-2 rounded-lg text-sm">{editingCustomer ? 'บันทึกการแก้ไข' : 'เพิ่มลูกค้า'}</button>
+                </div>
+              </div>
+
+              {/* รายชื่อลูกค้า */}
+              <div className="overflow-y-auto flex-1 space-y-2 pr-1">
+                {customersList.map(c => (
+                  <div key={c.id} className="bg-gray-50 p-3 rounded-lg border flex flex-col gap-2">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-bold text-sm text-gray-800">{c.name}</p>
+                        <p className="text-xs text-gray-500">📞 {c.phone || 'ไม่มีเบอร์'}</p>
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        <button onClick={() => { setEditingCustomer(c); setNewCustomer({ name: c.name, phone: c.phone || '', address_note: c.address_note || '' }); }} className="bg-yellow-100 text-yellow-700 px-3 py-1 rounded-md text-xs font-bold border border-yellow-200">แก้ไข</button>
+                        <button onClick={() => handleDeleteCustomer(c.id)} className="bg-red-100 text-red-600 px-3 py-1 rounded-md text-xs font-bold border border-red-200">ลบ</button>
+                      </div>
+                    </div>
+                    {c.address_note && <p className="text-xs text-blue-600 bg-blue-100/50 p-1.5 rounded">🏠 {c.address_note}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ⚙️ Popup จัดการรายชื่อรถเกี่ยว */}
         {showVehicleManager && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
@@ -938,7 +915,6 @@ function App() {
                   <div key={v.id} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border">
                     <div>
                       <p className="font-bold text-sm text-gray-800">{v.name}</p>
-                      {/* เปลี่ยนตรงนี้ให้โชว์ชื่อคนขับ */}
                       {v.driver_name && <p className="text-xs text-gray-500">👨‍🌾 คนขับ: {v.driver_name}</p>}
                     </div>
                     <button onClick={() => handleDeleteVehicle(v.id)} className="bg-red-100 text-red-600 px-2 py-1 rounded-md text-xs font-bold">ลบ</button>
@@ -948,9 +924,7 @@ function App() {
               <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
                 <h3 className="font-bold text-orange-800 mb-2 text-sm">➕ เพิ่มรถคันใหม่</h3>
                 <input type="text" placeholder="ชื่อรถ (เช่น คันที่ 1)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.name} onChange={e => setNewVehicle({...newVehicle, name: e.target.value})} />
-                {/* เปลี่ยนช่องนี้เป็นให้กรอกชื่อคนขับ */}
                 <input type="text" placeholder="ชื่อคนขับ (ถ้ามี)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.driver_name} onChange={e => setNewVehicle({...newVehicle, driver_name: e.target.value})} />
-                
                 <button onClick={handleAddVehicle} className="w-full bg-orange-500 text-white font-bold py-2 rounded-lg text-sm">เพิ่มข้อมูล</button>
               </div>
             </div>
