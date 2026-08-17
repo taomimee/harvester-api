@@ -307,7 +307,7 @@ function App() {
     setFormData({
       customer_name: job.customers?.name || '',
       phone: job.customers?.phone || '',
-      address_note: job.customers?.address_note || '',
+      address_note: job.address_note || job.customers?.address_note || '',
       crop_type: job.crop_type || 'ข้าว',
       area_size: job.area_size || '',
       job_date: formattedDate,
@@ -623,16 +623,36 @@ function App() {
             </span>
           </div>
 
+          {/* 👇 โค้ดกล่องประเภทพืชและพื้นที่แบบใหม่ 👇 */}
           <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
-            <div className="bg-gray-50 p-2 rounded-lg">
+            {/* กล่องประเภทพืชแบบแยกสี + ไอคอน */}
+            <div className={`p-2 rounded-lg border ${
+              job.crop_type === 'ข้าว' ? 'bg-amber-50 border-amber-200' :
+              job.crop_type === 'ข้าวโพด' ? 'bg-orange-50 border-orange-200' :
+              job.crop_type === 'ถั่ว' ? 'bg-emerald-50 border-emerald-200' :
+              'bg-gray-50 border-gray-200'
+            }`}>
               <span className="block text-gray-500 text-xs">ประเภทพืช</span>
-              <span className="font-semibold text-gray-800">{job.crop_type}</span>
+              <span className={`font-bold ${
+                job.crop_type === 'ข้าว' ? 'text-amber-700' :
+                job.crop_type === 'ข้าวโพด' ? 'text-orange-700' :
+                job.crop_type === 'ถั่ว' ? 'text-emerald-700' :
+                'text-gray-800'
+              }`}>
+                {job.crop_type === 'ข้าว' ? '🌾 ' : 
+                 job.crop_type === 'ข้าวโพด' ? '🌽 ' : 
+                 job.crop_type === 'ถั่ว' ? '🥜 ' : ''}
+                {job.crop_type}
+              </span>
             </div>
-            <div className="bg-gray-50 p-2 rounded-lg">
+            
+            {/* กล่องพื้นที่ */}
+            <div className="bg-gray-50 border border-gray-200 p-2 rounded-lg">
               <span className="block text-gray-500 text-xs">พื้นที่</span>
               <span className="font-semibold text-gray-800">{job.area_size} ไร่</span>
             </div>
           </div>
+          {/* 👆 สิ้นสุดโค้ดกล่องประเภทพืช 👆 */}
           
           {/* 💰 กล่องโชว์ยอดเงิน */}
           {(job.price_per_rai || job.total_price) && (
@@ -666,7 +686,8 @@ function App() {
                   
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
-                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-3 border border-yellow-200"><span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>{job.customers?.address_note || 'ไม่มีข้อมูล'}</div>
+                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-3 border border-yellow-200"><span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>{job.address_note || job.customers?.address_note || 'ไม่มีข้อมูล'}
+                      </div>
                       <div className="flex gap-2 pt-2 border-t">
                         {job.status !== 'IN_PROGRESS' && <button onClick={() => updateStatus(job.id, 'IN_PROGRESS')} className="flex-1 bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">▶️ เริ่มเกี่ยว</button>}
                         {job.status !== 'DONE' && <button onClick={() => updateStatus(job.id, 'DONE')} className="flex-1 bg-green-500 text-white text-xs py-2 rounded-lg font-bold">✅ เสร็จสิ้น</button>}
