@@ -685,7 +685,7 @@ function App() {
                     </button>
                  </div>
                  
-                 {/* ส่วนที่ 2: โชว์พิกัด + ปุ่มคัดลอก */}
+                 {/* ส่วนที่ 2: โชว์พิกัด + ปุ่มเปิดแอป */}
                  <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between items-center">
                     <div>
                       <p className="text-xs text-gray-500">พิกัด GPS (Lat, Lon):</p>
@@ -693,15 +693,17 @@ function App() {
                         {gpsPathData[gpsPathData.length-1].latitude}, {gpsPathData[gpsPathData.length-1].longitude}
                       </p>
                     </div>
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length-1].latitude}, ${gpsPathData[gpsPathData.length-1].longitude}`);
-                        alert('📋 คัดลอกพิกัดเรียบร้อยแล้ว นำไปวางได้เลยครับ!');
-                      }}
-                      className="bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs px-3 py-1.5 rounded-lg font-bold transition shadow-sm"
-                    >
-                      📋 คัดลอก
-                    </button>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          // ใช้คำสั่ง geo: เพื่อปลุกแอปแผนที่ในเครื่องขึ้นมา (ผู้ใช้สามารถเลือกแอป Ling หรือแอปอื่นๆ ได้)
+                          window.location.href = `geo:${gpsPathData[gpsPathData.length-1].latitude},${gpsPathData[gpsPathData.length-1].longitude}?q=${gpsPathData[gpsPathData.length-1].latitude},${gpsPathData[gpsPathData.length-1].longitude}`;
+                        }}
+                        className="bg-purple-100 hover:bg-purple-200 text-purple-800 text-xs px-3 py-1.5 rounded-lg font-bold transition shadow-sm flex items-center gap-1"
+                      >
+                        🐒 เปิดแอป Ling
+                      </button>
+                    </div>
                  </div>
 
                  {/* ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ */}
