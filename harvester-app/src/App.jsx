@@ -150,6 +150,55 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
+// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยวโดยเฉพาะ (Tracking Map)
+function TrackingMap({ pathData }) {
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const polylineLayer = useRef(null);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    // ตั้งค่าพิกัดเริ่มต้น (ถ้าไม่มีข้อมูลให้ซูมระดับประเทศ)
+    const center = pathData.length > 0 ? [pathData[pathData.length-1].latitude, pathData[pathData.length-1].longitude] : [15.7012, 101.1012];
+    const zoom = pathData.length > 0 ? 17 : 6;
+
+    if (!mapInstance.current) {
+      mapInstance.current = L.map(mapRef.current, { zoomControl: true }).setView(center, zoom);
+      L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+        attribution: 'Google Maps', maxZoom: 20
+      }).addTo(mapInstance.current);
+    } else {
+      mapInstance.current.setView(center, zoom);
+    }
+
+    // วาดเส้นทางใหม่
+    if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
+    
+    if (pathData.length > 0) {
+      // 💡 แยกสี: วิ่งบนถนน (สีเทา) / กำลังเกี่ยวข้าว (สีน้ำเงินเข้มแบบในรูป)
+      const latlngs = pathData.map(p => [p.latitude, p.longitude]);
+      polylineLayer.current = L.polyline(latlngs, { 
+        color: '#2563EB', // สีน้ำเงิน
+        weight: 4, 
+        opacity: 0.8 
+      }).addTo(mapInstance.current);
+      
+      // ปักหมุดจุดล่าสุด (รูปรถเกี่ยว)
+      const lastPoint = pathData[pathData.length - 1];
+      const carIcon = L.divIcon({
+        className: 'bg-transparent border-0',
+        html: `<div class="bg-orange-500 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md" style="margin-left: -16px; margin-top: -16px;">🚜</div>`,
+        iconSize: [0, 0]
+      });
+      L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
+    }
+
+    return () => {};
+  }, [pathData]);
+
+  return <div ref={mapRef} className="w-full h-full z-0" />;
+}
+
 function App() {
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
@@ -184,6 +233,14 @@ function App() {
   const [showCustomerManager, setShowCustomerManager] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address_note: '' });
+
+  // 👇 วาง State สำหรับ GPS ตรงนี้ 👇
+  const [trackingVehicleId, setTrackingVehicleId] = useState('');
+  const [trackingMode, setTrackingMode] = useState('realtime');
+  const [trackingDate, setTrackingDate] = useState(new Date().toISOString().slice(0, 10));
+  const [gpsPathData, setGpsPathData] = useState([]);
+  const [isFetchingGps, setIsFetchingGps] = useState(false);
+  // 👆 จบการวาง State 👆
 
   // ฟังก์ชันดึงรายชื่อรถ
   const fetchVehicles = async () => {
@@ -521,15 +578,110 @@ function App() {
           </div>
         </div>
 
-        {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) 4 เมนู */}
+        {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) 5 เมนู */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
           <button onClick={() => setActiveTab('active')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
+          
           <button onClick={() => setActiveTab('calendar')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
+          
+          {/* เมนูใหม่ที่เพิ่มเข้ามา */}
+          <button onClick={() => setActiveTab('gps')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัดรถ</button>
+          
           <button onClick={() => setActiveTab('history')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'history' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📋 ประวัติ</button>
+          
           <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
         </div>
 
         {activeTab === 'calendar' && renderCalendar()}
+
+        {/* 👇 วางหน้าจอ GPS ตรงนี้ 👇 */}
+        {activeTab === 'gps' && (
+          <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[75vh]">
+            
+            {/* แผงควบคุมด้านบน */}
+            <div className="p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm">
+              <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="text-blue-600">🛰️</span> ระบบติดตามรถเกี่ยว
+              </h2>
+              
+              <div className="flex gap-2 mb-3 bg-gray-200 p-1 rounded-lg">
+                <button 
+                  onClick={() => setTrackingMode('realtime')}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition ${trackingMode === 'realtime' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}
+                >
+                  🟢 ทำงานปัจจุบัน
+                </button>
+                <button 
+                  onClick={() => setTrackingMode('history')}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition ${trackingMode === 'history' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}
+                >
+                  🕒 ดูประวัติย้อนหลัง
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <select 
+                  className="flex-1 border border-gray-300 p-2 rounded-lg bg-white text-sm font-bold text-gray-700"
+                  value={trackingVehicleId}
+                  onChange={(e) => setTrackingVehicleId(e.target.value)}
+                >
+                  <option value="">-- เลือกรถเกี่ยว --</option>
+                  {vehicles.map(v => ( <option key={v.id} value={v.id}>🚜 {v.name}</option> ))}
+                </select>
+
+                {trackingMode === 'history' && (
+                  <input 
+                    type="date" 
+                    className="flex-1 border border-gray-300 p-2 rounded-lg bg-white text-sm"
+                    value={trackingDate}
+                    onChange={(e) => setTrackingDate(e.target.value)}
+                  />
+                )}
+              </div>
+
+              <button 
+                onClick={async () => {
+                  if(!trackingVehicleId) return alert('กรุณาเลือกรถเกี่ยวครับ');
+                  setIsFetchingGps(true);
+                  try {
+                    const queryDate = trackingMode === 'history' ? `?date=${trackingDate}` : '';
+                    const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}${queryDate}`);
+                    const data = await res.json();
+                    if(data.length === 0) alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ');
+                    setGpsPathData(data);
+                  } catch(e) { console.error(e); }
+                  setIsFetchingGps(false);
+                }}
+                className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-md transition flex justify-center items-center gap-2"
+              >
+                {isFetchingGps ? '⏳ กำลังดึงข้อมูล...' : '🔍 ค้นหาเส้นทาง'}
+              </button>
+            </div>
+
+            {/* ส่วนแสดงแผนที่ */}
+            <div className="flex-1 relative bg-gray-200">
+              <TrackingMap pathData={gpsPathData} />
+              
+              {/* แผงบอกสถานะ */}
+              <div className="absolute top-3 left-3 right-3 z-[400] pointer-events-none">
+                 {gpsPathData.length > 0 ? (
+                   <div className="bg-white/95 backdrop-blur border border-blue-200 p-3 rounded-xl shadow-lg">
+                      <p className="text-xs text-gray-500 mb-1">ข้อมูลจุดล่าสุด (เวลา):</p>
+                      <p className="font-bold text-blue-800 text-sm">
+                        {new Date(gpsPathData[gpsPathData.length-1].created_at).toLocaleString('th-TH')}
+                      </p>
+                   </div>
+                 ) : (
+                   <div className="bg-white/80 backdrop-blur border border-gray-300 p-3 rounded-xl shadow-sm text-center text-gray-500 text-sm font-bold">
+                     กรุณากดปุ่มค้นหาเพื่อดูเส้นทาง
+                   </div>
+                 )}
+              </div>
+            </div>
+
+          </div>
+        )}
+        {/* 👆 จบหน้าจอ GPS 👆 */}
 
         {/* ⚙️ หน้าตั้งค่าระบบ */}
         {activeTab === 'settings' && (

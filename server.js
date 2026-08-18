@@ -189,6 +189,38 @@ app.delete('/api/vehicles/:id', async (req, res) => {
 });
 
 // ==========================================
+// 🛰️ API สำหรับระบบ GPS Tracker (ดูปัจจุบันและประวัติ)
+// ==========================================
+
+app.get('/api/gps/:vehicle_id', async (req, res) => {
+    const { vehicle_id } = req.params;
+    const { date } = req.query; // วันที่สำหรับดูประวัติย้อนหลัง (ถ้ามี)
+    
+    // ถ้ามี date ให้ใช้วันนั้น ถ้าไม่มีให้ใช้วันนี้ปัจจุบัน
+    const targetDate = date ? new Date(date) : new Date();
+    targetDate.setHours(0, 0, 0, 0);
+    
+    const nextDate = new Date(targetDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+    
+    try {
+        const { data, error } = await supabase
+            .from('gps_logs')
+            .select('*')
+            .eq('vehicle_id', vehicle_id)
+            // .eq('is_harvesting', true) // 💡 ถ้าอยากดูแค่รอยเกี่ยวข้าว ให้เปิดใช้งานบรรทัดนี้
+            .gte('created_at', targetDate.toISOString())
+            .lt('created_at', nextDate.toISOString())
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ==========================================
 // 👥 API สำหรับจัดการลูกค้า (Customers)
 // ==========================================
 
