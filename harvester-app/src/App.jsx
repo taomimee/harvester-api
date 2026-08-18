@@ -187,10 +187,17 @@ function TrackingMap({ pathData }) {
       const lastPoint = pathData[pathData.length - 1];
       const carIcon = L.divIcon({
         className: 'bg-transparent border-0',
-        html: `<div class="bg-orange-500 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md" style="margin-left: -16px; margin-top: -16px;">🚜</div>`,
+        html: `<div class="bg-orange-500 hover:bg-orange-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer transition transform hover:scale-110" style="margin-left: -16px; margin-top: -16px;">🚜</div>`,
         iconSize: [0, 0]
       });
-      L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
+      
+      const marker = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
+      
+      // 👇 เพิ่มอีเวนต์ให้กดที่ตัวรถแล้วเด้งไป Google Maps
+      marker.bindTooltip("คลิกเพื่อเปิด Google Maps นำทางไปหารถ", { direction: 'top', offset: [0, -10] });
+      marker.on('click', () => {
+        window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastPoint.latitude},${lastPoint.longitude}`, '_blank');
+      });
     }
 
     return () => {};
@@ -662,17 +669,73 @@ function App() {
             <div className="flex-1 relative bg-gray-200">
               <TrackingMap pathData={gpsPathData} />
               
-              {/* แผงบอกสถานะ */}
+              {/* แผงบอกสถานะ (Overlay บนแผนที่) */}
               <div className="absolute top-3 left-3 right-3 z-[400] pointer-events-none">
                  {gpsPathData.length > 0 ? (
-                   <div className="bg-white/95 backdrop-blur border border-blue-200 p-3 rounded-xl shadow-lg">
-                      <p className="text-xs text-gray-500 mb-1">ข้อมูลจุดล่าสุด (เวลา):</p>
-                      <p className="font-bold text-blue-800 text-sm">
-                        {new Date(gpsPathData[gpsPathData.length-1].created_at).toLocaleString('th-TH')}
-                      </p>
+                   <div className="bg-white/95 backdrop-blur border border-blue-200 p-3 rounded-xl shadow-lg pointer-events-auto">
+                      
+                      {/* ส่วนที่ 1: เวลาล่าสุด + ปุ่มนำทางด่วน */}
+                      <div className="flex justify-between items-start">
+                         <div>
+                            <p className="text-xs text-gray-500 mb-1">ข้อมูลจุดล่าสุด (เวลา):</p>
+                            <p className="font-bold text-blue-800 text-sm">
+                              {new Date(gpsPathData[gpsPathData.length-1].created_at).toLocaleString('th-TH')}
+                            </p>
+                         </div>
+                         <button 
+                           onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${gpsPathData[gpsPathData.length-1].latitude},${gpsPathData[gpsPathData.length-1].longitude}`, '_blank')}
+                           className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded-lg shadow-sm font-bold flex items-center gap-1 transition"
+                         >
+                           📍 นำทางไปหารถ
+                         </button>
+                      </div>
+                      
+                      {/* ส่วนที่ 2: โชว์พิกัด + ปุ่มคัดลอก */}
+                      <div className="mt-2 pt-2 border-t border-gray-200 flex justify-between items-center">
+                         <div>
+                           <p className="text-xs text-gray-500">พิกัด GPS (Lat, Lon):</p>
+                           <p className="font-mono text-xs text-gray-700 font-semibold">
+                             {gpsPathData[gpsPathData.length-1].latitude}, {gpsPathData[gpsPathData.length-1].longitude}
+                           </p>
+                         </div>
+                         <button 
+                           onClick={() => {
+                             navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length-1].latitude}, ${gpsPathData[gpsPathData.length-1].longitude}`);
+                             alert('📋 คัดลอกพิกัดเรียบร้อยแล้ว นำไปวางได้เลยครับ!');
+                           }}
+                           className="bg-gray-200 hover:bg-gray-300 text-gray-800 text-xs px-3 py-1.5 rounded-lg font-bold transition shadow-sm"
+                         >
+                           📋 คัดลอก
+                         </button>
+                      </div>
+
+                      {/* ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ (ซ่อนไว้ถ้าจุดน้อยกว่า 3 จุด) */}
+                      {gpsPathData.length >= 3 && (
+                        <div className="mt-2 pt-2 border-t border-green-200 bg-green-50/50 -mx-3 -mb-3 p-3 rounded-b-xl flex justify-between items-center">
+                           <p className="text-xs text-green-700 font-bold">📐 พื้นที่วิ่งงานโดยประมาณ:</p>
+                           <p className="font-bold text-green-700 text-sm bg-green-200/50 px-2 py-1 rounded-md">
+                             {(() => {
+                                try {
+                                  // สร้างกรอบรอบนอกสุดของพื้นที่ (Convex Hull) แล้วคำนวณ
+                                  const turfPoints = turf.featureCollection(gpsPathData.map(p => turf.point([p.longitude, p.latitude])));
+                                  const hull = turf.convex(turfPoints);
+                                  if (!hull) return 'กำลังรวบรวมข้อมูล...';
+                                  const sqM = turf.area(hull);
+                                  const rai = Math.floor(sqM / 1600);
+                                  const ngan = Math.floor((sqM % 1600) / 400);
+                                  const sqWah = ((sqM % 400) / 4).toFixed(1);
+                                  return `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`;
+                                } catch (e) {
+                                  return 'กำลังคำนวณ...';
+                                }
+                             })()}
+                           </p>
+                        </div>
+                      )}
+
                    </div>
                  ) : (
-                   <div className="bg-white/80 backdrop-blur border border-gray-300 p-3 rounded-xl shadow-sm text-center text-gray-500 text-sm font-bold">
+                   <div className="bg-white/80 backdrop-blur border border-gray-300 p-3 rounded-xl shadow-sm text-center text-gray-500 text-sm font-bold pointer-events-auto">
                      กรุณากดปุ่มค้นหาเพื่อดูเส้นทาง
                    </div>
                  )}
