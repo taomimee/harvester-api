@@ -213,6 +213,9 @@ function App() {
   const [activeTab, setActiveTab] = useState('active') 
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
+  // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
+  const [finishingJob, setFinishingJob] = useState(null);
+  const [wageData, setWageData] = useState({ area: '', wagePerRai: 60, workers: '' });
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
@@ -461,12 +464,12 @@ function App() {
     } catch (err) { console.error(err); alert('❌ เกิดข้อผิดพลาดเซิร์ฟเวอร์'); }
   }
 
-  const updateStatus = async (id, newStatus) => {
+  const updateStatus = async (id, newStatus, extraWageData = null) => {
     try {
       const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: newStatus, wageData: extraWageData }) // 👈 ส่งค่าแรงพ่วงไปด้วย
       });
       if (response.ok) fetchJobs();
     } catch (err) { console.error(err); }
@@ -867,7 +870,22 @@ function App() {
                       </div>
                       <div className="flex gap-2 pt-2 border-t">
                         {job.status !== 'IN_PROGRESS' && <button onClick={() => updateStatus(job.id, 'IN_PROGRESS')} className="flex-1 bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">▶️ เริ่มเกี่ยว</button>}
-                        {job.status !== 'DONE' && <button onClick={() => updateStatus(job.id, 'DONE')} className="flex-1 bg-green-500 text-white text-xs py-2 rounded-lg font-bold">✅ เสร็จสิ้น</button>}
+                        
+                        {/* 👇 แก้ไขปุ่ม ✅ เสร็จสิ้น ตรงนี้ครับ 👇 */}
+                        {job.status !== 'DONE' && (
+                          <button 
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              setWageData({ area: job.area_size || '', wagePerRai: 60, workers: '' }); 
+                              setFinishingJob(job); 
+                            }} 
+                            className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-2 rounded-lg font-bold shadow-sm transition"
+                          >
+                            ✅ เสร็จสิ้น
+                          </button>
+                        )}
+                        {/* 👆 จบการแก้ไขปุ่ม 👆 */}
+
                         {job.status !== 'PENDING' && <button onClick={() => updateStatus(job.id, 'PENDING')} className="flex-1 bg-yellow-500 text-white text-xs py-2 rounded-lg font-bold">⏳ รอคิว</button>}
                       </div>
                       <div className="flex gap-2 pt-2 border-t mt-3">
@@ -1158,6 +1176,77 @@ function App() {
              />
           </div>
         )}
+
+        {/* 👇 จุดที่ 3.4: Popup ยืนยันปิดงานและจดค่าแรงลูกจ้าง 👇 */}
+        {finishingJob && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[300]">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+              <h2 className="text-xl font-bold mb-4 text-green-700 flex items-center gap-2">
+                <span>✅</span> ปิดคิวงาน & จดค่าแรง
+              </h2>
+              
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1 text-sm">จำนวนไร่ที่ทำจริง</label>
+                    <input 
+                      type="number" 
+                      className="w-full border border-green-300 p-2 rounded-lg bg-green-50 text-green-900 font-bold" 
+                      value={wageData.area} 
+                      onChange={(e) => setWageData({...wageData, area: e.target.value})} 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1 text-sm">เรทเหมา (บาท/ไร่)</label>
+                    <input 
+                      type="number" 
+                      className="w-full border border-gray-300 p-2 rounded-lg bg-gray-50 font-bold" 
+                      value={wageData.wagePerRai} 
+                      onChange={(e) => setWageData({...wageData, wagePerRai: e.target.value})} 
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-orange-50 p-4 rounded-xl border border-orange-200">
+                  <label className="block text-orange-900 font-bold mb-2">🧑‍🌾 ใครลงแปลงนี้บ้าง? (พิมพ์ชื่อ)</label>
+                  <input 
+                    type="text" 
+                    placeholder="เช่น นาย เอ, นาย บี"
+                    className="w-full border border-orange-300 p-2 rounded-lg text-orange-900 placeholder-orange-300 focus:ring-2 focus:ring-orange-400 outline-none" 
+                    value={wageData.workers} 
+                    onChange={(e) => setWageData({...wageData, workers: e.target.value})} 
+                  />
+                  <p className="text-xs text-orange-700 mt-2 font-semibold">
+                    * ข้อมูลจะถูกจดเข้าสมุดบัญชี เป็นยอดค้างจ่าย (รอเบิก)
+                  </p>
+                </div>
+                
+                <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 flex justify-between items-center shadow-inner">
+                   <span className="font-bold text-blue-900">💰 ยอดเข้ากระเป๋าลูกจ้าง:</span>
+                   <span className="font-black text-blue-700 text-2xl">
+                     {((Number(wageData.area) * Number(wageData.wagePerRai)) || 0).toLocaleString()} <span className="text-sm">บาท</span>
+                   </span>
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={() => setFinishingJob(null)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2.5 rounded-xl font-bold transition">ยกเลิก</button>
+                <button 
+                  onClick={() => {
+                    if(!wageData.workers.trim()) return alert("กรุณาพิมพ์ชื่อคนลงแปลงด้วยครับ (จดไว้กันลืม)");
+                    updateStatus(finishingJob.id, 'DONE', wageData);
+                    setFinishingJob(null);
+                  }} 
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-xl font-bold shadow-lg transition"
+                >
+                  บันทึก & ปิดงาน
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* 👆 จบ Popup จดค่าแรง 👆 */}
+
       </div>
     </div>
   )

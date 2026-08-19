@@ -35,21 +35,27 @@ app.post('/api/jobs', async (req, res) => {
 
     try {
         let customerId;
-        const { data: existingCustomer } = await supabase
-            .from('customers')
-            .select('id')
-            .eq('phone', phone)
-            .single();
+        let existingCustomer = null;
+
+        // 🛠️ แก้ไข: เช็คก่อนว่ามีเบอร์โทรส่งมาจริงๆ และไม่ใช่ค่าว่าง ถึงจะไปค้นหา
+        if (phone && phone.trim() !== "") {
+            const { data } = await supabase
+                .from('customers')
+                .select('id')
+                .eq('phone', phone)
+                .single();
+            existingCustomer = data;
+        }
 
         if (existingCustomer) {
             customerId = existingCustomer.id;
             // ถอด address_note ออก เพื่อไม่ให้ไปทับของเก่าลูกค้า
             await supabase.from('customers').update({ name: customer_name }).eq('id', customerId); 
         } else {
-            // ถอด address_note ออกจากตอนสร้างลูกค้าใหม่เช่นกัน
+            // 🛠️ แก้ไข: ถ้าไม่มีเบอร์โทร ให้บังคับบันทึกเป็น null เพื่อป้องกันปัญหา
             const { data: newCustomer, error: custError } = await supabase
                 .from('customers')
-                .insert([{ name: customer_name, phone }]) 
+                .insert([{ name: customer_name, phone: phone || null }]) 
                 .select()
                 .single();
             if (custError) throw custError;
@@ -85,16 +91,42 @@ app.post('/api/jobs', async (req, res) => {
 // API สำหรับอัปเดตเปลี่ยนสถานะงาน (เช่น กดเสร็จสิ้น หรือ กำลังเกี่ยว)
 app.patch('/api/jobs/:id/status', async (req, res) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, wageData } = req.body; // 👈 รับข้อมูล wageData เพิ่มเข้ามา
 
-    const { data, error } = await supabase
-        .from('jobs')
-        .update({ status })
-        .eq('id', id)
-        .select();
+    try {
+        // 1. อัปเดตสถานะงานให้เป็น DONE, IN_PROGRESS ฯลฯ
+        const { data: updatedJob, error: jobError } = await supabase
+            .from('jobs')
+            .update({ status })
+            .eq('id', id)
+            .select()
+            .single();
 
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
+        if (jobError) throw jobError;
+
+        // 2. 💡 พิเศษ: ถ้าสถานะคือ DONE และมีการส่งค่าแรงมา ให้บันทึกลงตาราง Transactions
+        if (status === 'DONE' && wageData) {
+            const totalWage = (Number(wageData.area) * Number(wageData.wagePerRai)) || 0;
+            
+            const { error: txError } = await supabase
+                .from('transactions')
+                .insert([{
+                    job_id: id,
+                    type: 'OUT',            // รายจ่าย
+                    category: 'ค่าแรง',       // หมวดหมู่
+                    total_amount: totalWage,
+                    paid_amount: 0,         // ยังไม่ได้จ่าย
+                    status: 'UNPAID',       // สถานะรอเบิก
+                    note: `คนทำ: ${wageData.workers} (พื้นที่ ${wageData.area} ไร่, เรท ${wageData.wagePerRai} บ./ไร่)` // 👈 บันทึกเป็นหลักฐาน
+                }]);
+            
+            if (txError) console.error('Error saving transaction:', txError.message);
+        }
+
+        res.json({ message: 'อัปเดตสถานะสำเร็จ', data: updatedJob });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
