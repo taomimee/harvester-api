@@ -31,13 +31,18 @@ app.get('/api/jobs', async (req, res) => {
 
 // API สำหรับเพิ่มคิวงานใหม่
 app.post('/api/jobs', async (req, res) => {
-    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
+    // 💡 ปรับการรับค่า ให้ area_size และราคาเป็นตัวเลข (ถ้าว่างให้เป็น null หรือ 0)
+    let { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
+
+    // แปลงค่าว่างให้เป็น null หรือ 0 ป้องกัน Error ฐานข้อมูล
+    area_size = area_size ? Number(area_size) : null;
+    price_per_rai = price_per_rai ? Number(price_per_rai) : 0;
+    total_price = total_price ? Number(total_price) : 0;
 
     try {
         let customerId;
         let existingCustomer = null;
 
-        // 🛠️ แก้ไข: เช็คก่อนว่ามีเบอร์โทรส่งมาจริงๆ และไม่ใช่ค่าว่าง ถึงจะไปค้นหา
         if (phone && phone.trim() !== "") {
             const { data } = await supabase
                 .from('customers')
@@ -49,10 +54,8 @@ app.post('/api/jobs', async (req, res) => {
 
         if (existingCustomer) {
             customerId = existingCustomer.id;
-            // ถอด address_note ออก เพื่อไม่ให้ไปทับของเก่าลูกค้า
             await supabase.from('customers').update({ name: customer_name }).eq('id', customerId); 
         } else {
-            // 🛠️ แก้ไข: ถ้าไม่มีเบอร์โทร ให้บังคับบันทึกเป็น null เพื่อป้องกันปัญหา
             const { data: newCustomer, error: custError } = await supabase
                 .from('customers')
                 .insert([{ name: customer_name, phone: phone || null }]) 
@@ -68,15 +71,15 @@ app.post('/api/jobs', async (req, res) => {
                 customer_id: customerId,
                 vehicle_id: vehicle_id || null,
                 crop_type,
-                area_size,
+                area_size, // 👈 ส่งค่าที่เป็นตัวเลขหรือ null
                 job_date,
                 latitude: latitude || 15.7001234,
                 longitude: longitude || 101.1001234,
                 status: 'PENDING',
-                price_per_rai: price_per_rai || 0,
-                total_price: total_price || 0,
+                price_per_rai,
+                total_price,
                 payment_status: payment_status || 'UNPAID',
-                address_note: address_note // 👈 โยกมาบันทึกลงตาราง jobs ตรงนี้
+                address_note: address_note 
             }])
             .select();
 
@@ -132,15 +135,19 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
 // API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
-    const { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
+    let { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
+
+    // แปลงค่าตัวเลข
+    area_size = area_size ? Number(area_size) : null;
+    price_per_rai = price_per_rai ? Number(price_per_rai) : 0;
+    total_price = total_price ? Number(total_price) : 0;
 
     try {
         const { data: jobInfo, error: findError } = await supabase.from('jobs').select('customer_id').eq('id', id).single();
         if (findError) throw findError;
 
         if (jobInfo.customer_id) {
-            // ถอด address_note ออก เพื่อไม่ให้ไปทับของเก่าลูกค้า
-            await supabase.from('customers').update({ name: customer_name, phone: phone }).eq('id', jobInfo.customer_id);
+            await supabase.from('customers').update({ name: customer_name, phone: phone || null }).eq('id', jobInfo.customer_id);
         }
 
         const { data: updatedJob, error: jobError } = await supabase
@@ -155,7 +162,7 @@ app.put('/api/jobs/:id', async (req, res) => {
                 price_per_rai,
                 total_price,
                 payment_status,
-                address_note: address_note // 👈 โยกมาบันทึกลงตาราง jobs ตรงนี้
+                address_note: address_note 
             })
             .eq('id', id)
             .select();
