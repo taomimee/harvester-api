@@ -834,11 +834,11 @@ function App() {
         )}
 
         {/* แสดงคิวงานและประวัติ */}
-        {(activeTab === 'active' || activeTab === 'history') && displayJobs.length === 0 && (
+        {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
           <div className="text-center text-gray-500 mt-10"><p className="text-4xl mb-2">🍃</p><p>ยังไม่มีข้อมูลในหน้านี้ครับ</p></div>
         )}
 
-        {(activeTab === 'active' || activeTab === 'history') && (
+        {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
           <div className="space-y-4">
             {displayJobs.map((job) => {
               const statusObj = getStatusDisplay(job.status);
@@ -976,7 +976,7 @@ function App() {
         )}
 
         {/* ปุ่มแบ่งหน้า (ประวัติ) */}
-        {activeTab === 'history' && historyJobs.length > 0 && (
+        {activeTab === 'finance' && financeSubTab === 'history' && historyJobs.length > 0 && (
           <div className="flex justify-between items-center mt-6 bg-white p-3 rounded-xl shadow-sm border border-gray-200">
             <button onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${currentPage === 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'}`}>◀ ก่อนหน้า</button>
             <span className="text-sm font-bold text-gray-600">หน้า {currentPage} / {totalPages || 1}</span>
@@ -985,7 +985,7 @@ function App() {
         )}
 
         {/* 📊 หน้าจอ Dashboard */}
-        {activeTab === 'dashboard' && (
+        {activeTab === 'finance' && financeSubTab === 'dashboard' && (
           <div className="space-y-4">
             <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
               
@@ -1044,7 +1044,7 @@ function App() {
         )}
 
         {/* 💸 หน้าจอจัดการลูกหนี้ */}
-        {activeTab === 'debt' && (
+        {activeTab === 'finance' && financeSubTab === 'debt' && (
           <div className="space-y-4">
             
             {/* กล่องสรุปยอดหนี้รวม */}
@@ -1146,7 +1146,7 @@ function App() {
         )}
 
         {/* ปุ่ม + เพิ่มคิวงาน */}
-        {(activeTab === 'active' || activeTab === 'history') && (
+        {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
           <button 
             onClick={() => { 
               setEditingId(null); 
