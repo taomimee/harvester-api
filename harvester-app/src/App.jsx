@@ -3,12 +3,6 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
-// 📊 State สำหรับ Dashboard
-  const [dashboardData, setDashboardData] = useState({ totalIncome: 0, totalUnpaid: 0, totalExpense: 0, netProfit: 0, totalArea: 0 });
-  const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
-  const [dashYear, setDashYear] = useState(new Date().getFullYear());
-  const [isFetchingDash, setIsFetchingDash] = useState(false);
-
 // 🗺️ ระบบแผนที่เป้าเล็ง + ค้นหาสถานที่อัจฉริยะ + แผนที่ดาวเทียมมีป้ายชื่อ
 function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const mapRef = useRef(null);
@@ -225,6 +219,12 @@ function App() {
   // 💰 State สำหรับหน้าสรุปค่าแรง
   const [showWageSummary, setShowWageSummary] = useState(false);
   const [wageTransactions, setWageTransactions] = useState([]);
+
+  // 📊 State สำหรับ Dashboard
+  const [dashboardData, setDashboardData] = useState({ totalIncome: 0, totalUnpaid: 0, totalExpense: 0, netProfit: 0, totalArea: 0 });
+  const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
+  const [dashYear, setDashYear] = useState(new Date().getFullYear());
+  const [isFetchingDash, setIsFetchingDash] = useState(false);
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
