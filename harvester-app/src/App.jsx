@@ -3,6 +3,12 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
+// 📊 State สำหรับ Dashboard
+  const [dashboardData, setDashboardData] = useState({ totalIncome: 0, totalUnpaid: 0, totalExpense: 0, netProfit: 0, totalArea: 0 });
+  const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
+  const [dashYear, setDashYear] = useState(new Date().getFullYear());
+  const [isFetchingDash, setIsFetchingDash] = useState(false);
+
 // 🗺️ ระบบแผนที่เป้าเล็ง + ค้นหาสถานที่อัจฉริยะ + แผนที่ดาวเทียมมีป้ายชื่อ
 function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const mapRef = useRef(null);
@@ -280,6 +286,21 @@ function App() {
       setWageTransactions(data);
     } catch (err) { console.error("ดึงข้อมูลค่าแรงไม่ได้:", err); }
   };
+
+  const fetchDashboard = async () => {
+    setIsFetchingDash(true);
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/dashboard?month=${dashMonth}&year=${dashYear}`);
+      const data = await res.json();
+      setDashboardData(data);
+    } catch (err) { console.error(err); }
+    setIsFetchingDash(false);
+  };
+
+  // ดึงข้อมูลใหม่ทุกครั้งที่เปลี่ยนเดือน/ปี หรือสลับมาแท็บ Dashboard
+  useEffect(() => {
+    if (activeTab === 'dashboard') fetchDashboard();
+  }, [activeTab, dashMonth, dashYear]);
 
   useEffect(() => { 
     document.documentElement.lang = 'th'; 
@@ -609,6 +630,8 @@ function App() {
           <button onClick={() => setActiveTab('gps')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัดรถ</button>
           
           <button onClick={() => setActiveTab('history')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'history' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📋 ประวัติ</button>
+          {/* ปุ่มใหม่ สำหรับ Dashboard */}
+          <button onClick={() => setActiveTab('dashboard')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'dashboard' ? 'bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white shadow-md shadow-purple-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📊 สรุปยอด</button>
           
           <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
         </div>
@@ -939,6 +962,65 @@ function App() {
             <button onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${currentPage === 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'}`}>◀ ก่อนหน้า</button>
             <span className="text-sm font-bold text-gray-600">หน้า {currentPage} / {totalPages || 1}</span>
             <button onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))} disabled={currentPage === totalPages} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${currentPage === totalPages ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'}`}>ถัดไป ▶</button>
+          </div>
+        )}
+
+        {/* 📊 หน้าจอ Dashboard */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
+              
+              {/* ตัวกรองเดือนและปี */}
+              <div className="flex gap-2 mb-5">
+                <select 
+                  className="flex-1 border border-gray-300 p-2 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none focus:ring-2 focus:ring-purple-400"
+                  value={dashMonth} onChange={(e) => setDashMonth(Number(e.target.value))}
+                >
+                  {["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"].map((m, i) => (
+                    <option key={i} value={i + 1}>{m}</option>
+                  ))}
+                </select>
+                <select 
+                  className="w-1/3 border border-gray-300 p-2 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none focus:ring-2 focus:ring-purple-400"
+                  value={dashYear} onChange={(e) => setDashYear(Number(e.target.value))}
+                >
+                  <option value={new Date().getFullYear()}>ปีนี้</option>
+                  <option value={new Date().getFullYear() - 1}>ปีที่แล้ว</option>
+                </select>
+              </div>
+
+              {isFetchingDash ? (
+                <div className="text-center py-10 text-gray-500 font-bold">⏳ กำลังคำนวณบัญชี...</div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  
+                  <div className="bg-green-50 p-4 rounded-xl border border-green-200 shadow-sm">
+                    <p className="text-green-800 text-xs font-bold mb-1">📈 รายรับ (เก็บเงินแล้ว)</p>
+                    <p className="text-2xl font-black text-green-600">{dashboardData.totalIncome.toLocaleString()} ฿</p>
+                  </div>
+                  
+                  <div className="bg-red-50 p-4 rounded-xl border border-red-200 shadow-sm">
+                    <p className="text-red-800 text-xs font-bold mb-1">📉 รายจ่าย (ค่าแรง ฯลฯ)</p>
+                    <p className="text-2xl font-black text-red-500">{dashboardData.totalExpense.toLocaleString()} ฿</p>
+                  </div>
+
+                  <div className="col-span-2 bg-gradient-to-r from-blue-500 to-indigo-600 p-4 rounded-xl shadow-md text-white mt-2">
+                    <p className="text-blue-100 text-sm font-bold mb-1">💰 กำไรสุทธิ (เดือนนี้)</p>
+                    <p className="text-4xl font-black">{dashboardData.netProfit.toLocaleString()} <span className="text-lg font-normal">บาท</span></p>
+                    <p className="text-xs text-blue-200 mt-2">พื้นที่เก็บเกี่ยวรวม: <span className="font-bold text-white">{dashboardData.totalArea} ไร่</span></p>
+                  </div>
+
+                  <div className="col-span-2 bg-orange-50 p-4 rounded-xl border border-orange-200 shadow-sm mt-2 flex justify-between items-center">
+                    <div>
+                      <p className="text-orange-900 text-sm font-bold">⚠️ ลูกหนี้ค้างชำระ</p>
+                      <p className="text-xs text-orange-700">คิวงานที่ยังไม่ได้เก็บเงิน</p>
+                    </div>
+                    <p className="text-2xl font-black text-orange-600">{dashboardData.totalUnpaid.toLocaleString()} ฿</p>
+                  </div>
+
+                </div>
+              )}
+            </div>
           </div>
         )}
 

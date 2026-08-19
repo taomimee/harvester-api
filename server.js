@@ -328,6 +328,71 @@ app.patch('/api/transactions/:id/status', async (req, res) => {
     res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
 });
 
+// ==========================================
+// 📊 API สำหรับ Dashboard สรุปรายเดือน
+// ==========================================
+app.get('/api/dashboard', async (req, res) => {
+    const { month, year } = req.query;
+    
+    // สร้างช่วงวันที่สำหรับค้นหาในเดือนนั้นๆ
+    const startDate = new Date(year, month - 1, 1).toISOString();
+    const endDate = new Date(year, month, 0, 23, 59, 59).toISOString();
+
+    try {
+        // 1. ดึงข้อมูลรายรับ (จากคิวงานที่ 'DONE')
+        const { data: jobs } = await supabase
+            .from('jobs')
+            .select('total_price, payment_status, area_size')
+            .eq('status', 'DONE')
+            .gte('job_date', startDate)
+            .lte('job_date', endDate);
+
+        // 2. ดึงข้อมูลรายจ่าย (จาก transactions)
+        const { data: expenses } = await supabase
+            .from('transactions')
+            .select('total_amount')
+            .eq('type', 'OUT')
+            .gte('created_at', startDate)
+            .lte('created_at', endDate);
+
+        // คำนวณยอดต่างๆ
+        let totalIncome = 0;
+        let totalUnpaid = 0;
+        let totalArea = 0;
+        let totalExpense = 0;
+
+        if (jobs) {
+            jobs.forEach(job => {
+                const price = Number(job.total_price) || 0;
+                totalArea += Number(job.area_size) || 0;
+                
+                if (job.payment_status === 'PAID') {
+                    totalIncome += price;
+                } else {
+                    totalUnpaid += price; // ยอดที่ลูกค้ายังไม่จ่าย
+                }
+            });
+        }
+
+        if (expenses) {
+            expenses.forEach(exp => {
+                totalExpense += Number(exp.total_amount) || 0;
+            });
+        }
+
+        res.json({
+            totalIncome,
+            totalUnpaid,
+            totalExpense,
+            netProfit: totalIncome - totalExpense,
+            totalArea
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {
     console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
