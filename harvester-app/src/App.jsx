@@ -1252,8 +1252,8 @@ function App() {
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">จำนวนไร่</label>
                     {/* 💡 เอา required ออก อนุญาตให้เว้นว่างได้ */}
-                    <input type="number" step="0.01" className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="ยังไม่ระบุ" 
-                      value={formData.area_size} 
+                    <input type="number" step="0.01" className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="ยังไม่ระบุ"
+                      value={formData.area_size}
                       onChange={(e) => {
                         const area = e.target.value;
                         const total = (area && formData.price_per_rai) ? (parseFloat(area) * parseFloat(formData.price_per_rai)).toFixed(2) : '';
@@ -1267,7 +1267,7 @@ function App() {
                   <div>
                     <label className="block text-gray-700 mb-1 font-semibold">ราคาต่อไร่ (บาท)</label>
                     <input type="number" className="w-full border p-2 rounded-lg bg-white" placeholder="เช่น 600" 
-                      value={formData.price_per_rai} 
+                      value={formData.price_per_rai}
                       onChange={(e) => {
                         const price = e.target.value;
                         const total = (formData.area_size && price) ? (parseFloat(formData.area_size) * parseFloat(price)).toFixed(2) : '';
