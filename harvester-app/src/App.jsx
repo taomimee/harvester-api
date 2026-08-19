@@ -1198,7 +1198,7 @@ function App() {
           </div>
         )}
 
-        {/* 👇 จุดที่ 3.4: Popup ยืนยันปิดงานและจดค่าแรงลูกจ้าง 👇 */}
+        {/* 👇 จุดที่ 3.4: Popup ยืนยันปิดงานและจดค่าแรงลูกจ้าง (มีปุ่มกดเลือกชื่อด่วน) 👇 */}
         {finishingJob && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[300]">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
@@ -1228,12 +1228,46 @@ function App() {
                   </div>
                 </div>
 
+                {/* 🧑‍🌾 กล่องเลือก/พิมพ์ ชื่อลูกจ้าง */}
                 <div className="bg-orange-50 p-4 rounded-xl border border-orange-200">
-                  <label className="block text-orange-900 font-bold mb-2">🧑‍🌾 ใครลงแปลงนี้บ้าง? (พิมพ์ชื่อ)</label>
+                  <label className="block text-orange-900 font-bold mb-2">🧑‍🌾 ใครลงแปลงนี้บ้าง? (กดเลือกหรือพิมพ์)</label>
+                  
+                  {/* 👇 ปุ่มกดเลือกด่วน 👇 */}
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {/* 💡 อนาคตถ้ามีคนเพิ่ม ก็มาพิมพ์ชื่อใส่ในวงเล็บ [ ] นี้ได้เลยครับ */}
+                    {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
+                      const isSelected = wageData.workers.includes(name);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => {
+                            // ระบบจัดการเพิ่ม/ลดชื่ออัตโนมัติเมื่อกดปุ่ม
+                            let currentList = wageData.workers.split(',').map(n => n.trim()).filter(n => n);
+                            if (isSelected) {
+                              currentList = currentList.filter(n => n !== name); // ถ้ามีอยู่แล้วให้เอาออก
+                            } else {
+                              currentList.push(name); // ถ้ายังไม่มีให้เพิ่มเข้าไป
+                            }
+                            setWageData({...wageData, workers: currentList.join(', ')});
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-bold border shadow-sm transition ${
+                            isSelected 
+                              ? 'bg-orange-500 text-white border-orange-600' 
+                              : 'bg-white text-orange-700 border-orange-300 hover:bg-orange-100'
+                          }`}
+                        >
+                          {isSelected ? '✅' : '➕'} {name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {/* 👆 จบปุ่มกดเลือกด่วน 👆 */}
+
                   <input 
                     type="text" 
-                    placeholder="เช่น นาย เอ, นาย บี"
-                    className="w-full border border-orange-300 p-2 rounded-lg text-orange-900 placeholder-orange-300 focus:ring-2 focus:ring-orange-400 outline-none" 
+                    placeholder="พิมพ์ชื่อคนอื่นๆ เพิ่มเติมได้ที่นี่..."
+                    className="w-full border border-orange-300 p-2 rounded-lg text-orange-900 font-semibold placeholder-orange-300 focus:ring-2 focus:ring-orange-400 outline-none bg-white" 
                     value={wageData.workers} 
                     onChange={(e) => setWageData({...wageData, workers: e.target.value})} 
                   />
@@ -1266,7 +1300,7 @@ function App() {
             </div>
           </div>
         )}
-        {/* 👆 จบ Popup จดค่าแรง 👆 */}
+        {/* 👆 จบ Popup ปิดงานและจดค่าแรง 👆 */}
 
         {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง */}
         {showWageSummary && (
