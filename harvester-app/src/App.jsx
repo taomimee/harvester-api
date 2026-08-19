@@ -1303,61 +1303,114 @@ function App() {
         {/* 👆 จบ Popup ปิดงานและจดค่าแรง 👆 */}
 
         {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง */}
+        {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง */}
         {showWageSummary && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl">
-              <div className="flex justify-between items-center mb-4">
+            <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl">
+              <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-100">
                 <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                  <span>💰</span> รายการค่าแรง (รอเบิก)
+                  <span>💰</span> สมุดจดค่าแรง (รอเบิก)
                 </h2>
-                <button onClick={() => setShowWageSummary(false)} className="text-gray-500 hover:text-gray-700 font-bold text-xl">❌</button>
+                <button onClick={() => setShowWageSummary(false)} className="text-gray-400 hover:text-red-500 bg-gray-100 hover:bg-red-50 rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg transition">✕</button>
               </div>
               
               {/* รายการยอดค้างจ่าย */}
               <div className="overflow-y-auto flex-1 space-y-3 pr-1">
                 {wageTransactions.filter(t => t.status === 'UNPAID').length === 0 && (
-                  <div className="text-center text-gray-500 py-10">ไม่มีรายการค้างจ่ายครับ 🎉</div>
+                  <div className="text-center text-gray-500 py-10 flex flex-col items-center">
+                    <span className="text-4xl mb-2">🎉</span>
+                    <p className="font-bold">เคลียร์ยอดครบแล้ว!</p>
+                    <p className="text-sm">ไม่มีรายการค้างจ่าย</p>
+                  </div>
                 )}
                 
-                {wageTransactions.filter(t => t.status === 'UNPAID').map(tx => (
-                  <div key={tx.id} className="bg-orange-50 p-4 rounded-xl border border-orange-200 shadow-sm relative overflow-hidden">
-                     <div className="flex justify-between items-start mb-3 relative z-10">
-                       <div>
-                         <p className="font-bold text-orange-900 leading-tight">{tx.note}</p>
-                         <p className="text-xs text-gray-500 mt-1">
-                           📅 {new Date(tx.created_at).toLocaleDateString('th-TH')} | ⏰ {new Date(tx.created_at).toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'})}
-                         </p>
+                {wageTransactions.filter(t => t.status === 'UNPAID').map(tx => {
+                  // 💡 ทริค: แยกชื่อคนกับรายละเอียดพื้นที่ออกจากกัน เพื่อจัด UI ให้ดูง่ายขึ้น
+                  let workersStr = tx.note || '';
+                  let detailsStr = '';
+                  
+                  // ดึงข้อความในวงเล็บแยกออกมา
+                  if (workersStr.includes('คนทำ:') && workersStr.includes('(')) {
+                      const parts = workersStr.split('(');
+                      workersStr = parts[0].replace('คนทำ:', '').trim();
+                      detailsStr = parts[1].replace(')', '').trim();
+                  }
+                  
+                  // จับชื่อมาหั่นเป็น Array เพื่อเอาไปทำป้าย Tag
+                  const workerArray = workersStr.split(',').map(w => w.trim()).filter(w => w);
+
+                  return (
+                    <div key={tx.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative">
+                       <div className="flex justify-between items-start mb-3">
+                         
+                         <div className="flex-1 pr-2">
+                           {/* 🏷️ แสดงชื่อลูกจ้างเป็นป้าย Tag (ดูง่ายขึ้นมาก) */}
+                           <div className="flex flex-wrap gap-1.5 mb-2">
+                             {workerArray.length > 0 ? workerArray.map((w, idx) => (
+                               <span key={idx} className="bg-orange-100 text-orange-800 text-xs font-bold px-2 py-1 rounded-md border border-orange-200 shadow-sm">
+                                 🧑‍🌾 {w}
+                               </span>
+                             )) : (
+                               <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded-md border">ไม่ระบุชื่อ</span>
+                             )}
+                           </div>
+                           
+                           {/* 📐 รายละเอียดพื้นที่ */}
+                           <p className="text-sm text-gray-700 font-semibold mb-1">
+                             {detailsStr ? `📐 ${detailsStr}` : ''}
+                           </p>
+                           
+                           <p className="text-[11px] text-gray-400">
+                             📅 {new Date(tx.created_at).toLocaleDateString('th-TH')} | ⏰ {new Date(tx.created_at).toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'})}
+                           </p>
+                         </div>
+
+                         {/* 💰 จำนวนเงิน */}
+                         <div className="text-right shrink-0">
+                           <span className="block font-black text-green-600 text-2xl leading-none mb-1">
+                             {Number(tx.total_amount).toLocaleString()} <span className="text-sm">฿</span>
+                           </span>
+                           {/* 💡 แจ้งเตือนว่าบิลนี้หารกี่คน */}
+                           {workerArray.length > 1 && (
+                             <span className="inline-block text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full font-bold">
+                               หาร {workerArray.length} คน
+                             </span>
+                           )}
+                         </div>
+
                        </div>
-                       <span className="font-black text-green-700 text-lg whitespace-nowrap ml-2">
-                         {Number(tx.total_amount).toLocaleString()} ฿
-                       </span>
-                     </div>
-                     <button 
-                       onClick={async () => {
-                         if(!window.confirm('ยืนยันว่าจ่ายยอดนี้ให้ลูกจ้างแล้วใช่ไหม? (ข้อมูลจะถูกย้ายไปที่ประวัติการจ่าย)')) return;
-                         try {
-                           await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
-                             method: 'PATCH',
-                             headers: { 'Content-Type': 'application/json' },
-                             body: JSON.stringify({ status: 'PAID' })
-                           });
-                           fetchWages(); // โหลดข้อมูลใหม่
-                         } catch(e) { console.error(e); }
-                       }}
-                       className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 rounded-lg text-sm transition shadow-md relative z-10"
-                     >
-                       ✅ กดจ่ายเงินแล้ว
-                     </button>
-                  </div>
-                ))}
+
+                       {/* ปุ่มกดจ่ายเงิน (ปรับให้สีซอฟต์ลง เพื่อให้ตัวเลขยอดเงินเด่นขึ้น) */}
+                       <button 
+                         onClick={async () => {
+                           if(!window.confirm('ยืนยันว่าจ่ายยอดนี้ให้ลูกจ้างแล้วใช่ไหม?')) return;
+                           try {
+                             await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
+                               method: 'PATCH',
+                               headers: { 'Content-Type': 'application/json' },
+                               body: JSON.stringify({ status: 'PAID' })
+                             });
+                             fetchWages(); // โหลดข้อมูลใหม่
+                           } catch(e) { console.error(e); }
+                         }}
+                         className="w-full bg-gray-50 hover:bg-green-50 text-gray-600 hover:text-green-700 border border-gray-200 hover:border-green-300 font-bold py-2 rounded-lg text-sm transition flex items-center justify-center gap-2"
+                       >
+                         ✅ จ่ายเงินยอดนี้แล้ว
+                       </button>
+                    </div>
+                  )
+                })}
               </div>
               
-              {/* ยอดรวมทั้งหมด */}
+              {/* ยอดรวมทั้งหมด (ทำให้อลังการขึ้น) */}
               <div className="mt-4 pt-4 border-t border-gray-200 shrink-0">
-                <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 flex justify-between items-center shadow-inner">
-                  <span className="font-bold text-blue-900 text-sm">ยอดค้างจ่ายรวมทั้งหมด:</span>
-                  <span className="font-black text-red-600 text-2xl">
-                    {wageTransactions.filter(t => t.status === 'UNPAID').reduce((sum, tx) => sum + Number(tx.total_amount), 0).toLocaleString()} ฿
+                <div className="bg-gradient-to-r from-red-50 to-orange-50 p-4 rounded-xl border border-red-200 flex justify-between items-center shadow-inner">
+                  <div>
+                    <span className="block font-bold text-red-900 text-sm">ยอดรวมที่ต้องเตรียมจ่าย:</span>
+                    <span className="text-xs text-red-700">*รวมงานทั้งแบบเดี่ยวและคู่</span>
+                  </div>
+                  <span className="font-black text-red-600 text-3xl drop-shadow-sm">
+                    {wageTransactions.filter(t => t.status === 'UNPAID').reduce((sum, tx) => sum + Number(tx.total_amount), 0).toLocaleString()} <span className="text-lg">฿</span>
                   </span>
                 </div>
               </div>
