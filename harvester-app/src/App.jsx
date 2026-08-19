@@ -211,6 +211,7 @@ function App() {
   const [expandedId, setExpandedId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [activeTab, setActiveTab] = useState('active') 
+  const [financeSubTab, setFinanceSubTab] = useState('dashboard'); // 👈 เพิ่ม State สำหรับคุมเมนูย่อยในหน้าบัญชี
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
   // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
@@ -297,10 +298,10 @@ function App() {
     setIsFetchingDash(false);
   };
 
-  // ดึงข้อมูลใหม่ทุกครั้งที่เปลี่ยนเดือน/ปี หรือสลับมาแท็บ Dashboard
+  // ดึงข้อมูลใหม่ทุกครั้งที่เปลี่ยนเดือน/ปี หรือเข้าหน้าสรุปยอด
   useEffect(() => {
-    if (activeTab === 'dashboard') fetchDashboard();
-  }, [activeTab, dashMonth, dashYear]);
+    if (activeTab === 'finance' && financeSubTab === 'dashboard') fetchDashboard();
+  }, [activeTab, financeSubTab, dashMonth, dashYear]);
 
   useEffect(() => { 
     document.documentElement.lang = 'th'; 
@@ -532,6 +533,17 @@ function App() {
     return new Date(a.job_date) - new Date(b.job_date);
   });
   
+  const updatePaymentStatus = async (id, newStatus) => {
+    try {
+      const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/payment`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_status: newStatus })
+      });
+      if (response.ok) fetchJobs();
+    } catch (err) { console.error(err); }
+  }
+
   const historyJobs = jobs.filter(j => j.status === 'DONE').sort((a, b) => new Date(b.job_date) - new Date(a.job_date));
 
   const totalPages = Math.ceil(historyJobs.length / itemsPerPage);
@@ -620,21 +632,28 @@ function App() {
           </div>
         </div>
 
-        {/* 🔘 ปุ่มสลับแท็บ (Tab Bar) 5 เมนู */}
+        {/* 🔘 ปุ่มสลับแท็บหลัก (Main Tab Bar - จำกัด 5 เมนู) */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
-          <button onClick={() => setActiveTab('active')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
+          <button onClick={() => setActiveTab('active')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
           
-          <button onClick={() => setActiveTab('calendar')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
+          <button onClick={() => setActiveTab('calendar')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
           
-          {/* เมนูใหม่ที่เพิ่มเข้ามา */}
-          <button onClick={() => setActiveTab('gps')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัดรถ</button>
+          <button onClick={() => setActiveTab('gps')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัด</button>
           
-          <button onClick={() => setActiveTab('history')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'history' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📋 ประวัติ</button>
-          {/* ปุ่มใหม่ สำหรับ Dashboard */}
-          <button onClick={() => setActiveTab('dashboard')} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'dashboard' ? 'bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white shadow-md shadow-purple-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📊 สรุปยอด</button>
+          {/* 💡 รวบเมนู บัญชี, ลูกหนี้, ประวัติ ไว้ในแท็บนี้ */}
+          <button onClick={() => { setActiveTab('finance'); fetchDashboard(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'finance' ? 'bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white shadow-md shadow-purple-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>💰 บัญชี</button>
           
-          <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[70px] flex-1 py-2.5 rounded-xl font-bold text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
+          <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
         </div>
+
+        {/* 📑 เมนูย่อยสำหรับแท็บบัญชี (โชว์เฉพาะตอนกดแท็บ 💰 บัญชี) */}
+        {activeTab === 'finance' && (
+          <div className="flex bg-gray-200 rounded-xl p-1 mb-5 gap-1 shadow-inner">
+             <button onClick={() => { setFinanceSubTab('dashboard'); fetchDashboard(); }} className={`flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'dashboard' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📊 สรุปยอด</button>
+             <button onClick={() => setFinanceSubTab('debt')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'debt' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ลูกหนี้</button>
+             <button onClick={() => setFinanceSubTab('history')} className={`flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'history' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📋 ประวัติงาน</button>
+          </div>
+        )}
 
         {activeTab === 'calendar' && renderCalendar()}
 
@@ -1021,6 +1040,87 @@ function App() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* 💸 หน้าจอจัดการลูกหนี้ */}
+        {activeTab === 'debt' && (
+          <div className="space-y-4">
+            
+            {/* กล่องสรุปยอดหนี้รวม */}
+            <div className="bg-gradient-to-r from-red-50 to-orange-50 p-5 rounded-xl border border-red-200 shadow-sm flex justify-between items-center">
+               <div>
+                 <h2 className="text-lg font-black text-red-800">💸 บัญชีลูกหนี้</h2>
+                 <p className="text-xs text-red-600 font-semibold mt-1">คิวงานที่เสร็จแล้วแต่ค้างจ่าย</p>
+               </div>
+               <div className="text-right">
+                 <span className="block text-xs text-red-700 font-bold mb-1">ยอดหนี้รวมทั้งหมด</span>
+                 <span className="text-3xl font-black text-red-600">
+                   {jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID').reduce((sum, j) => sum + (Number(j.total_price) || 0), 0).toLocaleString()} <span className="text-sm">฿</span>
+                 </span>
+               </div>
+            </div>
+
+            {/* รายการลูกหนี้ */}
+            {jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID').length === 0 ? (
+              <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
+                 <span className="text-4xl mb-2 block">🎉</span>
+                 <p className="font-bold">ไม่มีลูกหนี้ค้างชำระ!</p>
+                 <p className="text-sm mt-1">เก็บเงินครบทุกงานแล้วครับ เถ้าแก่ยิ้มได้เลย</p>
+              </div>
+            ) : (
+              jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID')
+                .sort((a, b) => new Date(b.job_date) - new Date(a.job_date)) // เรียงจากเก่าไปใหม่
+                .map(job => (
+                  <div key={job.id} className="bg-white p-5 rounded-xl shadow-md border border-red-100 relative overflow-hidden">
+                     <div className="absolute top-0 left-0 w-1.5 h-full bg-red-400"></div>
+                     <div className="flex justify-between items-start mb-3 pl-2">
+                        <div>
+                          <h3 className="font-bold text-gray-900 text-lg">{job.customers?.name || 'ไม่ระบุชื่อ'}</h3>
+                          <p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="block font-black text-red-600 text-2xl leading-none">
+                            {Number(job.total_price).toLocaleString()} <span className="text-sm">฿</span>
+                          </span>
+                          <span className={`inline-block px-2 py-1 rounded text-[10px] font-bold mt-1.5 ${job.payment_status === 'DEPOSIT' ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                            {job.payment_status === 'DEPOSIT' ? '💳 มัดจำแล้ว (ค้างส่วนต่าง)' : '⏳ ยังไม่จ่ายเลย'}
+                          </span>
+                        </div>
+                     </div>
+                     
+                     <div className="pl-2 mb-4 text-sm text-gray-600 bg-gray-50 p-2 rounded-lg border border-gray-100">
+                       <p>📅 <strong>วันที่เกี่ยว:</strong> {new Date(job.job_date).toLocaleDateString('th-TH')}</p>
+                       <p>📐 <strong>รายละเอียด:</strong> {job.area_size || 0} ไร่ ({job.crop_type})</p>
+                       {job.address_note && <p className="text-xs text-gray-500 mt-1">📍 {job.address_note}</p>}
+                     </div>
+
+                     <div className="flex gap-2 pl-2">
+                        <button 
+                          onClick={() => {
+                            // 💬 จัดฟอร์แมตข้อความทวงหนี้แบบสุภาพ
+                            const text = `แจ้งยอดค้างชำระค่าเกี่ยวข้าวครับ 🌾\n\n👤 ชื่อลูกค้า: ${job.customers?.name}\n📅 วันที่เกี่ยว: ${new Date(job.job_date).toLocaleDateString('th-TH')}\n📐 พื้นที่: ${job.area_size || 0} ไร่ (${job.crop_type})\n\n💰 ยอดที่ต้องชำระ: ${Number(job.total_price).toLocaleString()} บาท\n\nรบกวนโอนชำระและส่งสลิปให้ด้วยนะครับ ขอบคุณครับ 🙏`;
+                            navigator.clipboard.writeText(text);
+                            alert('📋 คัดลอกข้อความทวงหนี้เรียบร้อยแล้ว!\nนำไปกด "วาง" (Paste) ในแชท LINE ลูกค้าได้เลยครับ');
+                          }}
+                          className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1 shadow-sm"
+                        >
+                          💬 ก๊อปปี้ข้อความทวง
+                        </button>
+                        <button 
+                          onClick={() => {
+                            if(window.confirm(`ยืนยันว่าลูกค้า [ ${job.customers?.name} ] จ่ายเงินยอด ${Number(job.total_price).toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?\n\n(ถ้ายืนยัน งานนี้จะหายไปจากหน้าลูกหนี้ทันที)`)) {
+                              updatePaymentStatus(job.id, 'PAID');
+                            }
+                          }}
+                          className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
+                        >
+                          ✅ รับเงินเรียบร้อย
+                        </button>
+                     </div>
+                  </div>
+              ))
+            )}
           </div>
         )}
 

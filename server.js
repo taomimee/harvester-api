@@ -393,6 +393,27 @@ app.get('/api/dashboard', async (req, res) => {
     }
 });
 
+// ==========================================
+// 💸 API สำหรับจัดการสถานะการเงิน (ทวงหนี้)
+// ==========================================
+app.patch('/api/jobs/:id/payment', async (req, res) => {
+    const { id } = req.params;
+    const { payment_status } = req.body;
+
+    try {
+        const { data, error } = await supabase
+            .from('jobs')
+            .update({ payment_status })
+            .eq('id', id)
+            .select();
+
+        if (error) throw error;
+        res.json({ message: 'อัปเดตสถานะการเงินสำเร็จ', data });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {
     console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
