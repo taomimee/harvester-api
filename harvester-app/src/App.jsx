@@ -1384,7 +1384,7 @@ function App() {
         )}
         {/* 👆 จบ Popup ปิดงานและจดค่าแรง 👆 */}
 
-        {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง */}
+        {/* 💰 Popup สมุจดค่าแรงลูกจ้าง */}
         {showWageSummary && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
             <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl">
