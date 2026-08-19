@@ -833,9 +833,13 @@ function App() {
           </div>
         )}
 
-        {/* แสดงคิวงานและประวัติ */}
-        {(activeTab === 'active' || activeTab === 'history') && (
-          <div className="text-center text-gray-500 mt-10"><p className="text-4xl mb-2">🍃</p><p>ยังไม่มีข้อมูลในหน้านี้ครับ</p></div>
+        {/* แสดงข้อความแจ้งเตือนเมื่อไม่มีข้อมูล */}
+        {((activeTab === 'active' && activeJobs.length === 0) || 
+          (activeTab === 'finance' && financeSubTab === 'history' && historyJobs.length === 0)) && (
+          <div className="text-center text-gray-500 mt-10">
+            <p className="text-4xl mb-2">🍃</p>
+            <p>ยังไม่มีข้อมูลในหน้านี้ครับ</p>
+          </div>
         )}
 
         {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
