@@ -296,6 +296,38 @@ app.delete('/api/customers/:id', async (req, res) => {
     res.json({ message: 'ลบลูกค้าสำเร็จ' });
 });
 
+// ==========================================
+// 💰 API สำหรับจัดการค่าแรงและระบบบัญชี
+// ==========================================
+
+// ดึงรายการค่าแรงที่ค้างจ่าย (UNPAID)
+app.get('/api/transactions/wages', async (req, res) => {
+    const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('type', 'OUT')
+        .eq('category', 'ค่าแรง')
+        .order('created_at', { ascending: false });
+        
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// อัปเดตสถานะการจ่ายเงินให้ลูกจ้าง (จาก UNPAID เป็น PAID)
+app.patch('/api/transactions/:id/status', async (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    const { data, error } = await supabase
+        .from('transactions')
+        .update({ status })
+        .eq('id', id)
+        .select();
+        
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
+});
+
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {
     console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);

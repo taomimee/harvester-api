@@ -216,6 +216,9 @@ function App() {
   // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
   const [finishingJob, setFinishingJob] = useState(null);
   const [wageData, setWageData] = useState({ area: '', wagePerRai: 60, workers: '' });
+  // 💰 State สำหรับหน้าสรุปค่าแรง
+  const [showWageSummary, setShowWageSummary] = useState(false);
+  const [wageTransactions, setWageTransactions] = useState([]);
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
@@ -268,6 +271,14 @@ function App() {
       const data = await res.json();
       setCustomersList(data);
     } catch (err) { console.error("ดึงข้อมูลลูกค้าไม่ได้:", err); }
+  };
+
+  const fetchWages = async () => {
+    try {
+      const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/wages');
+      const data = await res.json();
+      setWageTransactions(data);
+    } catch (err) { console.error("ดึงข้อมูลค่าแรงไม่ได้:", err); }
   };
 
   useEffect(() => { 
@@ -765,6 +776,16 @@ function App() {
                   <span className="font-bold text-orange-800">🚜 จัดการรายชื่อรถเกี่ยว</span>
                   <span className="text-orange-500 font-bold">▶</span>
                 </button>
+
+                {/* 👇 ปุ่มที่เพิ่มใหม่ สำหรับดูสรุปยอดค่าแรง 👇 */}
+                <button 
+                  onClick={() => { setShowWageSummary(true); fetchWages(); }} 
+                  className="w-full flex items-center justify-between p-4 bg-green-50 hover:bg-green-100 border border-green-200 rounded-xl transition shadow-sm"
+                >
+                  <span className="font-bold text-green-800">💰 สมุดจดค่าแรงลูกจ้าง</span>
+                  <span className="text-green-500 font-bold">▶</span>
+                </button>
+
               </div>
             </div>
           </div>
@@ -1246,6 +1267,69 @@ function App() {
           </div>
         )}
         {/* 👆 จบ Popup จดค่าแรง 👆 */}
+
+        {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง */}
+        {showWageSummary && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  <span>💰</span> รายการค่าแรง (รอเบิก)
+                </h2>
+                <button onClick={() => setShowWageSummary(false)} className="text-gray-500 hover:text-gray-700 font-bold text-xl">❌</button>
+              </div>
+              
+              {/* รายการยอดค้างจ่าย */}
+              <div className="overflow-y-auto flex-1 space-y-3 pr-1">
+                {wageTransactions.filter(t => t.status === 'UNPAID').length === 0 && (
+                  <div className="text-center text-gray-500 py-10">ไม่มีรายการค้างจ่ายครับ 🎉</div>
+                )}
+                
+                {wageTransactions.filter(t => t.status === 'UNPAID').map(tx => (
+                  <div key={tx.id} className="bg-orange-50 p-4 rounded-xl border border-orange-200 shadow-sm relative overflow-hidden">
+                     <div className="flex justify-between items-start mb-3 relative z-10">
+                       <div>
+                         <p className="font-bold text-orange-900 leading-tight">{tx.note}</p>
+                         <p className="text-xs text-gray-500 mt-1">
+                           📅 {new Date(tx.created_at).toLocaleDateString('th-TH')} | ⏰ {new Date(tx.created_at).toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'})}
+                         </p>
+                       </div>
+                       <span className="font-black text-green-700 text-lg whitespace-nowrap ml-2">
+                         {Number(tx.total_amount).toLocaleString()} ฿
+                       </span>
+                     </div>
+                     <button 
+                       onClick={async () => {
+                         if(!window.confirm('ยืนยันว่าจ่ายยอดนี้ให้ลูกจ้างแล้วใช่ไหม? (ข้อมูลจะถูกย้ายไปที่ประวัติการจ่าย)')) return;
+                         try {
+                           await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
+                             method: 'PATCH',
+                             headers: { 'Content-Type': 'application/json' },
+                             body: JSON.stringify({ status: 'PAID' })
+                           });
+                           fetchWages(); // โหลดข้อมูลใหม่
+                         } catch(e) { console.error(e); }
+                       }}
+                       className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 rounded-lg text-sm transition shadow-md relative z-10"
+                     >
+                       ✅ กดจ่ายเงินแล้ว
+                     </button>
+                  </div>
+                ))}
+              </div>
+              
+              {/* ยอดรวมทั้งหมด */}
+              <div className="mt-4 pt-4 border-t border-gray-200 shrink-0">
+                <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 flex justify-between items-center shadow-inner">
+                  <span className="font-bold text-blue-900 text-sm">ยอดค้างจ่ายรวมทั้งหมด:</span>
+                  <span className="font-black text-red-600 text-2xl">
+                    {wageTransactions.filter(t => t.status === 'UNPAID').reduce((sum, tx) => sum + Number(tx.total_amount), 0).toLocaleString()} ฿
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
