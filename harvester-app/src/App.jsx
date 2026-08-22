@@ -493,7 +493,10 @@ function App() {
         setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
         fetchJobs();
         fetchAllCustomers(); // ดึงลูกค้าใหม่เผื่อมีการสร้างใหม่
-      } else { alert('❌ บันทึกไม่สำเร็จ'); }
+      } else { 
+        const errorData = await response.json();
+        alert(`❌ บันทึกไม่สำเร็จ:\n${errorData.error}`); 
+      }
     } catch (err) { console.error(err); alert('❌ เกิดข้อผิดพลาดเซิร์ฟเวอร์'); }
   }
 

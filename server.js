@@ -58,7 +58,8 @@ app.post('/api/jobs', async (req, res) => {
         } else {
             const { data: newCustomer, error: custError } = await supabase
                 .from('customers')
-                .insert([{ name: customer_name, phone: phone || null }]) 
+                // 👇 แก้ไขตรงนี้: เปลี่ยนจาก null เป็น "" (ค่าว่าง) ป้องกัน Database Error 👇
+                .insert([{ name: customer_name, phone: phone || "" }]) 
                 .select()
                 .single();
             if (custError) throw custError;
@@ -147,7 +148,8 @@ app.put('/api/jobs/:id', async (req, res) => {
         if (findError) throw findError;
 
         if (jobInfo.customer_id) {
-            await supabase.from('customers').update({ name: customer_name, phone: phone || null }).eq('id', jobInfo.customer_id);
+            // 👇 แก้ไขตรงนี้: เปลี่ยน phone || null เป็น phone || "" 👇
+            await supabase.from('customers').update({ name: customer_name, phone: phone || "" }).eq('id', jobInfo.customer_id);
         }
 
         const { data: updatedJob, error: jobError } = await supabase
