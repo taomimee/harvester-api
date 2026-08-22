@@ -63,7 +63,7 @@ app.post('/api/jobs', async (req, res) => {
         } else {
             // 💡 3. ถ้าเป็นลูกค้าใหม่จริงๆ และไม่ยอมให้เบอร์โทรมา 
             // ระบบจะสร้างเบอร์จำลอง (เช่น ไม่ระบุ-16928374) เพื่อป้องกันฐานข้อมูลฟ้องว่าเบอร์ซ้ำกัน
-            const safePhone = (phone && phone.trim() !== "") ? phone : `ไม่ระบุ-${Date.now()}`;
+            const safePhone = (phone && phone.trim() !== "") ? phone : `ไม่มี-${Math.floor(Math.random() * 1000000)}`;
 
             const { data: newCustomer, error: custError } = await supabase
                 .from('customers')
