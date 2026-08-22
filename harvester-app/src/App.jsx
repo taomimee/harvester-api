@@ -492,8 +492,9 @@ function App() {
         setSelectedDayJobs(null);
         setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
         fetchJobs();
-        fetchAllCustomers(); // ดึงลูกค้าใหม่เผื่อมีการสร้างใหม่
+        fetchAllCustomers(); 
       } else { 
+        // 💡 เพิ่มตรงนี้ เพื่อให้มันโชว์ว่า Database ฟ้องว่าอะไร
         const errorData = await response.json();
         alert(`❌ บันทึกไม่สำเร็จ:\n${errorData.error}`); 
       }

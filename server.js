@@ -31,7 +31,6 @@ app.get('/api/jobs', async (req, res) => {
 
 // API สำหรับเพิ่มคิวงานใหม่
 app.post('/api/jobs', async (req, res) => {
-    // 💡 ปรับการรับค่า ให้ area_size และราคาเป็นตัวเลข (ถ้าว่างให้เป็น null หรือ 0)
     let { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
 
     // แปลงค่าว่างให้เป็น null หรือ 0 ป้องกัน Error ฐานข้อมูล
@@ -43,23 +42,32 @@ app.post('/api/jobs', async (req, res) => {
         let customerId;
         let existingCustomer = null;
 
+        // 💡 1. ลองค้นหาจาก "เบอร์โทร" ก่อน (ถ้าลูกค้ากรอกมา)
         if (phone && phone.trim() !== "") {
-            const { data } = await supabase
-                .from('customers')
-                .select('id')
-                .eq('phone', phone)
-                .single();
-            existingCustomer = data;
+            const { data } = await supabase.from('customers').select('id').eq('phone', phone);
+            if (data && data.length > 0) existingCustomer = data[0];
+        } 
+        // 💡 2. ถ้าไม่ได้กรอกเบอร์ ให้ระบบค้นหาจาก "ชื่อลูกค้า" แทน 
+        else if (customer_name && customer_name.trim() !== "") {
+            const { data } = await supabase.from('customers').select('id').eq('name', customer_name);
+            if (data && data.length > 0) existingCustomer = data[0];
         }
 
         if (existingCustomer) {
+            // เจอลูกค้าเก่า ใช้ ID เดิม
             customerId = existingCustomer.id;
-            await supabase.from('customers').update({ name: customer_name }).eq('id', customerId); 
+            // อัปเดตชื่อให้ล่าสุดเสมอ (และอัปเดตเบอร์เฉพาะถ้าเขากรอกมาใหม่)
+            const updateData = { name: customer_name };
+            if (phone && phone.trim() !== "") updateData.phone = phone;
+            await supabase.from('customers').update(updateData).eq('id', customerId); 
         } else {
+            // 💡 3. ถ้าเป็นลูกค้าใหม่จริงๆ และไม่ยอมให้เบอร์โทรมา 
+            // ระบบจะสร้างเบอร์จำลอง (เช่น ไม่ระบุ-16928374) เพื่อป้องกันฐานข้อมูลฟ้องว่าเบอร์ซ้ำกัน
+            const safePhone = (phone && phone.trim() !== "") ? phone : `ไม่ระบุ-${Date.now()}`;
+
             const { data: newCustomer, error: custError } = await supabase
                 .from('customers')
-                // 👇 แก้ไขตรงนี้: เปลี่ยนจาก null เป็น "" (ค่าว่าง) ป้องกัน Database Error 👇
-                .insert([{ name: customer_name, phone: phone || "" }]) 
+                .insert([{ name: customer_name, phone: safePhone }]) 
                 .select()
                 .single();
             if (custError) throw custError;
@@ -72,7 +80,7 @@ app.post('/api/jobs', async (req, res) => {
                 customer_id: customerId,
                 vehicle_id: vehicle_id || null,
                 crop_type,
-                area_size, // 👈 ส่งค่าที่เป็นตัวเลขหรือ null
+                area_size,
                 job_date,
                 latitude: latitude || 15.7001234,
                 longitude: longitude || 101.1001234,
@@ -88,6 +96,7 @@ app.post('/api/jobs', async (req, res) => {
         res.status(201).json({ message: 'บันทึกคิวงานสำเร็จ!', data: newJob });
 
     } catch (err) {
+        console.error('API Error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
