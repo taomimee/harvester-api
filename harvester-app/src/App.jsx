@@ -12,11 +12,6 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const [areaInfo, setAreaInfo] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
   const [searchQuery, setSearchQuery] = useState('');
   const [foundLocation, setFoundLocation] = useState(''); 
-  // 📸 State สำหรับระบบแกลเลอรี่รูปภาพ
-  const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
-  const [isUploadingImage, setIsUploadingImage] = useState(false); // สถานะตอนกำลังโหลดรูป
-  const [uploadCategory, setUploadCategory] = useState('BEFORE'); // หมวดหมู่เริ่มต้น
-  const [fullScreenImg, setFullScreenImg] = useState(null); // รูปที่จะขยายเต็มจอ
 
   const calculateThaiArea = (sqMeters) => {
     const rai = Math.floor(sqMeters / 1600);
@@ -219,6 +214,13 @@ function App() {
   const [financeSubTab, setFinanceSubTab] = useState('dashboard'); // 👈 เพิ่ม State สำหรับคุมเมนูย่อยในหน้าบัญชี
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
+
+  // 📸 State สำหรับระบบแกลเลอรี่รูปภาพ
+  const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
+  const [isUploadingImage, setIsUploadingImage] = useState(false); // สถานะตอนกำลังโหลดรูป
+  const [uploadCategory, setUploadCategory] = useState('BEFORE'); // หมวดหมู่เริ่มต้น
+  const [fullScreenImg, setFullScreenImg] = useState(null); // รูปที่จะขยายเต็มจอ
+
   // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
   const [finishingJob, setFinishingJob] = useState(null);
   const [wageData, setWageData] = useState({ area: '', wagePerRai: 60, workers: '' });
