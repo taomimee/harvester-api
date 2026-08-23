@@ -12,6 +12,11 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const [areaInfo, setAreaInfo] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
   const [searchQuery, setSearchQuery] = useState('');
   const [foundLocation, setFoundLocation] = useState(''); 
+  // 📸 State สำหรับระบบแกลเลอรี่รูปภาพ
+  const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
+  const [isUploadingImage, setIsUploadingImage] = useState(false); // สถานะตอนกำลังโหลดรูป
+  const [uploadCategory, setUploadCategory] = useState('BEFORE'); // หมวดหมู่เริ่มต้น
+  const [fullScreenImg, setFullScreenImg] = useState(null); // รูปที่จะขยายเต็มจอ
 
   const calculateThaiArea = (sqMeters) => {
     const rai = Math.floor(sqMeters / 1600);
@@ -375,6 +380,80 @@ function App() {
       .catch(err => console.error("ดึงข้อมูลงานไม่ได้:", err))
   }
 
+// 📸 3. ฟังก์ชันอัปโหลดรูปร่วมกับ "ระบบบีบอัดภาพ" (เซฟพื้นที่ Supabase)
+  const handleImageUpload = async (e, jobId) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setIsUploadingImage(true);
+
+    // 💡 ฟังก์ชันจำลองตัวเองเป็น "โรงงานบีบอัดรูป"
+    const compressImage = (sourceFile) => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(sourceFile);
+        reader.onload = (event) => {
+          const img = new Image();
+          img.src = event.target.result;
+          img.onload = () => {
+            // ตั้งค่าความละเอียดสูงสุด (1024px ก็ชัดพอสำหรับดูสลิปหรือรูปงานแล้ว)
+            const MAX_WIDTH = 1024; 
+            const MAX_HEIGHT = 1024;
+            let width = img.width;
+            let height = img.height;
+
+            // คำนวณสัดส่วนใหม่ไม่ให้รูปเบี้ยว
+            if (width > height) {
+              if (width > MAX_WIDTH) { height = Math.round(height * (MAX_WIDTH / width)); width = MAX_WIDTH; }
+            } else {
+              if (height > MAX_HEIGHT) { width = Math.round(width * (MAX_HEIGHT / height)); height = MAX_HEIGHT; }
+            }
+
+            // วาดรูปลงกระดาน (Canvas) เพื่อเตรียมย่อขนาด
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // 🌟 พระเอกอยู่ตรงนี้: แปลงรูปกลับเป็นไฟล์ JPEG และลดคุณภาพเหลือ 70% (0.7)
+            canvas.toBlob((blob) => {
+              // เปลี่ยนนามสกุลไฟล์เป็น .jpg ให้หมดเพื่อความชัวร์
+              const newFileName = sourceFile.name.replace(/\.[^/.]+$/, "") + "_compressed.jpg";
+              resolve(new File([blob], newFileName, { type: 'image/jpeg' }));
+            }, 'image/jpeg', 0.7);
+          };
+        };
+      });
+    };
+
+    try {
+      // 1. นำไฟล์ดิบเข้าโรงงานบีบอัดก่อน
+      const compressedFile = await compressImage(file);
+
+      // 2. เอาไฟล์ที่บีบอัดแล้ว ห่อเตรียมส่งขึ้นเซิร์ฟเวอร์
+      const formData = new FormData();
+      formData.append('image', compressedFile);
+      formData.append('category', uploadCategory);
+
+      // 3. ส่งไปให้ API หลังบ้าน
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${jobId}/attachments`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (res.ok) {
+         fetchAttachments(jobId); // โหลดรูปใหม่มาโชว์ทันที
+         e.target.value = null; // ล้างค่าปุ่ม เพื่อให้กดอัปรูปรอบต่อไปได้
+      } else { 
+         const err = await res.json();
+         alert(`❌ อัปโหลดไม่สำเร็จ: ${err.error}`); 
+      }
+    } catch (err) { 
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่'); 
+    }
+    setIsUploadingImage(false);
+  }
+
   const handleGetCurrentLocation = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -503,10 +582,18 @@ function App() {
 
   const updateStatus = async (id, newStatus, extraWageData = null) => {
     try {
+      // 💡 เตรียมข้อมูลส่งไปหลังบ้าน
+      const payload = { status: newStatus, wageData: extraWageData };
+      
+      // 💡 ถ้าสถานะคือ "เสร็จสิ้น" (DONE) ให้ดึงเวลาปัจจุบันของเครื่อง ส่งไปอัปเดตด้วย
+      if (newStatus === 'DONE') {
+        payload.job_date = new Date().toISOString(); 
+      }
+
       const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus, wageData: extraWageData }) // 👈 ส่งค่าแรงพ่วงไปด้วย
+        body: JSON.stringify(payload)
       });
       if (response.ok) fetchJobs();
     } catch (err) { console.error(err); }
@@ -934,15 +1021,69 @@ function App() {
                   
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
-                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-3 border border-yellow-200">
+                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-4 border border-yellow-200">
                         <span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>
                         {/* 💡 ดึงหมายเหตุของคิวงานมาโชว์ */}
                         {job.address_note || job.customers?.address_note || 'ไม่มีข้อมูล'}
                       </div>
-                      <div className="flex gap-2 pt-2 border-t">
-                        {job.status !== 'IN_PROGRESS' && <button onClick={() => updateStatus(job.id, 'IN_PROGRESS')} className="flex-1 bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">▶️ เริ่มเกี่ยว</button>}
+
+                      {/* 👇 📸 ส่วนของแกลเลอรี่รูปภาพ 👇 */}
+                      <div className="mb-4">
+                        <h3 className="font-bold text-gray-800 text-sm mb-3">📸 แกลเลอรี่ภาพ (รูปงาน & สลิป)</h3>
+
+                        {/* ฟอร์มอัปโหลดรูป */}
+                        <div className="flex gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200 items-center">
+                          <select
+                            className="text-xs p-2 rounded-md border border-gray-300 flex-1 outline-none font-bold text-gray-700 bg-white"
+                            value={uploadCategory}
+                            onChange={(e) => setUploadCategory(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <option value="BEFORE">🌾 ก่อนเกี่ยว</option>
+                            <option value="DURING">🚜 ระหว่างทำ</option>
+                            <option value="AFTER">✅ หลังเกี่ยวเสร็จ</option>
+                            <option value="SLIP">🧾 สลิปโอนเงิน</option>
+                            <option value="DAMAGE">⚠️ รถพัง/เสียหาย</option>
+                            <option value="OTHER">📁 อื่นๆ</option>
+                          </select>
+                          <label className={`bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2.5 px-4 rounded-md cursor-pointer transition shadow-sm ${isUploadingImage ? 'opacity-50 pointer-events-none' : ''}`} onClick={(e) => e.stopPropagation()}>
+                            {isUploadingImage ? '⏳ กำลังอัป...' : '➕ อัปโหลด'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleImageUpload(e, job.id)}
+                            />
+                          </label>
+                        </div>
+
+                        {/* ตะแกรงโชว์รูปภาพ */}
+                        {jobAttachments.length === 0 ? (
+                          <div className="text-center text-xs text-gray-400 py-6 bg-gray-50 rounded-lg border border-dashed border-gray-300 font-semibold">
+                            ยังไม่มีรูปภาพสำหรับงานนี้
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-2">
+                            {jobAttachments.map(img => (
+                              <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 shadow-sm cursor-pointer hover:opacity-90 transition group" onClick={(e) => { e.stopPropagation(); setFullScreenImg(img.image_url); }}>
+                                <img src={img.image_url} alt="job-attachment" className="w-full h-full object-cover" />
+                                <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[10px] text-center py-1 font-bold">
+                                  {img.category === 'BEFORE' ? 'ก่อนเกี่ยว' : img.category === 'DURING' ? 'ระหว่างทำ' : img.category === 'AFTER' ? 'เสร็จสิ้น' : img.category === 'SLIP' ? 'สลิป' : img.category === 'DAMAGE' ? 'รถพัง' : 'ทั่วไป'}
+                                </span>
+                                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                                  <span className="text-white text-xl">🔍</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {/* 👆 จบส่วนแกลเลอรี่ 👆 */}
+
+                      {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
+                      <div className="flex gap-2 pt-3 border-t border-gray-200">
+                        {job.status !== 'IN_PROGRESS' && <button onClick={() => updateStatus(job.id, 'IN_PROGRESS')} className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition">▶️ เริ่มเกี่ยว</button>}
                         
-                        {/* 👇 แก้ไขปุ่ม ✅ เสร็จสิ้น ตรงนี้ครับ 👇 */}
                         {job.status !== 'DONE' && (
                           <button 
                             onClick={(e) => { 
@@ -950,16 +1091,17 @@ function App() {
                               setWageData({ area: job.area_size || '', wagePerRai: 60, workers: '' }); 
                               setFinishingJob(job); 
                             }} 
-                            className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-2 rounded-lg font-bold shadow-sm transition"
+                            className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
                           >
                             ✅ เสร็จสิ้น
                           </button>
                         )}
-                        {/* 👆 จบการแก้ไขปุ่ม 👆 */}
 
-                        {job.status !== 'PENDING' && <button onClick={() => updateStatus(job.id, 'PENDING')} className="flex-1 bg-yellow-500 text-white text-xs py-2 rounded-lg font-bold">⏳ รอคิว</button>}
+                        {job.status !== 'PENDING' && <button onClick={() => updateStatus(job.id, 'PENDING')} className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition">⏳ รอคิว</button>}
                       </div>
-                      <div className="flex gap-2 pt-2 border-t mt-3">
+
+                      {/* กลุ่มปุ่มแก้ไขข้อมูล */}
+                      <div className="flex gap-2 pt-2 mt-2">
                         <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
                         <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
                       </div>
@@ -1604,6 +1746,24 @@ function App() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* 🔍 Popup แสดงรูปภาพแบบเต็มจอ */}
+        {fullScreenImg && (
+          <div className="fixed inset-0 bg-black/95 z-[500] flex items-center justify-center p-2 backdrop-blur-sm" onClick={() => setFullScreenImg(null)}>
+            <button 
+              className="absolute top-6 right-6 text-white text-2xl font-bold bg-white/20 hover:bg-red-500 w-10 h-10 flex items-center justify-center rounded-full transition shadow-lg"
+              onClick={() => setFullScreenImg(null)}
+            >
+              ✕
+            </button>
+            <img 
+              src={fullScreenImg} 
+              alt="full-screen" 
+              className="max-w-full max-h-[90vh] object-contain rounded-lg drop-shadow-2xl" 
+              onClick={(e) => e.stopPropagation()} 
+            />
           </div>
         )}
 

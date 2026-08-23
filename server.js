@@ -104,19 +104,24 @@ app.post('/api/jobs', async (req, res) => {
 // API สำหรับอัปเดตเปลี่ยนสถานะงาน (เช่น กดเสร็จสิ้น หรือ กำลังเกี่ยว)
 app.patch('/api/jobs/:id/status', async (req, res) => {
     const { id } = req.params;
-    const { status, wageData } = req.body; // 👈 รับข้อมูล wageData เพิ่มเข้ามา
+    const { status, wageData, job_date } = req.body;
 
     try {
-        // 1. อัปเดตสถานะงานให้เป็น DONE, IN_PROGRESS ฯลฯ
+        // 💡 สร้างกล่องเก็บข้อมูลที่จะอัปเดต
+        const updateData = { status };
+        if (job_date) {
+            updateData.job_date = job_date; // ถ้ามีวันที่ส่งมาด้วย ให้จับใส่กล่องไปอัปเดตพร้อมกัน
+        }
+
+        // 1. อัปเดตสถานะงาน (และเวลาถ้ามี) ให้เป็น DONE, IN_PROGRESS ฯลฯ
         const { data: updatedJob, error: jobError } = await supabase
             .from('jobs')
-            .update({ status })
+            .update(updateData) // 👈 เปลี่ยนมาใช้กล่องข้อมูลที่เราเตรียมไว้
             .eq('id', id)
             .select()
             .single();
 
         if (jobError) throw jobError;
-
         // 2. 💡 พิเศษ: ถ้าสถานะคือ DONE และมีการส่งค่าแรงมา ให้บันทึกลงตาราง Transactions
         if (status === 'DONE' && wageData) {
             const totalWage = (Number(wageData.area) * Number(wageData.wagePerRai)) || 0;
