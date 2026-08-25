@@ -382,6 +382,23 @@ function App() {
       .catch(err => console.error("ดึงข้อมูลงานไม่ได้:", err))
   }
 
+// 📸 1. ฟังก์ชันดึงรูปภาพของคิวงานนั้นๆ
+  const fetchAttachments = async (id) => {
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/attachments`);
+      const data = await res.json();
+      setJobAttachments(data || []);
+    } catch(e) { console.error(e); }
+  }
+
+  // 📸 2. สั่งให้ดึงรูปอัตโนมัติ เวลาเถ้าแก่กดขยายดูรายละเอียดงาน
+  useEffect(() => {
+    if (expandedId) {
+      setJobAttachments([]); // ล้างรูปเก่าออกก่อน
+      fetchAttachments(expandedId);
+    }
+  }, [expandedId]);
+
 // 📸 3. ฟังก์ชันอัปโหลดรูปร่วมกับ "ระบบบีบอัดภาพ" (เซฟพื้นที่ Supabase)
   const handleImageUpload = async (e, jobId) => {
     const file = e.target.files[0];
