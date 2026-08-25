@@ -451,7 +451,8 @@ function App() {
          alert(`❌ อัปโหลดไม่สำเร็จ: ${err.error}`); 
       }
     } catch (err) { 
-      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่'); 
+      console.error(err);
+      alert(`❌ ข้อผิดพลาด: ${err.message}\n(เซิร์ฟเวอร์อาจจะกำลังรีสตาร์ท หรือไฟล์ใหญ่เกินไป)`); 
     }
     setIsUploadingImage(false);
   }
@@ -584,12 +585,13 @@ function App() {
 
   const updateStatus = async (id, newStatus, extraWageData = null) => {
     try {
-      // 💡 เตรียมข้อมูลส่งไปหลังบ้าน
       const payload = { status: newStatus, wageData: extraWageData };
       
-      // 💡 ถ้าสถานะคือ "เสร็จสิ้น" (DONE) ให้ดึงเวลาปัจจุบันของเครื่อง ส่งไปอัปเดตด้วย
+      // 💡 แก้บั๊กเวลา: ปรับให้เป็นเวลาประเทศไทย (Local Time) ก่อนส่งไปหลังบ้าน
       if (newStatus === 'DONE') {
-        payload.job_date = new Date().toISOString(); 
+        const now = new Date();
+        now.setMinutes(now.getMinutes() - now.getTimezoneOffset()); // ชดเชยเวลาให้ตรงกับเขตเวลาของเครื่อง
+        payload.job_date = now.toISOString().slice(0, 16); // ตัดเอาแค่ ปี-เดือน-วันTชั่วโมง:นาที
       }
 
       const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/status`, {
