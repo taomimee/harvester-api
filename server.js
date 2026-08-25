@@ -420,15 +420,17 @@ app.get('/api/dashboard', async (req, res) => {
 
 // ==========================================
 // 💸 API สำหรับจัดการสถานะการเงิน (ทวงหนี้)
-// ==========================================
 app.patch('/api/jobs/:id/payment', async (req, res) => {
     const { id } = req.params;
-    const { payment_status } = req.body;
+    const { payment_status, paid_at } = req.body; // 👈 เพิ่มการรับเวลาที่กดจ่ายเงิน
 
     try {
+        const updateData = { payment_status };
+        if (paid_at) updateData.paid_at = paid_at; // 👈 บันทึกเวลาลงฐานข้อมูล
+
         const { data, error } = await supabase
             .from('jobs')
-            .update({ payment_status })
+            .update(updateData)
             .eq('id', id)
             .select();
 
