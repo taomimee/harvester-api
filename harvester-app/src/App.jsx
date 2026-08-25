@@ -1060,8 +1060,9 @@ function App() {
                             onChange={(e) => setUploadCategory(e.target.value)}
                             onClick={(e) => e.stopPropagation()}
                           >
+                            <option value="DURING">🚜 วัดแปลง </option>
                             <option value="BEFORE">🌾 ก่อนเกี่ยว</option>
-                            <option value="DURING">🚜 ระหว่างทำ</option>
+                            <option value="DURING">⏳ ระหว่างทำ</option>
                             <option value="AFTER">✅ หลังเกี่ยวเสร็จ</option>
                             <option value="SLIP">🧾 สลิปโอนเงิน</option>
                             <option value="DAMAGE">⚠️ รถพัง/เสียหาย</option>
