@@ -219,7 +219,9 @@ function App() {
   const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
   const [isUploadingImage, setIsUploadingImage] = useState(false); // สถานะตอนกำลังโหลดรูป
   const [uploadCategory, setUploadCategory] = useState('BEFORE'); // หมวดหมู่เริ่มต้น
-  const [fullScreenImg, setFullScreenImg] = useState(null); // รูปที่จะขยายเต็มจอ
+  const [fullScreenIndex, setFullScreenIndex] = useState(null); // เปลี่ยนมาเก็บลำดับรูปแทน
+  const [touchStartX, setTouchStartX] = useState(null); // เก็บพิกัดตอนเริ่มเอานิ้วแตะจอ
+  const [touchEndX, setTouchEndX] = useState(null); // เก็บพิกัดตอนลากนิ้ว
 
   // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
   const [finishingJob, setFinishingJob] = useState(null);
@@ -474,27 +476,50 @@ function App() {
     setIsUploadingImage(false);
   };
 
-  // 📸 4. ฟังก์ชันลบรูปภาพ (ลบทั้งในฐานข้อมูลและไฟล์ใน Supabase)
+  // 📸 4. ฟังก์ชันลบรูปภาพ (ปรับปรุงให้ดักจับ Error ได้แม่นขึ้น)
   const handleDeleteImage = async (e, imageId, imageUrl, jobId) => {
-    e.stopPropagation(); // ดักไว้ไม่ให้มันเด้งขยายรูปเต็มจอตอนที่เรากดปุ่มลบ
+    e.preventDefault();
+    e.stopPropagation(); 
     if (!window.confirm('⚠️ แน่ใจหรือไม่ว่าต้องการลบรูปนี้?')) return;
 
     try {
       const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/attachments/${imageId}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: imageUrl }) // ส่งลิงก์รูปไปให้หลังบ้านลบทิ้ง
+        body: JSON.stringify({ image_url: imageUrl }) 
       });
       
       if (res.ok) {
-        fetchAttachments(jobId); // โหลดรูปใหม่ (รูปที่ลบจะหายไป)
+        fetchAttachments(jobId); 
       } else {
-        alert('❌ ลบไม่สำเร็จ กรุณาลองใหม่');
+        const errData = await res.json();
+        alert(`❌ ลบไม่สำเร็จ: ${errData.error || 'ไม่พบ API บนเซิร์ฟเวอร์'}`);
       }
     } catch (err) {
       console.error(err);
-      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ');
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
+  };
+
+  // 👆 ----------------- จบฟังก์ชันลบรูป ----------------- 👆
+
+  // 👇 📸 ฟังก์ชันสำหรับระบบ ปัดจอ (Swipe) เลื่อนดูรูป 👇
+  const handleTouchStart = (e) => setTouchStartX(e.targetTouches[0].clientX);
+  const handleTouchMove = (e) => setTouchEndX(e.targetTouches[0].clientX);
+  const handleTouchEnd = () => {
+    if (!touchStartX || !touchEndX || jobAttachments.length <= 1) return;
+    const distance = touchStartX - touchEndX;
+    const swipeThreshold = 50; // ระยะการปัดขั้นต่ำ
+    
+    if (distance > swipeThreshold) {
+      // ปัดซ้าย -> เลื่อนไปรูปถัดไป
+      setFullScreenIndex((prev) => (prev + 1) % jobAttachments.length);
+    } else if (distance < -swipeThreshold) {
+      // ปัดขวา -> เลื่อนกลับรูปก่อนหน้า
+      setFullScreenIndex((prev) => (prev - 1 + jobAttachments.length) % jobAttachments.length);
+    }
+    setTouchStartX(null);
+    setTouchEndX(null);
   };
 
   const handleGetCurrentLocation = () => {
@@ -1109,13 +1134,30 @@ function App() {
                           </div>
                         ) : (
                           <div className="grid grid-cols-3 gap-2">
-                            {jobAttachments.map(img => (
-                              <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 shadow-sm cursor-pointer hover:opacity-90 transition group" onClick={(e) => { e.stopPropagation(); setFullScreenImg(img.image_url); }}>
+                            {/* 👇 สังเกตตรงวงเล็บ (img, idx) และ setFullScreenIndex(idx) นะครับ 👇 */}
+                            {jobAttachments.map((img, idx) => (
+                              <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 shadow-sm cursor-pointer hover:opacity-90 transition group" onClick={(e) => { e.stopPropagation(); setFullScreenIndex(idx); }}>
+                                
+                                {/* ปุ่มกากบาทสีแดงสำหรับลบรูป */}
+                                <button 
+                                  onClick={(e) => handleDeleteImage(e, img.id, img.image_url, job.id)}
+                                  className="absolute top-1 right-1 bg-red-500/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
+                                >
+                                  ✕
+                                </button>
+
                                 <img src={img.image_url} alt="job-attachment" className="w-full h-full object-cover" />
+                                
                                 <span className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[10px] text-center py-1 font-bold">
-                                  {img.category === 'BEFORE' ? 'ก่อนเกี่ยว' : img.category === 'DURING' ? 'ระหว่างทำ' : img.category === 'AFTER' ? 'เสร็จสิ้น' : img.category === 'SLIP' ? 'สลิป' : img.category === 'DAMAGE' ? 'รถพัง' : 'ทั่วไป'}
+                                  {img.category === 'MAP' ? 'รูปวัดแปลง' : 
+                                   img.category === 'BEFORE' ? 'ก่อนเกี่ยว' : 
+                                   img.category === 'DURING' ? 'ระหว่างทำ' : 
+                                   img.category === 'AFTER' ? 'เสร็จสิ้น' : 
+                                   img.category === 'SLIP' ? 'สลิป' : 
+                                   img.category === 'DAMAGE' ? 'รถพัง' : 'ทั่วไป'}
                                 </span>
-                                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                                
+                                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center pointer-events-none">
                                   <span className="text-white text-xl">🔍</span>
                                 </div>
                               </div>
@@ -1794,21 +1836,54 @@ function App() {
           </div>
         )}
 
-        {/* 🔍 Popup แสดงรูปภาพแบบเต็มจอ */}
-        {fullScreenImg && (
-          <div className="fixed inset-0 bg-black/95 z-[500] flex items-center justify-center p-2 backdrop-blur-sm" onClick={() => setFullScreenImg(null)}>
+        {/* 🔍 Popup แสดงรูปภาพแบบเต็มจอ (รองรับการปัด Swipe) */}
+        {fullScreenIndex !== null && jobAttachments[fullScreenIndex] && (
+          <div 
+            className="fixed inset-0 bg-black/95 z-[500] flex items-center justify-center p-2 backdrop-blur-sm select-none" 
+            onClick={() => setFullScreenIndex(null)}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          >
+            {/* ตัวเลขบอกลำดับรูป (เช่น 1 / 3) */}
+            <div className="absolute top-6 left-6 text-white font-bold bg-black/50 px-3 py-1 rounded-lg z-[510]">
+              {fullScreenIndex + 1} / {jobAttachments.length}
+            </div>
+
+            {/* ปุ่มปิด (X) */}
             <button 
-              className="absolute top-6 right-6 text-white text-2xl font-bold bg-white/20 hover:bg-red-500 w-10 h-10 flex items-center justify-center rounded-full transition shadow-lg"
-              onClick={() => setFullScreenImg(null)}
+              className="absolute top-6 right-6 text-white text-2xl font-bold bg-white/20 hover:bg-red-500 w-10 h-10 flex items-center justify-center rounded-full transition shadow-lg z-[510]"
+              onClick={(e) => { e.stopPropagation(); setFullScreenIndex(null); }}
             >
               ✕
             </button>
+            
+            {/* ปุ่มย้อนกลับ (โชว์เฉพาะถ้ามีหลายรูป) */}
+            {jobAttachments.length > 1 && (
+              <button 
+                className="absolute left-4 text-white text-3xl font-bold bg-black/40 hover:bg-black/70 w-12 h-12 flex items-center justify-center rounded-full transition shadow-lg z-[510]"
+                onClick={(e) => { e.stopPropagation(); setFullScreenIndex((prev) => (prev - 1 + jobAttachments.length) % jobAttachments.length); }}
+              >
+                ◀
+              </button>
+            )}
+
             <img 
-              src={fullScreenImg} 
+              src={jobAttachments[fullScreenIndex].image_url} 
               alt="full-screen" 
-              className="max-w-full max-h-[90vh] object-contain rounded-lg drop-shadow-2xl" 
+              className="max-w-full max-h-[90vh] object-contain rounded-lg drop-shadow-2xl transition-transform duration-300" 
               onClick={(e) => e.stopPropagation()} 
             />
+
+            {/* ปุ่มถัดไป (โชว์เฉพาะถ้ามีหลายรูป) */}
+            {jobAttachments.length > 1 && (
+              <button 
+                className="absolute right-4 text-white text-3xl font-bold bg-black/40 hover:bg-black/70 w-12 h-12 flex items-center justify-center rounded-full transition shadow-lg z-[510]"
+                onClick={(e) => { e.stopPropagation(); setFullScreenIndex((prev) => (prev + 1) % jobAttachments.length); }}
+              >
+                ▶
+              </button>
+            )}
           </div>
         )}
 
