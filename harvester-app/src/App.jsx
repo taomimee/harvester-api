@@ -1037,7 +1037,19 @@ function App() {
                     <div className="flex justify-between items-start mb-3">
                       <div>
                         <h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2>
-                        <p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p>
+                        <p className="text-sm text-gray-500">
+                          📞 {job.customers?.phone && job.customers.phone !== '-' && !job.customers.phone.startsWith('ไม่มี') ? (
+                            <a 
+                              href={`tel:${job.customers.phone}`} 
+                              onClick={(e) => e.stopPropagation()} 
+                              className="text-blue-600 font-bold hover:underline"
+                            >
+                              {job.customers.phone}
+                            </a>
+                          ) : (
+                            <span>{job.customers?.phone || '-'}</span>
+                          )}
+                        </p>
                       </div>
                       <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>
                         {statusObj.text}
@@ -1328,7 +1340,19 @@ function App() {
                      <div className="flex justify-between items-start mb-3 pl-2">
                         <div>
                           <h3 className="font-bold text-gray-900 text-lg">{job.customers?.name || 'ไม่ระบุชื่อ'}</h3>
-                          <p className="text-sm text-gray-500">📞 {job.customers?.phone || '-'}</p>
+                          <p className="text-sm text-gray-500">
+                            📞 {job.customers?.phone && job.customers.phone !== '-' && !job.customers.phone.startsWith('ไม่มี') ? (
+                              <a 
+                                href={`tel:${job.customers.phone}`} 
+                                onClick={(e) => e.stopPropagation()} 
+                                className="text-blue-600 font-bold hover:underline"
+                              >
+                                {job.customers.phone}
+                              </a>
+                            ) : (
+                              <span>{job.customers?.phone || '-'}</span>
+                            )}
+                          </p>
                         </div>
                         <div className="text-right">
                           <span className="block font-black text-red-600 text-2xl leading-none">
