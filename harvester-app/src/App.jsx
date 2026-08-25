@@ -1844,8 +1844,16 @@ function App() {
                              {detailsStr ? `📐 ${detailsStr}` : ''}
                            </p>
                            
-                           <p className="text-[11px] text-gray-400">
-                             📅 {new Date(tx.created_at).toLocaleDateString('th-TH')} | ⏰ {new Date(tx.created_at).toLocaleTimeString('th-TH', {hour: '2-digit', minute:'2-digit'})}
+                           <p className="text-[11px] text-gray-500 mt-1">
+                             {wageTab === 'PAID' ? (
+                               <span className="text-green-700 font-bold">
+                                 ✅ จ่ายเมื่อ: {tx.paid_at ? new Date(tx.paid_at).toLocaleString('th-TH') : new Date(tx.created_at).toLocaleString('th-TH')}
+                               </span>
+                             ) : (
+                               <span>
+                                 📅 ลงสมุด: {new Date(tx.created_at).toLocaleString('th-TH')}
+                               </span>
+                             )}
                            </p>
                          </div>
 
@@ -1861,16 +1869,21 @@ function App() {
                          </div>
                        </div>
 
-                       {/* แสดงปุ่มจ่าย หรือ โชว์ป้ายว่าจ่ายแล้ว */}
+                       {/* ปุ่มกดจ่ายเงิน */}
                        {wageTab === 'UNPAID' ? (
                          <button 
                            onClick={async () => {
                              if(!window.confirm('ยืนยันว่าจ่ายยอดนี้ให้ลูกจ้างแล้วใช่ไหม?')) return;
                              try {
+                               // 💡 ดึงเวลาปัจจุบัน (เวลาไทย) ตอนกดปุ่ม
+                               const now = new Date();
+                               now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                               const paid_at = now.toISOString();
+
                                await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
                                  method: 'PATCH',
                                  headers: { 'Content-Type': 'application/json' },
-                                 body: JSON.stringify({ status: 'PAID' })
+                                 body: JSON.stringify({ status: 'PAID', paid_at }) // 👈 ส่งเวลาแนบไปหลังบ้านด้วย
                                });
                                fetchWages(); 
                              } catch(e) { console.error(e); }

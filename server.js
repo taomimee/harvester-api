@@ -341,16 +341,23 @@ app.get('/api/transactions/wages', async (req, res) => {
 // อัปเดตสถานะการจ่ายเงินให้ลูกจ้าง (จาก UNPAID เป็น PAID)
 app.patch('/api/transactions/:id/status', async (req, res) => {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, paid_at } = req.body; // 👈 เพิ่มการรับค่า paid_at
     
-    const { data, error } = await supabase
-        .from('transactions')
-        .update({ status })
-        .eq('id', id)
-        .select();
-        
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
+    try {
+        const updateData = { status };
+        if (paid_at) updateData.paid_at = paid_at; // 👈 สั่งบันทึกเวลาลงตาราง
+
+        const { data, error } = await supabase
+            .from('transactions')
+            .update(updateData)
+            .eq('id', id)
+            .select();
+            
+        if (error) throw error;
+        res.json({ message: 'อัปเดตสถานะสำเร็จ', data });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ==========================================
