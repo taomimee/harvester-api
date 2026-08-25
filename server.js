@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() }); // ให้ระบบพักไฟล์ไว้ในแรมก่อนส่งขึ้น Supabase
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -433,6 +435,67 @@ app.patch('/api/jobs/:id/payment', async (req, res) => {
         if (error) throw error;
         res.json({ message: 'อัปเดตสถานะการเงินสำเร็จ', data });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ==========================================
+// 📸 API สำหรับอัปโหลดและดึงรูปภาพ (Attachments)
+// ==========================================
+
+// 1. ดึงรูปภาพของคิวงานนั้นๆ (GET)
+app.get('/api/jobs/:id/attachments', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('attachments')
+            .select('*')
+            .eq('job_id', id)
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 2. อัปโหลดรูปภาพใหม่ (POST)
+app.post('/api/jobs/:id/attachments', upload.single('image'), async (req, res) => {
+    const { id } = req.params;
+    const { category } = req.body; 
+    const file = req.file;
+
+    if (!file) return res.status(400).json({ error: 'กรุณาแนบไฟล์รูปภาพ' });
+
+    try {
+        // 1. ตั้งชื่อไฟล์ใหม่ไม่ให้ซ้ำกัน
+        const fileExt = file.originalname.split('.').pop() || 'jpg';
+        const fileName = `job_${id}_${Date.now()}.${fileExt}`;
+        
+        // 2. โยนไฟล์ขึ้นถัง Supabase Storage
+        const { data: storageData, error: storageError } = await supabase.storage
+            .from('job-attachments')
+            .upload(fileName, file.buffer, {
+                contentType: file.mimetype,
+            });
+        if (storageError) throw storageError;
+
+        // 3. ขอลิงก์ Public URL จาก Supabase 
+        const { data: publicUrlData } = supabase.storage
+            .from('job-attachments')
+            .getPublicUrl(fileName);
+        const imageUrl = publicUrlData.publicUrl;
+
+        // 4. บันทึกลิงก์ URL ลงในตาราง attachments
+        const { data: dbData, error: dbError } = await supabase
+            .from('attachments')
+            .insert([{ job_id: id, category: category || 'GENERAL', image_url: imageUrl }])
+            .select();
+        if (dbError) throw dbError;
+
+        res.status(201).json({ message: 'อัปโหลดสำเร็จ!', data: dbData });
+    } catch (err) {
+        console.error('Upload Error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
