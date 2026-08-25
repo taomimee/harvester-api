@@ -469,10 +469,33 @@ function App() {
       }
     } catch (err) { 
       console.error(err);
-      alert(`❌ ข้อผิดพลาด: ${err.message}\n(เซิร์ฟเวอร์อาจจะกำลังรีสตาร์ท หรือไฟล์ใหญ่เกินไป)`); 
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่'); 
     }
     setIsUploadingImage(false);
-  }
+  };
+
+  // 📸 4. ฟังก์ชันลบรูปภาพ (ลบทั้งในฐานข้อมูลและไฟล์ใน Supabase)
+  const handleDeleteImage = async (e, imageId, imageUrl, jobId) => {
+    e.stopPropagation(); // ดักไว้ไม่ให้มันเด้งขยายรูปเต็มจอตอนที่เรากดปุ่มลบ
+    if (!window.confirm('⚠️ แน่ใจหรือไม่ว่าต้องการลบรูปนี้?')) return;
+
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/attachments/${imageId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: imageUrl }) // ส่งลิงก์รูปไปให้หลังบ้านลบทิ้ง
+      });
+      
+      if (res.ok) {
+        fetchAttachments(jobId); // โหลดรูปใหม่ (รูปที่ลบจะหายไป)
+      } else {
+        alert('❌ ลบไม่สำเร็จ กรุณาลองใหม่');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    }
+  };
 
   const handleGetCurrentLocation = () => {
     if (navigator.geolocation) {
@@ -1060,9 +1083,9 @@ function App() {
                             onChange={(e) => setUploadCategory(e.target.value)}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <option value="DURING">🚜 วัดแปลง </option>
+                            <option value="MAP">🗺️ รูปวัดแปลง </option>
                             <option value="BEFORE">🌾 ก่อนเกี่ยว</option>
-                            <option value="DURING">⏳ ระหว่างทำ</option>
+                            <option value="DURING">🚜 ระหว่างทำ</option>
                             <option value="AFTER">✅ หลังเกี่ยวเสร็จ</option>
                             <option value="SLIP">🧾 สลิปโอนเงิน</option>
                             <option value="DAMAGE">⚠️ รถพัง/เสียหาย</option>

@@ -500,6 +500,29 @@ app.post('/api/jobs/:id/attachments', upload.single('image'), async (req, res) =
     }
 });
 
+// 3. ลบรูปภาพ (DELETE)
+app.delete('/api/jobs/attachments/:id', async (req, res) => {
+    const { id } = req.params;
+    const { image_url } = req.body; // รับ URL ของรูปมาเพื่อไปตามลบไฟล์ทิ้ง
+
+    try {
+        // 1. ลบไฟล์ออกจากถัง Storage (เพื่อไม่ให้เปลืองพื้นที่แพ็กเกจฟรี)
+        if (image_url) {
+            const fileName = image_url.split('/').pop(); 
+            await supabase.storage.from('job-attachments').remove([fileName]);
+        }
+
+        // 2. ลบประวัติออกจากฐานข้อมูล
+        const { error } = await supabase.from('attachments').delete().eq('id', id);
+        if (error) throw error;
+
+        res.json({ message: 'ลบรูปภาพสำเร็จเรียบร้อย' });
+    } catch (err) {
+        console.error('Delete Image Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {
     console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
