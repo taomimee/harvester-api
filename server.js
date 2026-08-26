@@ -545,3 +545,82 @@ server.on('error', (err) => {
 
 // ทริกยื้อชีวิตเซิร์ฟเวอร์ บังคับไม่ให้ปิดตัวเอง
 setInterval(() => {}, 1000 * 60 * 60);
+
+// ==========================================
+// 🛰️ TCP Server สำหรับรับข้อมูลจากกล่อง GPS ST-901
+// ==========================================
+const net = require('net');
+
+// ฟังก์ชันแปลงพิกัด (จาก DDMM.MMMM ของ GPS ให้เป็น Decimal ปกติของ Google Maps)
+function convertToDecimal(raw, dir) {
+    let degrees, minutes;
+    if (raw.indexOf('.') === 4) { 
+        degrees = parseInt(raw.substring(0, 2));
+        minutes = parseFloat(raw.substring(2));
+    } else { 
+        degrees = parseInt(raw.substring(0, 3));
+        minutes = parseFloat(raw.substring(3));
+    }
+    let decimal = degrees + (minutes / 60);
+    if (dir === 'S' || dir === 'W') decimal = decimal * -1;
+    return decimal.toFixed(7);
+}
+
+const GPS_PORT = 5000;
+
+const gpsServer = net.createServer((socket) => {
+    console.log('📡 มีการเชื่อมต่อเข้ามาที่ Port GPS!');
+
+    socket.on('data', async (data) => {
+        const rawData = data.toString().trim();
+        console.log(`[Raw Data]: ${rawData}`); // แสดงข้อมูลดิบที่ส่งมาจากกล่อง
+
+        // ตัวอย่างข้อมูล: *HQ,IMEI,V1,Time,A,Lat,N,Lon,E,Speed,Course,Date,VehicleStatus#
+        if (rawData.startsWith('*HQ') && rawData.endsWith('#')) {
+            const parts = rawData.replace('*HQ,', '').replace('#', '').split(',');
+            
+            // เช็คว่าเป็นข้อมูลพิกัด (V1)
+            if (parts.length >= 12 && parts[1] === 'V1') {
+                const status = parts[3];     // A = จับสัญญาณได้, V = จับไม่ได้
+                const latRaw = parts[4]; 
+                const latDir = parts[5]; 
+                const lonRaw = parts[6]; 
+                const lonDir = parts[7]; 
+
+                if (status === 'A') {
+                    const lat = convertToDecimal(latRaw, latDir);
+                    const lon = convertToDecimal(lonRaw, lonDir);
+                    
+                    console.log(`📍 ถอดรหัสพิกัดได้: Lat ${lat}, Lon ${lon}`);
+
+                    // โยนข้อมูลเข้า Database Supabase ของเรา
+                    try {
+                        // 💡 สมมติให้กล่องนี้เป็นของรถ "คันที่ 1" (vehicle_id: 1) ในช่วงทดสอบ
+                        const { error } = await supabase.from('gps_logs').insert([{
+                            vehicle_id: 1, 
+                            latitude: lat,
+                            longitude: lon,
+                            is_harvesting: true 
+                        }]);
+                        
+                        if (error) throw error;
+                        console.log(`✅ บันทึกพิกัดลงฐานข้อมูลสำเร็จ!`);
+                    } catch (err) {
+                        console.error('❌ บันทึกพิกัดไม่สำเร็จ:', err.message);
+                    }
+                } else {
+                    console.log('⚠️ กล่องยังจับสัญญาณดาวเทียมไม่ได้ (รอสักครู่)');
+                }
+            }
+        }
+    });
+
+    socket.on('error', (err) => {
+        console.error('⚠️ ข้อผิดพลาดจากระบบรับ GPS:', err.message);
+    });
+});
+
+gpsServer.listen(GPS_PORT, () => {
+    console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
+    console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
+});
