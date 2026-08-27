@@ -215,41 +215,6 @@ function TrackingMap({ pathData }) {
   return <div ref={mapRef} className="w-full h-full z-0" />;
 }
 
-// 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
-  useEffect(() => {
-    let intervalId;
-
-    // ระบบจะทำงานก็ต่อเมื่อ: เปิดหน้า GPS อยู่ + เลือกโหมดทำงานปัจจุบัน + เลือกรถแล้ว
-    if (activeTab === 'gps' && trackingMode === 'realtime' && trackingVehicleId) {
-      
-      intervalId = setInterval(async () => {
-        try {
-          // คำนวณวันที่ของวันนี้ส่งไปด้วย (แก้บั๊ก Timezone)
-          const now = new Date();
-          now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-          const dateToSend = now.toISOString().slice(0, 10);
-          
-          // แอบไปดึงข้อมูลเงียบๆ หลังบ้าน
-          const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
-          const data = await res.json();
-          
-          // อัปเดตเส้นทางบนแผนที่
-          if (data && data.length > 0) {
-            setGpsPathData(data);
-          }
-        } catch (e) {
-          console.error("ระบบดึง GPS อัตโนมัติขัดข้อง:", e);
-        }
-      }, 10000); // 10000 มิลลิวินาที = 10 วินาที
-      
-    }
-
-    // ล้างความจำ (หยุดนาฬิกาปลุก) เวลาสลับไปแท็บอื่น จะได้ไม่กินแบตมือถือ
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [activeTab, trackingMode, trackingVehicleId]);
-
 function App() {
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
@@ -315,6 +280,42 @@ function App() {
   const [gpsPathData, setGpsPathData] = useState([]);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
   // 👆 จบการวาง State 👆
+
+// 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
+  useEffect(() => {
+    let intervalId;
+
+    // ระบบจะทำงานก็ต่อเมื่อ: เปิดหน้า GPS อยู่ + เลือกโหมดทำงานปัจจุบัน + เลือกรถแล้ว
+    if (activeTab === 'gps' && trackingMode === 'realtime' && trackingVehicleId) {
+      
+      intervalId = setInterval(async () => {
+        try {
+          // คำนวณวันที่ของวันนี้ส่งไปด้วย (แก้บั๊ก Timezone)
+          const now = new Date();
+          now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+          const dateToSend = now.toISOString().slice(0, 10);
+          
+          // แอบไปดึงข้อมูลเงียบๆ หลังบ้าน
+          const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
+          const data = await res.json();
+          
+          // อัปเดตเส้นทางบนแผนที่
+          if (data && data.length > 0) {
+            setGpsPathData(data);
+          }
+        } catch (e) {
+          console.error("ระบบดึง GPS อัตโนมัติขัดข้อง:", e);
+        }
+      }, 10000); // 10000 มิลลิวินาที = 10 วินาที
+      
+    }
+
+    // ล้างความจำ (หยุดนาฬิกาปลุก) เวลาสลับไปแท็บอื่น จะได้ไม่กินแบตมือถือ
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTab, trackingMode, trackingVehicleId]);
+
 
   // ฟังก์ชันดึงรายชื่อรถ
   const fetchVehicles = async () => {
