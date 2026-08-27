@@ -1686,6 +1686,9 @@ function App() {
                 <h3 className="font-bold text-orange-800 mb-2 text-sm">➕ เพิ่มรถคันใหม่</h3>
                 <input type="text" placeholder="ชื่อรถ (เช่น คันที่ 1)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.name} onChange={e => setNewVehicle({...newVehicle, name: e.target.value})} />
                 <input type="text" placeholder="ชื่อคนขับ (ถ้ามี)" className="w-full border p-2 rounded-lg mb-2 text-sm" value={newVehicle.driver_name} onChange={e => setNewVehicle({...newVehicle, driver_name: e.target.value})} />
+                {/* 👇 เพิ่มช่องกรอกเลข IMEI ของกล่อง GPS 👇 */}
+                <input type="text" placeholder="เลข IMEI กล่อง GPS (เช่น 9210197099)" className="w-full border p-2 rounded-lg mb-2 text-sm font-mono" value={newVehicle.imei || ''} onChange={e => setNewVehicle({...newVehicle, imei: e.target.value})} />
+                
                 <button onClick={handleAddVehicle} className="w-full bg-orange-500 text-white font-bold py-2 rounded-lg text-sm">เพิ่มข้อมูล</button>
               </div>
             </div>
