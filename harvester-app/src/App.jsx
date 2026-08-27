@@ -216,18 +216,6 @@ function TrackingMap({ pathData }) {
   return <div ref={mapRef} className="w-full h-full z-0" />;
 }
 
-const [showExpenseForm, setShowExpenseForm] = useState(false);
-const [expenseData, setExpenseData] = useState({
-  category: 'น้ำมัน',
-  total_amount: '',
-  transaction_date: new Date().toISOString().slice(0, 16),
-  vehicle_id: '',
-  job_id: '',
-  spender_name: '',
-  note: '',
-  receipt: null
-});
-
 function App() {
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
