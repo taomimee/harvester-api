@@ -155,6 +155,7 @@ function TrackingMap({ pathData }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
+  const markerLayer = useRef(null); // 💡 1. เพิ่มตัวแปรสำหรับจำรูปรถเกี่ยว
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -171,21 +172,22 @@ function TrackingMap({ pathData }) {
       mapInstance.current.setView(center, zoom);
     }
 
-    // 💡 พระเอกอยู่ตรงนี้: สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่ครึ่งจอ)
+    // สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่ครึ่งจอ)
     setTimeout(() => {
       if (mapInstance.current) {
         mapInstance.current.invalidateSize();
       }
     }, 200);
 
-    // วาดเส้นทางใหม่
+    // 💡 2. ล้างเส้นทางเก่า และ "รถคันเก่า" ออกจากแผนที่ก่อนวาดใหม่
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
+    if (markerLayer.current) mapInstance.current.removeLayer(markerLayer.current);
     
     if (pathData.length > 0) {
-      // 💡 แยกสี: วิ่งบนถนน (สีเทา) / กำลังเกี่ยวข้าว (สีน้ำเงินเข้มแบบในรูป)
+      // วาดเส้นทางใหม่
       const latlngs = pathData.map(p => [p.latitude, p.longitude]);
       polylineLayer.current = L.polyline(latlngs, { 
-        color: '#2563EB', // สีน้ำเงิน
+        color: '#2563EB',
         weight: 4, 
         opacity: 0.8 
       }).addTo(mapInstance.current);
@@ -198,11 +200,11 @@ function TrackingMap({ pathData }) {
         iconSize: [0, 0]
       });
       
-      const marker = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
+      // 💡 3. เก็บรูปรถเกี่ยวที่เพิ่งวาดไว้ใน markerLayer เพื่อให้ลบได้ในรอบถัดไป
+      markerLayer.current = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
       
-      // 👇 เพิ่มอีเวนต์ให้กดที่ตัวรถแล้วเด้งไป Google Maps
-      marker.bindTooltip("คลิกเพื่อเปิด Google Maps นำทางไปหารถ", { direction: 'top', offset: [0, -10] });
-      marker.on('click', () => {
+      markerLayer.current.bindTooltip("คลิกเพื่อเปิด Google Maps นำทางไปหารถ", { direction: 'top', offset: [0, -10] });
+      markerLayer.current.on('click', () => {
         window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastPoint.latitude},${lastPoint.longitude}`, '_blank');
       });
     }
@@ -212,6 +214,41 @@ function TrackingMap({ pathData }) {
 
   return <div ref={mapRef} className="w-full h-full z-0" />;
 }
+
+// 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
+  useEffect(() => {
+    let intervalId;
+
+    // ระบบจะทำงานก็ต่อเมื่อ: เปิดหน้า GPS อยู่ + เลือกโหมดทำงานปัจจุบัน + เลือกรถแล้ว
+    if (activeTab === 'gps' && trackingMode === 'realtime' && trackingVehicleId) {
+      
+      intervalId = setInterval(async () => {
+        try {
+          // คำนวณวันที่ของวันนี้ส่งไปด้วย (แก้บั๊ก Timezone)
+          const now = new Date();
+          now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+          const dateToSend = now.toISOString().slice(0, 10);
+          
+          // แอบไปดึงข้อมูลเงียบๆ หลังบ้าน
+          const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
+          const data = await res.json();
+          
+          // อัปเดตเส้นทางบนแผนที่
+          if (data && data.length > 0) {
+            setGpsPathData(data);
+          }
+        } catch (e) {
+          console.error("ระบบดึง GPS อัตโนมัติขัดข้อง:", e);
+        }
+      }, 10000); // 10000 มิลลิวินาที = 10 วินาที
+      
+    }
+
+    // ล้างความจำ (หยุดนาฬิกาปลุก) เวลาสลับไปแท็บอื่น จะได้ไม่กินแบตมือถือ
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTab, trackingMode, trackingVehicleId]);
 
 function App() {
   const [jobs, setJobs] = useState([])
