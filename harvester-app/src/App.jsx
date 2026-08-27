@@ -881,10 +881,19 @@ function App() {
                   if(!trackingVehicleId) return alert('กรุณาเลือกรถเกี่ยวครับ');
                   setIsFetchingGps(true);
                   try {
-                    const queryDate = trackingMode === 'history' ? `?date=${trackingDate}` : '';
-                    const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}${queryDate}`);
+                    // 💡 แก้บั๊ก Timezone: ถ้าเป็น Realtime บังคับสร้างวันที่ปัจจุบัน (เวลาไทย) ส่งไปเลย
+                    let dateToSend = trackingDate;
+                    if (trackingMode === 'realtime') {
+                      const now = new Date();
+                      now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                      dateToSend = now.toISOString().slice(0, 10);
+                    }
+                    
+                    // บังคับแนบ ?date= ไปที่ API เสมอ เพื่อให้หลังบ้านใช้สูตร +07:00 ที่เราเขียนไว้
+                    const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
                     const data = await res.json();
-                    if(data.length === 0) alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ');
+                    
+                    if(data.length === 0) alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
                     setGpsPathData(data);
                   } catch(e) { console.error(e); }
                   setIsFetchingGps(false);
