@@ -171,6 +171,13 @@ function TrackingMap({ pathData }) {
       mapInstance.current.setView(center, zoom);
     }
 
+    // 💡 พระเอกอยู่ตรงนี้: สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่ครึ่งจอ)
+    setTimeout(() => {
+      if (mapInstance.current) {
+        mapInstance.current.invalidateSize();
+      }
+    }, 200);
+
     // วาดเส้นทางใหม่
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
     
