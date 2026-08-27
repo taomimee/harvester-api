@@ -249,9 +249,13 @@ app.delete('/api/vehicles/:id', async (req, res) => {
 // 🛰️ API สำหรับระบบ GPS Tracker (ดูปัจจุบันและประวัติ)
 // ==========================================
 
+// ใน server.js บรรทัดประมาณ 215
 app.get('/api/gps/:vehicle_id', async (req, res) => {
     const { vehicle_id } = req.params;
-    const { date } = req.query; // วันที่สำหรับดูประวัติย้อนหลัง (ถ้ามี)
+    const { date } = req.query; 
+    
+    // 💡 ถ้าไม่ได้ส่ง date มา (โหมดปัจจุบัน) มันจะดึงข้อมูลเฉพาะ "วันนี้" ตามเวลา UTC 
+    // ซึ่งบางทีเวลา UTC กับเวลาไทยมันเหลื่อมกัน ทำให้ข้อมูลของวันนี้ถูกมองว่าเป็น "เมื่อวาน" ครับ!
     
     // ถ้ามี date ให้ใช้วันนั้น ถ้าไม่มีให้ใช้วันนี้ปัจจุบัน
     const targetDate = date ? new Date(date) : new Date();
