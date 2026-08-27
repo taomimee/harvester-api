@@ -155,7 +155,7 @@ function TrackingMap({ pathData }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
-  const markerLayer = useRef(null); // 💡 1. เพิ่มตัวแปรสำหรับจำรูปรถเกี่ยว
+  const markerLayer = useRef(null); // 💡 ตัวแปรสำหรับจำรูปรถเกี่ยว (กันรูปซ้อนทับ)
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -172,27 +172,27 @@ function TrackingMap({ pathData }) {
       mapInstance.current.setView(center, zoom);
     }
 
-    // สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่ครึ่งจอ)
+    // 💡 สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่โผล่ครึ่งจอ)
     setTimeout(() => {
       if (mapInstance.current) {
         mapInstance.current.invalidateSize();
       }
     }, 200);
 
-    // 💡 2. ล้างเส้นทางเก่า และ "รถคันเก่า" ออกจากแผนที่ก่อนวาดใหม่
+    // 💡 ล้างเส้นทางเก่า และ "รถคันเก่า" ออกจากแผนที่ก่อนวาดรอบใหม่
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
     if (markerLayer.current) mapInstance.current.removeLayer(markerLayer.current);
     
     if (pathData.length > 0) {
-      // วาดเส้นทางใหม่
+      // 💡 วาดเส้นทางใหม่ (ลากทุกจุดต่อกันแบบ 100% เพื่อให้เห็นรอยเกี่ยวข้าวทุกซอกมุม)
       const latlngs = pathData.map(p => [p.latitude, p.longitude]);
       polylineLayer.current = L.polyline(latlngs, { 
-        color: '#2563EB',
+        color: '#2563EB', // สีน้ำเงิน
         weight: 4, 
         opacity: 0.8 
       }).addTo(mapInstance.current);
       
-      // ปักหมุดจุดล่าสุด (รูปรถเกี่ยว)
+      // ปักหมุดจุดล่าสุด (รูปรถเกี่ยว 🚜)
       const lastPoint = pathData[pathData.length - 1];
       const carIcon = L.divIcon({
         className: 'bg-transparent border-0',
@@ -200,9 +200,10 @@ function TrackingMap({ pathData }) {
         iconSize: [0, 0]
       });
       
-      // 💡 3. เก็บรูปรถเกี่ยวที่เพิ่งวาดไว้ใน markerLayer เพื่อให้ลบได้ในรอบถัดไป
+      // เก็บรูปรถเกี่ยวที่เพิ่งวาดไว้ใน markerLayer เพื่อให้ลบได้ทันในรอบถัดไป
       markerLayer.current = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
       
+      // เพิ่มอีเวนต์ให้กดที่ตัวรถแล้วเด้งไป Google Maps
       markerLayer.current.bindTooltip("คลิกเพื่อเปิด Google Maps นำทางไปหารถ", { direction: 'top', offset: [0, -10] });
       markerLayer.current.on('click', () => {
         window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastPoint.latitude},${lastPoint.longitude}`, '_blank');
