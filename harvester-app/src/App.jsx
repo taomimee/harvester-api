@@ -2103,7 +2103,7 @@ function App() {
                 <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-gray-700 font-semibold mb-1 text-sm">ผู้จ่ายเงิน</label>
-                      <input type="text" placeholder="เช่น เถ้าแก่, พี่ยันต์" className="w-full border p-2 rounded-lg text-sm" value={expenseData.spender_name} onChange={e => setExpenseData({...expenseData, spender_name: e.target.value})} />
+                      <input type="text" placeholder="ระบุผู้จ่าย" className="w-full border p-2 rounded-lg text-sm" value={expenseData.spender_name} onChange={e => setExpenseData({...expenseData, spender_name: e.target.value})} />
                     </div>
                     <div>
                       <label className="block text-gray-700 font-semibold mb-1 text-sm">หมายเหตุ</label>
