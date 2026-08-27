@@ -429,6 +429,58 @@ app.get('/api/dashboard', async (req, res) => {
     }
 });
 
+// 💰 API สำหรับบันทึกค่าใช้จ่ายทั่วไป (พร้อมแนบใบเสร็จ)
+app.post('/api/transactions/expenses', upload.single('receipt'), async (req, res) => {
+    let { category, total_amount, job_id, vehicle_id, spender_name, transaction_date, note } = req.body;
+    const file = req.file;
+    let receiptUrl = null;
+
+    try {
+        // 1. ถ้ามีการแนบรูปใบเสร็จมา ให้อัปโหลดขึ้น Supabase Storage ก่อน
+        if (file) {
+            const fileExt = file.originalname.split('.').pop() || 'jpg';
+            const fileName = `expense_${Date.now()}.${fileExt}`;
+            
+            const { data: storageData, error: storageError } = await supabase.storage
+                .from('receipts') // แนะนำให้สร้าง Bucket ใหม่ชื่อ receipts
+                .upload(fileName, file.buffer, { contentType: file.mimetype });
+            
+            if (storageError) throw storageError;
+
+            const { data: publicUrlData } = supabase.storage
+                .from('receipts')
+                .getPublicUrl(fileName);
+            receiptUrl = publicUrlData.publicUrl;
+        }
+
+        // 2. บันทึกข้อมูลลงตาราง transactions
+        const { data, error } = await supabase
+            .from('transactions')
+            .insert([{
+                type: 'OUT',
+                category: category || 'ทั่วไป',
+                total_amount: Number(total_amount),
+                paid_amount: Number(total_amount), // ถือว่าจ่ายไปแล้ว
+                status: 'PAID', // ไม่ต้องรอเบิก
+                job_id: job_id ? Number(job_id) : null,
+                vehicle_id: vehicle_id ? Number(vehicle_id) : null,
+                spender_name: spender_name,
+                note: note,
+                transaction_date: transaction_date || new Date().toISOString(),
+                receipt_url: receiptUrl
+            }])
+            .select();
+
+        if (error) throw error;
+        res.status(201).json({ message: 'บันทึกค่าใช้จ่ายสำเร็จ', data });
+
+    } catch (err) {
+        console.error('Expense API Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 // ==========================================
 // 💸 API สำหรับจัดการสถานะการเงิน (ทวงหนี้)
 app.patch('/api/jobs/:id/payment', async (req, res) => {

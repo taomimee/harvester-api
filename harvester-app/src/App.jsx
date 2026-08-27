@@ -216,6 +216,18 @@ function TrackingMap({ pathData }) {
   return <div ref={mapRef} className="w-full h-full z-0" />;
 }
 
+const [showExpenseForm, setShowExpenseForm] = useState(false);
+const [expenseData, setExpenseData] = useState({
+  category: 'น้ำมัน',
+  total_amount: '',
+  transaction_date: new Date().toISOString().slice(0, 16),
+  vehicle_id: '',
+  job_id: '',
+  spender_name: '',
+  note: '',
+  receipt: null
+});
+
 function App() {
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
@@ -281,6 +293,46 @@ function App() {
   const [gpsPathData, setGpsPathData] = useState([]);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
   // 👆 จบการวาง State 👆
+
+  // 👇 วางต่อท้าย isFetchingGps 👇
+  // 💸 State สำหรับจัดการค่าใช้จ่ายจิปาถะ
+  const [showExpenseForm, setShowExpenseForm] = useState(false);
+  const [expenseData, setExpenseData] = useState({
+    category: 'น้ำมัน', total_amount: '', transaction_date: new Date().toISOString().slice(0, 16),
+    vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null
+  });
+
+  // ฟังก์ชันสำหรับส่งข้อมูลค่าใช้จ่ายไปบันทึก
+  const handleExpenseSubmit = async (e) => {
+    e.preventDefault();
+    const formData = new FormData();
+    formData.append('category', expenseData.category);
+    formData.append('total_amount', expenseData.total_amount);
+    formData.append('transaction_date', expenseData.transaction_date);
+    if(expenseData.vehicle_id) formData.append('vehicle_id', expenseData.vehicle_id);
+    if(expenseData.spender_name) formData.append('spender_name', expenseData.spender_name);
+    if(expenseData.note) formData.append('note', expenseData.note);
+    if(expenseData.receipt) formData.append('receipt', expenseData.receipt);
+
+    try {
+      const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/expenses', {
+        method: 'POST',
+        body: formData // ส่งแบบ FormData เพราะมีไฟล์รูป
+      });
+      if (res.ok) {
+        alert('✅ บันทึกค่าใช้จ่ายเรียบร้อย!');
+        setShowExpenseForm(false);
+        setExpenseData({
+          category: 'น้ำมัน', total_amount: '', transaction_date: new Date().toISOString().slice(0, 16),
+          vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null
+        });
+        fetchDashboard(); // รีเฟรชหน้าสรุปยอด
+      } else {
+        alert('❌ บันทึกไม่สำเร็จ');
+      }
+    } catch (err) { console.error(err); }
+  };
+  // 👆 จบส่วนค่าใช้จ่าย 👆
 
 // 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
   useEffect(() => {
@@ -1307,6 +1359,15 @@ function App() {
           <div className="space-y-4">
             <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
               
+              {/* 👇 วางปุ่มตรงนี้ ด้านบนตัวกรองเดือน/ปี 👇 */}
+              <button 
+                onClick={() => setShowExpenseForm(true)}
+                className="w-full mb-5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold py-3 rounded-xl shadow-sm transition flex justify-center items-center gap-2"
+              >
+                ➕ บันทึกค่าใช้จ่าย (น้ำมัน, ซ่อม, อื่นๆ)
+              </button>
+              {/* 👆 จบปุ่มค่าใช้จ่าย 👆 */}
+
               {/* ตัวกรองเดือนและปี */}
               <div className="flex gap-2 mb-5">
                 <select 
@@ -2001,6 +2062,82 @@ function App() {
             </div>
           </div>
         )}
+
+        {/* 👇 วางตรงนี้ 👇 */}
+        {/* 💸 Popup ฟอร์มบันทึกค่าใช้จ่ายทั่วไป */}
+        {showExpenseForm && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl">
+              <h2 className="text-xl font-bold mb-4 text-red-700 flex items-center gap-2">
+                <span>💸</span> บันทึกค่าใช้จ่าย
+              </h2>
+              
+              <form onSubmit={handleExpenseSubmit} className="space-y-3">
+                {/* หมวดหมู่ */}
+                <div>
+                  <label className="block text-gray-700 font-semibold mb-1 text-sm">หมวดหมู่ค่าใช้จ่าย</label>
+                  <select 
+                    className="w-full border p-2 rounded-lg bg-gray-50"
+                    value={expenseData.category}
+                    onChange={(e) => setExpenseData({...expenseData, category: e.target.value})}
+                  >
+                    <option value="น้ำมัน">⛽ น้ำมัน</option>
+                    <option value="อะไหล่">🛞 อะไหล่</option>                    
+                    <option value="ซ่อมรถ">🔧 ซ่อมรถ</option>
+                    <option value="ค่าอาหาร">🍚 ค่าอาหาร</option>                    
+                    <option value="ค่าเดินทาง">🚗 ค่าเดินทาง</option>
+                    <option value="อื่นๆ">📦 อื่นๆ</option>
+                  </select>
+                </div>
+
+                {/* จำนวนเงิน & วันที่ */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1 text-sm">จำนวนเงิน (บาท)</label>
+                    <input type="number" required className="w-full border border-red-300 bg-red-50 text-red-900 font-bold p-2 rounded-lg" placeholder="0.00" value={expenseData.total_amount} onChange={e => setExpenseData({...expenseData, total_amount: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1 text-sm">วันที่จ่าย</label>
+                    <input type="datetime-local" className="w-full border p-2 rounded-lg text-sm" value={expenseData.transaction_date} onChange={e => setExpenseData({...expenseData, transaction_date: e.target.value})} />
+                  </div>
+                </div>
+
+                {/* ผูกกับรถ */}
+                <div>
+                  <label className="block text-gray-700 font-semibold mb-1 text-sm">ผูกกับรถ (ถ้ามี)</label>
+                  <select className="w-full border p-2 rounded-lg bg-white" value={expenseData.vehicle_id} onChange={e => setExpenseData({...expenseData, vehicle_id: e.target.value})}>
+                    <option value="">-- ไม่ระบุ --</option>
+                    {vehicles.map(v => <option key={v.id} value={v.id}>🚜 {v.name}</option>)}
+                  </select>
+                </div>
+
+                {/* ผู้จ่าย & หมายเหตุ */}
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-gray-700 font-semibold mb-1 text-sm">ผู้จ่ายเงิน</label>
+                      <input type="text" placeholder="เช่น เถ้าแก่, พี่ยันต์" className="w-full border p-2 rounded-lg text-sm" value={expenseData.spender_name} onChange={e => setExpenseData({...expenseData, spender_name: e.target.value})} />
+                    </div>
+                    <div>
+                      <label className="block text-gray-700 font-semibold mb-1 text-sm">หมายเหตุ</label>
+                      <input type="text" placeholder="รายละเอียดเพิ่มเติม" className="w-full border p-2 rounded-lg text-sm" value={expenseData.note} onChange={e => setExpenseData({...expenseData, note: e.target.value})} />
+                    </div>
+                </div>
+
+                {/* แนบรูปใบเสร็จ */}
+                <div className="mt-2 bg-gray-50 p-3 rounded-lg border border-dashed border-gray-300">
+                   <label className="block text-gray-700 font-semibold mb-1 text-sm">🧾 แนบรูปใบเสร็จ</label>
+                   <input type="file" accept="image/*" onChange={e => setExpenseData({...expenseData, receipt: e.target.files[0]})} className="text-sm w-full" />
+                </div>
+
+                <div className="flex gap-3 mt-5">
+                  <button type="button" onClick={() => setShowExpenseForm(false)} className="flex-1 bg-gray-200 text-gray-800 py-2.5 rounded-xl font-bold">ยกเลิก</button>
+                  <button type="submit" className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl font-bold shadow-lg transition">บันทึกรายจ่าย</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+        {/* 👆 จบ Popup บันทึกค่าใช้จ่าย 👆 */}
 
         {/* 🔍 Popup แสดงรูปภาพแบบเต็มจอ (รองรับการปัด Swipe) */}
         {fullScreenIndex !== null && jobAttachments[fullScreenIndex] && (
