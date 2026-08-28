@@ -224,6 +224,7 @@ function App() {
   const [financeSubTab, setFinanceSubTab] = useState('dashboard'); // 👈 เพิ่ม State สำหรับคุมเมนูย่อยในหน้าบัญชี
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
+  const [weatherData, setWeatherData] = useState(null);
 
   // 📸 State สำหรับระบบแกลเลอรี่รูปภาพ
   const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
@@ -260,79 +261,6 @@ function App() {
     }
   }, []);
 
-  // 👇 ระบบดึงพิกัดและแปลสภาพอากาศเป็นข้อความ 👇
-  const [weatherData, setWeatherData] = useState(null);
-
-  const getThaiWeatherText = (code) => {
-    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "อาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
-    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
-    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุเข้า!", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
-    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-  };
-
-  useEffect(() => {
-    if (activeTab !== 'home') return;
-    
-    // คำนวณพิกัดอัจฉริยะแบบใหม่
-    let lat = 15.7012; let lon = 101.1012; // ค่าสำรอง ต.กันจุ
-    if (radarOverride) { 
-      lat = Number(radarOverride.lat); lon = Number(radarOverride.lon); 
-    } else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
-      const act = jobs.find(j => j.status === 'IN_PROGRESS');
-      lat = Number(act.latitude); lon = Number(act.longitude);
-    } else if (gpsPathData.length > 0) {
-      lat = Number(gpsPathData[gpsPathData.length - 1].latitude); 
-      lon = Number(gpsPathData[gpsPathData.length - 1].longitude);
-    } else if (autoUserLocation) {
-      lat = Number(autoUserLocation.lat); lon = Number(autoUserLocation.lon); 
-    }
-
-    // 🛡️ เกราะป้องกัน! ถ้าพิกัดที่ดึงมาพัง เป็นค่าว่าง หรือไม่ได้กรอก ให้กลับไปใช้ ต.กันจุ
-    if (isNaN(lat) || isNaN(lon) || lat === 0) {
-      lat = 15.7012; lon = 101.1012;
-    }
-
-    // ดึงข้อมูลฟรีจาก Open-Meteo
-    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
-      .then(res => res.json())
-      .then(data => setWeatherData(data))
-      .catch(err => console.error(err));
-      
-  }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
-  // 👆 จบระบบสภาพอากาศ 👆
-
-  // ==========================================
-  // 👇 สมองคำนวณหน้าแรก (Dashboard)
-  // ==========================================
-  const todayStr = new Date().toDateString();
-  // 1. งานวันนี้
-  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
-  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
-  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-  
-  // 2. ลูกหนี้ทั้งหมด
-  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
-  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-  
-  // 3. สถานะรถปัจจุบัน (มีคันเดียว)
-  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
-  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
-  
-  // สร้างชื่อสถานที่ให้กล่องสภาพอากาศแบบใหม่
-  let radarLocationName = "(รอพิกัด...)";
-  if (radarOverride) {
-    radarLocationName = "ตำแหน่งที่กดเลือก 🎯";
-  } else if (activeJobNow && activeJobNow.latitude) {
-    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
-  } else if (gpsPathData.length > 0) {
-    radarLocationName = "พิกัดรถล่าสุด";
-  } else if (autoUserLocation) {
-    radarLocationName = "ตำแหน่งปัจจุบันของคุณ 📍";
-  }
-  // 👆 จบสมองคำนวณหน้าแรก 👆
-  // ==========================================
-  
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
@@ -491,6 +419,70 @@ function App() {
     fetchVehicles(); 
     fetchAllCustomers(); // ดึงลูกค้ามาเตรียมไว้
   }, []);
+
+  // ==========================================
+  // 👇 วาง "ระบบสภาพอากาศ + สมองคำนวณหน้าแรก" ตรงนี้ 👇
+  // ==========================================
+
+  const getThaiWeatherText = (code) => {
+    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "อาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุเข้า!", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'home') return;
+    
+    let lat = 15.7012; let lon = 101.1012; 
+    if (radarOverride) { 
+      lat = Number(radarOverride.lat); lon = Number(radarOverride.lon); 
+    } else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
+      const act = jobs.find(j => j.status === 'IN_PROGRESS');
+      lat = Number(act.latitude); lon = Number(act.longitude);
+    } else if (gpsPathData.length > 0) {
+      lat = Number(gpsPathData[gpsPathData.length - 1].latitude); 
+      lon = Number(gpsPathData[gpsPathData.length - 1].longitude);
+    } else if (autoUserLocation) {
+      lat = Number(autoUserLocation.lat); lon = Number(autoUserLocation.lon); 
+    }
+
+    if (isNaN(lat) || isNaN(lon) || lat === 0) {
+      lat = 15.7012; lon = 101.1012;
+    }
+
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
+      .then(res => res.json())
+      .then(data => setWeatherData(data))
+      .catch(err => console.error(err));
+      
+  }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
+
+  const todayStr = new Date().toDateString();
+  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
+  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
+  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
+  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  
+  let radarLocationName = "(รอพิกัด...)";
+  if (radarOverride) {
+    radarLocationName = "ตำแหน่งที่กดเลือก 🎯";
+  } else if (activeJobNow && activeJobNow.latitude) {
+    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
+  } else if (gpsPathData.length > 0) {
+    radarLocationName = "พิกัดรถล่าสุด";
+  } else if (autoUserLocation) {
+    radarLocationName = "ตำแหน่งปัจจุบันของคุณ 📍";
+  }
+  // ==========================================
+  // 👆 จบสมองคำนวณทั้งหมด 👆
+  // ==========================================
 
   // (ฟังก์ชัน handle ต่างๆ เช่น handleAddVehicle...)
 
