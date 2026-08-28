@@ -877,6 +877,20 @@ function App() {
   // 3. สถานะรถปัจจุบัน (มีคันเดียว)
   const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
   const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  // 4. พิกัดเรดาร์ฝนอัจฉริยะ (ยึดตามหน้างานจริง)
+  let radarLat = currentCoords[0];
+  let radarLon = currentCoords[1];
+  let radarLocationName = "ตำแหน่งของคุณ";
+
+  if (activeJobNow && activeJobNow.latitude) {
+    radarLat = activeJobNow.latitude;
+    radarLon = activeJobNow.longitude;
+    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
+  } else if (gpsPathData.length > 0) {
+    radarLat = gpsPathData[gpsPathData.length - 1].latitude;
+    radarLon = gpsPathData[gpsPathData.length - 1].longitude;
+    radarLocationName = "พิกัดรถล่าสุด";
+  }
   // 👆 จบสมองคำนวณหน้าแรก 👆
 
   return (
@@ -1044,13 +1058,36 @@ function App() {
               <h3 className="font-bold text-gray-800 text-sm mb-3">🔔 แจ้งเตือน</h3>
               <div className="space-y-2">
                 
-                {/* พยากรณ์อากาศแบบจำลอง */}
-                <div className="flex items-center gap-3 bg-blue-50/50 p-2.5 rounded-lg border border-blue-100">
-                  <div className="text-xl">🌤️</div>
-                  <p className="text-xs font-semibold text-blue-800">
-                    สภาพอากาศพื้นที่ ต.กันจุ วันนี้แดดจัด <br/>
-                    <span className="text-[10px] text-blue-600">โอกาสเกิดฝนตก: ต่ำมาก (10%)</span>
-                  </p>
+                {/* 📡 เรดาร์ฝนสด (Windy อัจฉริยะ) */}
+                <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-200 shadow-inner">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="text-xl animate-pulse">📡</div>
+                      <div>
+                        <p className="text-xs font-bold text-blue-900">เรดาร์ฝน ({radarLocationName})</p>
+                        <p className="text-[10px] text-blue-600 font-semibold">แสดงกลุ่มเมฆและฝนแบบ Real-time</p>
+                      </div>
+                    </div>
+                    {/* ปุ่มดึงพิกัดมือถือ */}
+                    <button 
+                      onClick={handleGetCurrentLocation}
+                      className="bg-white hover:bg-blue-100 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm transition"
+                    >
+                      🎯 ดึงพิกัดฉัน
+                    </button>
+                  </div>
+                  
+                  <div className="rounded-lg overflow-hidden border border-blue-300 aspect-video relative bg-gray-100 shadow-sm pointer-events-auto">
+                    {/* เพิ่ม &play=true และ allow="autoplay" เพื่อพยายามบังคับให้เล่นอัตโนมัติ */}
+                    <iframe 
+                      width="100%" 
+                      height="100%" 
+                      src={`https://embed.windy.com/embed.html?type=map&location=coordinates&metricRain=mm&metricTemp=°C&metricWind=km/h&zoom=11&overlay=rain&product=ecmwf&level=surface&lat=${radarLat}&lon=${radarLon}&message=true&play=true`} 
+                      title="เรดาร์ฝน Windy"
+                      style={{ border: 'none' }}
+                      allow="autoplay"
+                    ></iframe>
+                  </div>
                 </div>
 
                 {debtorsList.length > 0 && (
