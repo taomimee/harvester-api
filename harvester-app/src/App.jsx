@@ -246,6 +246,7 @@ function App() {
   const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
   const [dashYear, setDashYear] = useState(new Date().getFullYear());
   const [isFetchingDash, setIsFetchingDash] = useState(false);
+  const [radarOverride, setRadarOverride] = useState(null);
   // 👇 ระบบดึงพิกัดและแปลสภาพอากาศเป็นข้อความ 👇
   const [weatherData, setWeatherData] = useState(null);
 
@@ -910,6 +911,17 @@ function App() {
   const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
   const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
   
+  // 👇 เพิ่มโค้ดชุดนี้ลงไป เพื่อสร้างชื่อสถานที่ให้กล่องสภาพอากาศ 👇
+  let radarLocationName = "ต.กันจุ (เริ่มต้น)";
+  if (radarOverride) {
+    radarLocationName = "ตำแหน่งของฉัน 🎯";
+  } else if (activeJobNow && activeJobNow.latitude) {
+    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
+  } else if (gpsPathData.length > 0) {
+    radarLocationName = "พิกัดรถล่าสุด";
+  }
+  // 👆 จบสมองคำนวณหน้าแรก 👆
+
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
