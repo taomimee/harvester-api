@@ -246,6 +246,7 @@ function App() {
   const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
   const [dashYear, setDashYear] = useState(new Date().getFullYear());
   const [isFetchingDash, setIsFetchingDash] = useState(false);
+  const [radarOverride, setRadarOverride] = useState(null); // จำพิกัดมือถือที่กดเอง
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
@@ -877,12 +878,17 @@ function App() {
   // 3. สถานะรถปัจจุบัน (มีคันเดียว)
   const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
   const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  
   // 4. พิกัดเรดาร์ฝนอัจฉริยะ (ยึดตามหน้างานจริง)
-  let radarLat = currentCoords[0];
-  let radarLon = currentCoords[1];
-  let radarLocationName = "ตำแหน่งของคุณ";
+  let radarLat = 15.7012; // พิกัด ต.กันจุ เริ่มต้น
+  let radarLon = 101.1012;
+  let radarLocationName = "ต.กันจุ (เริ่มต้น)";
 
-  if (activeJobNow && activeJobNow.latitude) {
+  if (radarOverride) {
+    radarLat = radarOverride.lat;
+    radarLon = radarOverride.lon;
+    radarLocationName = "ตำแหน่งของฉัน 🎯";
+  } else if (activeJobNow && activeJobNow.latitude) {
     radarLat = activeJobNow.latitude;
     radarLon = activeJobNow.longitude;
     radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
@@ -891,7 +897,6 @@ function App() {
     radarLon = gpsPathData[gpsPathData.length - 1].longitude;
     radarLocationName = "พิกัดรถล่าสุด";
   }
-  // 👆 จบสมองคำนวณหน้าแรก 👆
 
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
@@ -1068,17 +1073,33 @@ function App() {
                         <p className="text-[10px] text-blue-600 font-semibold">แสดงกลุ่มเมฆและฝนแบบ Real-time</p>
                       </div>
                     </div>
-                    {/* ปุ่มดึงพิกัดมือถือ */}
-                    <button 
-                      onClick={handleGetCurrentLocation}
-                      className="bg-white hover:bg-blue-100 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm transition"
-                    >
-                      🎯 ดึงพิกัดฉัน
-                    </button>
+                    {/* ปุ่มดึงพิกัดมือถือ (สลับโหมดได้) */}
+                    {radarOverride ? (
+                      <button 
+                        onClick={() => setRadarOverride(null)}
+                        className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm transition flex items-center gap-1"
+                      >
+                        ❌ กลับไปดูรถ
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => {
+                          if (navigator.geolocation) {
+                            navigator.geolocation.getCurrentPosition(
+                              (pos) => setRadarOverride({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+                              (err) => alert('❌ ไม่สามารถดึงพิกัดได้: ' + err.message)
+                            );
+                          } else { alert('❌ มือถือของคุณไม่รองรับการดึงพิกัด'); }
+                        }}
+                        className="bg-white hover:bg-blue-100 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm transition flex items-center gap-1"
+                      >
+                        🎯 ดึงพิกัดฉัน
+                      </button>
+                    )}
                   </div>
                   
+                  {/* 👇 ส่วนแผนที่ที่หายไป 👇 */}
                   <div className="rounded-lg overflow-hidden border border-blue-300 aspect-video relative bg-gray-100 shadow-sm pointer-events-auto">
-                    {/* เพิ่ม &play=true และ allow="autoplay" เพื่อพยายามบังคับให้เล่นอัตโนมัติ */}
                     <iframe 
                       width="100%" 
                       height="100%" 
@@ -1088,12 +1109,14 @@ function App() {
                       allow="autoplay"
                     ></iframe>
                   </div>
+                  
                 </div>
 
+                {/* แจ้งเตือนลูกหนี้ (ถ้ามี) */}
                 {debtorsList.length > 0 && (
                   <div 
                     onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                    className="flex items-center gap-3 bg-red-50 p-2.5 rounded-lg border border-red-200 cursor-pointer hover:bg-red-100 transition"
+                    className="flex items-center gap-3 bg-red-50 p-2.5 rounded-lg border border-red-200 cursor-pointer hover:bg-red-100 transition mt-2"
                   >
                     <div className="text-xl">🔴</div>
                     <p className="text-xs font-bold text-red-800">ลูกหนี้ค้างชำระ {debtorsList.length} ราย <span className="font-normal text-red-600">(แตะเพื่อดูรายละเอียด)</span></p>
