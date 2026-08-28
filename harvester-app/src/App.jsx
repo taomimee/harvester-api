@@ -220,7 +220,7 @@ function App() {
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
-  const [activeTab, setActiveTab] = useState('active') 
+  const [activeTab, setActiveTab] = useState('home')
   const [financeSubTab, setFinanceSubTab] = useState('dashboard'); // 👈 เพิ่ม State สำหรับคุมเมนูย่อยในหน้าบัญชี
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
@@ -863,6 +863,22 @@ function App() {
     );
   };
 
+// 👇 สมองคำนวณสำหรับหน้าแรก (Dashboard) 👇
+  const todayStr = new Date().toDateString();
+  // 1. งานวันนี้
+  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
+  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  // 2. ลูกหนี้ทั้งหมด
+  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
+  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  // 3. สถานะรถปัจจุบัน (มีคันเดียว)
+  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
+  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  // 👆 จบสมองคำนวณหน้าแรก 👆
+
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
@@ -890,6 +906,9 @@ function App() {
 
         {/* 🔘 ปุ่มสลับแท็บหลัก (Main Tab Bar - จำกัด 5 เมนู) */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
+
+          <button onClick={() => setActiveTab('home')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'home' ? 'bg-gradient-to-r from-gray-800 to-black text-white shadow-md scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🏠 หน้าแรก</button>
+
           <button onClick={() => setActiveTab('active')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
           
           <button onClick={() => setActiveTab('calendar')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
@@ -912,6 +931,141 @@ function App() {
              <button onClick={() => setFinanceSubTab('income')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'income' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💵 รับเงิน</button>
              
              <button onClick={() => setFinanceSubTab('history')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'history' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📋 ประวัติ</button>
+          </div>
+        )}
+
+        {/* 🏠 หน้าจอ Dashboard ใหญ่ (หน้าแรก) */}
+        {activeTab === 'home' && (
+          <div className="space-y-4">
+            
+            {/* 1. สรุปภาพรวมวันนี้ */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+                <span className="text-gray-500 text-xs font-bold mb-1">🚜 งานวันนี้</span>
+                <span className="text-2xl font-black text-gray-800">{todayJobs.length} <span className="text-sm font-normal">งาน</span></span>
+              </div>
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+                <span className="text-gray-500 text-xs font-bold mb-1">🌾 พื้นที่รวมวันนี้</span>
+                <span className="text-2xl font-black text-emerald-600">{todayArea} <span className="text-sm font-normal">ไร่</span></span>
+              </div>
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+                <span className="text-gray-500 text-xs font-bold mb-1">💰 คาดการณ์รายได้</span>
+                <span className="text-2xl font-black text-blue-600">{todayIncome.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
+              </div>
+              <div 
+                onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                className="bg-red-50 p-4 rounded-xl shadow-sm border border-red-200 flex flex-col justify-center cursor-pointer hover:bg-red-100 transition"
+              >
+                <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ (กดเพื่อดู)</span>
+                <span className="text-2xl font-black text-red-600">{totalDebtValue.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
+              </div>
+            </div>
+
+            {/* 2. สถานะรถเกี่ยว */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-gray-800 px-4 py-2.5 flex justify-between items-center">
+                <h3 className="font-bold text-white text-sm">🚜 สถานะรถเกี่ยว</h3>
+                <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> GPS Online
+                </span>
+              </div>
+              <div className="p-4">
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <h4 className="font-black text-lg text-gray-900">{mainVehicle ? mainVehicle.name : 'รถเกี่ยว 1'}</h4>
+                    <p className="text-xs text-gray-500 font-semibold mt-0.5">👨‍🌾 คนขับ: พี่ยันต์ & จักร กฤษณ์</p>
+                  </div>
+                  <button 
+                    onClick={() => { 
+                      setActiveTab('gps'); 
+                      setTrackingMode('realtime'); 
+                      if(mainVehicle) setTrackingVehicleId(mainVehicle.id); 
+                    }}
+                    className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm"
+                  >
+                    📍 ดูพิกัด GPS
+                  </button>
+                </div>
+                
+                <div className={`mt-3 p-3 rounded-lg border flex items-center gap-3 ${activeJobNow ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="text-2xl">{activeJobNow ? '🌾' : '☕'}</div>
+                  <div>
+                    <span className={`block text-xs font-bold mb-0.5 ${activeJobNow ? 'text-blue-800' : 'text-gray-500'}`}>
+                      {activeJobNow ? 'กำลังเกี่ยวข้าวอยู่' : 'สแตนด์บาย (ว่าง)'}
+                    </span>
+                    <span className="font-semibold text-gray-800 text-sm">
+                      {activeJobNow ? `ลูกค้า: ${activeJobNow.customers?.name} (${activeJobNow.area_size} ไร่)` : 'รอรับคำสั่งงานถัดไป'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. คิวงานวันนี้ */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-bold text-gray-800 text-sm">📅 คิวงานวันนี้</h3>
+                <button onClick={() => setActiveTab('active')} className="text-xs text-orange-600 font-bold hover:underline">ดูทั้งหมด ▶</button>
+              </div>
+              
+              {todayJobs.length === 0 ? (
+                <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                  <p className="text-gray-500 font-bold text-sm">ไม่มีคิวงานในวันนี้ครับ 🍃</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {todayJobs.sort((a, b) => new Date(a.job_date) - new Date(b.job_date)).map((job, idx) => {
+                    const timeStr = new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+                    const isDone = job.status === 'DONE';
+                    
+                    return (
+                      <div key={job.id} onClick={() => setActiveTab('active')} className={`flex items-center p-2.5 rounded-lg border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}>
+                        <div className="w-14 shrink-0 text-center border-r border-gray-200 pr-2 mr-3">
+                          <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-700'}`}>{timeStr}</span>
+                        </div>
+                        <div className="flex-1">
+                          <p className={`text-sm font-bold ${isDone ? 'text-green-800' : 'text-gray-900'}`}>{job.customers?.name}</p>
+                          <p className="text-[11px] text-gray-500 mt-0.5">🌾 {job.area_size} ไร่</p>
+                        </div>
+                        <div>
+                          {isDone ? <span className="text-green-500 font-bold text-xs">✅ เสร็จแล้ว</span> : 
+                           job.status === 'IN_PROGRESS' ? <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-[10px] font-bold animate-pulse">กำลังเกี่ยว</span> : 
+                           <span className="bg-yellow-100 text-yellow-700 px-2 py-1 rounded text-[10px] font-bold">รอคิว</span>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 4. แจ้งเตือน */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+              <h3 className="font-bold text-gray-800 text-sm mb-3">🔔 แจ้งเตือน</h3>
+              <div className="space-y-2">
+                
+                {/* พยากรณ์อากาศแบบจำลอง */}
+                <div className="flex items-center gap-3 bg-blue-50/50 p-2.5 rounded-lg border border-blue-100">
+                  <div className="text-xl">🌤️</div>
+                  <p className="text-xs font-semibold text-blue-800">
+                    สภาพอากาศพื้นที่ ต.กันจุ วันนี้แดดจัด <br/>
+                    <span className="text-[10px] text-blue-600">โอกาสเกิดฝนตก: ต่ำมาก (10%)</span>
+                  </p>
+                </div>
+
+                {debtorsList.length > 0 && (
+                  <div 
+                    onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                    className="flex items-center gap-3 bg-red-50 p-2.5 rounded-lg border border-red-200 cursor-pointer hover:bg-red-100 transition"
+                  >
+                    <div className="text-xl">🔴</div>
+                    <p className="text-xs font-bold text-red-800">ลูกหนี้ค้างชำระ {debtorsList.length} ราย <span className="font-normal text-red-600">(แตะเพื่อดูรายละเอียด)</span></p>
+                  </div>
+                )}
+                
+              </div>
+            </div>
+
           </div>
         )}
 
