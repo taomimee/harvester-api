@@ -264,11 +264,11 @@ function App() {
   const [weatherData, setWeatherData] = useState(null);
 
   const getThaiWeatherText = (code) => {
-    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวข้าวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "ข้าวอาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
-    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว เดี๋ยวข้าวติดคอรถ", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
-    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตราย! รีบเอาผ้าใบคลุมเครื่องยนต์ด่วน", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
-    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวข้าวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "อาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุเข้า!", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
   };
 
   useEffect(() => {
