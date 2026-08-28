@@ -246,7 +246,38 @@ function App() {
   const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
   const [dashYear, setDashYear] = useState(new Date().getFullYear());
   const [isFetchingDash, setIsFetchingDash] = useState(false);
-  const [radarOverride, setRadarOverride] = useState(null); // จำพิกัดมือถือที่กดเอง
+  // 👇 ระบบดึงพิกัดและแปลสภาพอากาศเป็นข้อความ 👇
+  const [weatherData, setWeatherData] = useState(null);
+
+  const getThaiWeatherText = (code) => {
+    // อ้างอิงรหัสสภาพอากาศมาตรฐาน
+    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวข้าวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "ข้าวอาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว เดี๋ยวข้าวติดคอรถ", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตราย! รีบเอาผ้าใบคลุมเครื่องยนต์ด่วน", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวข้าวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'home') return;
+    
+    // คำนวณพิกัดอัจฉริยะ (เอาโค้ดเดิมมารวมไว้ตรงนี้เลย)
+    let lat = 15.7012; let lon = 101.1012;
+    if (radarOverride) { lat = radarOverride.lat; lon = radarOverride.lon; }
+    else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
+      const act = jobs.find(j => j.status === 'IN_PROGRESS');
+      lat = act.latitude; lon = act.longitude;
+    } else if (gpsPathData.length > 0) {
+      lat = gpsPathData[gpsPathData.length - 1].latitude; lon = gpsPathData[gpsPathData.length - 1].longitude;
+    }
+
+    // ดึงข้อมูลฟรีจาก Open-Meteo
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
+      .then(res => res.json())
+      .then(data => setWeatherData(data))
+      .catch(err => console.error(err));
+  }, [activeTab, radarOverride, jobs, gpsPathData]);
+  // 👆 จบระบบสภาพอากาศ 👆
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
@@ -879,25 +910,6 @@ function App() {
   const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
   const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
   
-  // 4. พิกัดเรดาร์ฝนอัจฉริยะ (ยึดตามหน้างานจริง)
-  let radarLat = 15.7012; // พิกัด ต.กันจุ เริ่มต้น
-  let radarLon = 101.1012;
-  let radarLocationName = "ต.กันจุ (เริ่มต้น)";
-
-  if (radarOverride) {
-    radarLat = radarOverride.lat;
-    radarLon = radarOverride.lon;
-    radarLocationName = "ตำแหน่งของฉัน 🎯";
-  } else if (activeJobNow && activeJobNow.latitude) {
-    radarLat = activeJobNow.latitude;
-    radarLon = activeJobNow.longitude;
-    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
-  } else if (gpsPathData.length > 0) {
-    radarLat = gpsPathData[gpsPathData.length - 1].latitude;
-    radarLon = gpsPathData[gpsPathData.length - 1].longitude;
-    radarLocationName = "พิกัดรถล่าสุด";
-  }
-
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
@@ -1063,53 +1075,66 @@ function App() {
               <h3 className="font-bold text-gray-800 text-sm mb-3">🔔 แจ้งเตือน</h3>
               <div className="space-y-2">
                 
-                {/* 📡 เรดาร์ฝนสด (Windy อัจฉริยะ) */}
+                {/* 🌤️ ระบบผู้ช่วยดูอากาศแบบข้อความ (ไม่ต้องดูเรดาร์เอง) */}
                 <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-200 shadow-inner">
-                  <div className="flex justify-between items-start mb-2">
-                    <div className="flex items-center gap-2">
-                      <div className="text-xl animate-pulse">📡</div>
-                      <div>
-                        <p className="text-xs font-bold text-blue-900">เรดาร์ฝน ({radarLocationName})</p>
-                        <p className="text-[10px] text-blue-600 font-semibold">แสดงกลุ่มเมฆและฝนแบบ Real-time</p>
-                      </div>
-                    </div>
-                    {/* ปุ่มดึงพิกัดมือถือ (สลับโหมดได้) */}
+                  <div className="flex justify-between items-center mb-3 border-b border-blue-100 pb-2">
+                    <p className="text-xs font-bold text-blue-900">🌤️ สภาพอากาศ ({radarLocationName})</p>
+                    
+                    {/* ปุ่มดึงพิกัดสลับโหมด */}
                     {radarOverride ? (
-                      <button 
-                        onClick={() => setRadarOverride(null)}
-                        className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm transition flex items-center gap-1"
-                      >
+                      <button onClick={() => setRadarOverride(null)} className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-2 py-1 rounded text-[10px] font-bold transition">
                         ❌ กลับไปดูรถ
                       </button>
                     ) : (
-                      <button 
-                        onClick={() => {
+                      <button onClick={() => {
                           if (navigator.geolocation) {
                             navigator.geolocation.getCurrentPosition(
                               (pos) => setRadarOverride({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-                              (err) => alert('❌ ไม่สามารถดึงพิกัดได้: ' + err.message)
+                              (err) => alert('❌ ดึงพิกัดไม่ได้: ' + err.message)
                             );
-                          } else { alert('❌ มือถือของคุณไม่รองรับการดึงพิกัด'); }
-                        }}
-                        className="bg-white hover:bg-blue-100 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold shadow-sm transition flex items-center gap-1"
-                      >
+                          }
+                        }} className="bg-white hover:bg-blue-100 text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold transition">
                         🎯 ดึงพิกัดฉัน
                       </button>
                     )}
                   </div>
-                  
-                  {/* 👇 ส่วนแผนที่ที่หายไป 👇 */}
-                  <div className="rounded-lg overflow-hidden border border-blue-300 aspect-video relative bg-gray-100 shadow-sm pointer-events-auto">
-                    <iframe 
-                      width="100%" 
-                      height="100%" 
-                      src={`https://embed.windy.com/embed.html?type=map&location=coordinates&metricRain=mm&metricTemp=°C&metricWind=km/h&zoom=11&overlay=rain&product=ecmwf&level=surface&lat=${radarLat}&lon=${radarLon}&message=true&play=true`} 
-                      title="เรดาร์ฝน Windy"
-                      style={{ border: 'none' }}
-                      allow="autoplay"
-                    ></iframe>
-                  </div>
-                  
+
+                  {/* ประมวลผลข้อมูลอากาศมาแสดงเป็นข้อความ */}
+                  {weatherData ? (() => {
+                    const current = getThaiWeatherText(weatherData.current.weather_code);
+                    const currentHour = weatherData.current.time;
+                    const hrIndex = weatherData.hourly.time.findIndex(t => t >= currentHour);
+
+                    return (
+                      <div>
+                        {/* 📍 กล่องบอกอากาศตอนนี้ (สรุปสีตามความอันตราย) */}
+                        <div className={`p-3 rounded-xl border ${current.bg} ${current.border} ${current.color} shadow-sm mb-3`}>
+                          <p className="text-sm font-black mb-1">📍 ตอนนี้: {current.text}</p>
+                          <p className="text-xs font-semibold">{current.desc}</p>
+                        </div>
+
+                        {/* 🕒 กล่องพยากรณ์ 3 ชั่วโมงข้างหน้า */}
+                        <p className="text-[11px] font-bold text-gray-500 mb-1.5">พยากรณ์ล่วงหน้า 3 ชั่วโมง:</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[1, 2, 3].map(offset => {
+                            const idx = hrIndex + offset;
+                            if (!weatherData.hourly.time[idx]) return null;
+                            const t = new Date(weatherData.hourly.time[idx]);
+                            const w = getThaiWeatherText(weatherData.hourly.weather_code[idx]);
+                            return (
+                              <div key={offset} className={`p-2 rounded-lg border text-center flex flex-col justify-center ${w.bg} ${w.border} ${w.color} shadow-sm`}>
+                                <p className="text-[10px] font-bold mb-1 opacity-80">{t.getHours()}:00 น.</p>
+                                <p className="text-xl leading-none mb-1">{w.text.split(' ')[1]}</p>
+                                <p className="text-[9px] font-bold leading-tight">{w.text.split(' ')[0]}</p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )
+                  })() : (
+                    <p className="text-xs text-center text-gray-500 font-bold py-5">⏳ กำลังประมวลผลสภาพอากาศ...</p>
+                  )}
                 </div>
 
                 {/* แจ้งเตือนลูกหนี้ (ถ้ามี) */}
