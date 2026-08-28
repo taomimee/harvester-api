@@ -301,10 +301,41 @@ function App() {
       
   }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
   // 👆 จบระบบสภาพอากาศ 👆
+
+  // ==========================================
+  // 👇 สมองคำนวณหน้าแรก (Dashboard)
+  // ==========================================
+  const todayStr = new Date().toDateString();
+  // 1. งานวันนี้
+  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
+  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  // 2. ลูกหนี้ทั้งหมด
+  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
+  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  // 3. สถานะรถปัจจุบัน (มีคันเดียว)
+  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
+  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  
+  // สร้างชื่อสถานที่ให้กล่องสภาพอากาศแบบใหม่
+  let radarLocationName = "(รอพิกัด...)";
+  if (radarOverride) {
+    radarLocationName = "ตำแหน่งที่กดเลือก 🎯";
+  } else if (activeJobNow && activeJobNow.latitude) {
+    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
+  } else if (gpsPathData.length > 0) {
+    radarLocationName = "พิกัดรถล่าสุด";
+  } else if (autoUserLocation) {
+    radarLocationName = "ตำแหน่งปัจจุบันของคุณ 📍";
+  }
+  // 👆 จบสมองคำนวณหน้าแรก 👆
+  // ==========================================
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10; 
+  const itemsPerPage = 10;
 
   const [editingId, setEditingId] = useState(null);
   const [currentCoords, setCurrentCoords] = useState([15.7012, 101.1012]); 
@@ -460,37 +491,6 @@ function App() {
     fetchVehicles(); 
     fetchAllCustomers(); // ดึงลูกค้ามาเตรียมไว้
   }, []);
-
-  // ==========================================
-  // 👇 วางสมองคำนวณหน้าแรก (Dashboard) ตรงนี้! 👇
-  // ==========================================
-  const todayStr = new Date().toDateString();
-  // 1. งานวันนี้
-  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
-  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
-  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-  
-  // 2. ลูกหนี้ทั้งหมด
-  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
-  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-  
-  // 3. สถานะรถปัจจุบัน (มีคันเดียว)
-  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
-  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
-  
-  // สร้างชื่อสถานที่ให้กล่องสภาพอากาศแบบใหม่
-  let radarLocationName = "(รอพิกัด...)";
-  if (radarOverride) {
-    radarLocationName = "ตำแหน่งที่กดเลือก 🎯";
-  } else if (activeJobNow && activeJobNow.latitude) {
-    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
-  } else if (gpsPathData.length > 0) {
-    radarLocationName = "พิกัดรถล่าสุด";
-  } else if (autoUserLocation) {
-    radarLocationName = "ตำแหน่งปัจจุบันของคุณ 📍";
-  }
-  // 👆 จบสมองคำนวณหน้าแรก 👆
-  // ==========================================
 
   // (ฟังก์ชัน handle ต่างๆ เช่น handleAddVehicle...)
 
