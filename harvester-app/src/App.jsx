@@ -459,17 +459,36 @@ function App() {
       .then(data => setWeatherData(data))
       .catch(err => console.error(err));
       
-    // 2. ดึงข้อมูล ตำบล/จังหวัด (Reverse Geocoding) 👈 เพิ่มส่วนนี้เข้าไป
+    // 2. ดึงข้อมูล ตำบล/อำเภอ/จังหวัด (Reverse Geocoding) 
     fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`)
       .then(res => res.json())
       .then(data => {
         if (data && data.address) {
+          // ดึงข้อมูลแต่ละระดับชั้นมาเตรียมไว้
           const subdistrict = data.address.suburb || data.address.village || data.address.quarter || data.address.hamlet || '';
+          const district = data.address.county || data.address.city_district || data.address.city || data.address.town || '';
           const province = data.address.state || data.address.province || '';
+          
           let locStr = '';
-          if (subdistrict) locStr += `ต.${subdistrict.replace('Tambon ', '')} `;
-          if (province) locStr += `จ.${province.replace('Province ', '')}`;
-          setWeatherLocationName(locStr.trim() || 'ไม่พบชื่อตำบล/จังหวัด');
+          
+          // 1. จัดการ ตำบล (ลบคำว่า Tambon หรือ ตำบล ออกถ้ามีติดมา)
+          if (subdistrict) {
+            let sd = subdistrict.replace(/Tambon /ig, '').replace(/ตำบล/g, '').trim();
+            locStr += `${sd} `;
+          }
+          
+          // 2. จัดการ อำเภอ (ลบคำว่า Amphoe หรือ อำเภอ ออกถ้ามีติดมา)
+          if (district) {
+            let d = district.replace(/Amphoe /ig, '').replace(/อำเภอ/g, '').trim();
+            locStr += `${d} `;
+          }
+          
+          // 3. จัดการ จังหวัด (ไม่ต้องใส่ จ. เพราะ API มักส่งคำว่า "จังหวัด" มาให้อยู่แล้ว)
+          if (province) {
+            locStr += `${province.replace(/Province /ig, '').trim()}`; 
+          }
+          
+          setWeatherLocationName(locStr.trim() || 'ไม่พบพิกัดที่อยู่');
         }
       })
       .catch(err => setWeatherLocationName('ดึงข้อมูลที่อยู่ไม่สำเร็จ'));
@@ -1152,7 +1171,7 @@ function App() {
                     )}
                   </div>
 
-                  {/* 🛡️ ประมวลผลข้อมูลอากาศมาแสดงเป็นข้อความ (เพิ่มตัวเช็กกันแครช) */}
+                  {/* 🛡️ ประมวลผลข้อมูลอากาศมาแสดงเป็นข้อความ */}
                   {(weatherData && weatherData.current) ? (() => {
                     const current = getThaiWeatherText(weatherData.current.weather_code);
                     const currentHour = weatherData.current.time;
@@ -1160,25 +1179,31 @@ function App() {
 
                     return (
                       <div>
-                        {/* 📍 กล่องบอกอากาศตอนนี้ (สรุปสีตามความอันตราย) */}
+                        {/* 📍 กล่องบอกอากาศตอนนี้ */}
                         <div className={`p-3 rounded-xl border ${current.bg} ${current.border} ${current.color} shadow-sm mb-3`}>
                           <p className="text-sm font-black mb-1">📍 ตอนนี้: {current.text}</p>
                           <p className="text-xs font-semibold">{current.desc}</p>
                         </div>
 
-                        {/* 🕒 กล่องพยากรณ์ 5 ชั่วโมงข้างหน้า */}
-                        <p className="text-[11px] font-bold text-gray-500 mb-1.5">พยากรณ์ล่วงหน้า 5 ชั่วโมง:</p>
-                        <div className="grid grid-cols-5 gap-1">
-                          {[1, 2, 3, 4, 5].map(offset => {
+                        {/* 🕒 กล่องพยากรณ์ 12 ชั่วโมงข้างหน้า (เลื่อนซ้ายขวาได้) */}
+                        <p className="text-[11px] font-bold text-gray-500 mb-1.5 flex justify-between items-center">
+                          <span>พยากรณ์ล่วงหน้า 12 ชั่วโมง:</span>
+                          <span className="text-[9px] bg-white px-2 py-0.5 rounded-full border shadow-sm animate-pulse">เลื่อนดู 👉</span>
+                        </p>
+                        
+                        {/* 👇 เปลี่ยนเป็น Flex แบบล้นแล้ว Scroll ได้ และซ่อน Scrollbar 👇 */}
+                        <div className="flex overflow-x-auto gap-2 pb-2 snap-x snap-mandatory [&::-webkit-scrollbar]:hidden">
+                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(offset => {
                             const idx = hrIndex + offset;
                             if (!weatherData.hourly?.time || !weatherData.hourly.time[idx]) return null;
                             const t = new Date(weatherData.hourly.time[idx]);
                             const w = getThaiWeatherText(weatherData.hourly.weather_code[idx]);
                             return (
-                              <div key={offset} className={`p-1 rounded-lg border text-center flex flex-col justify-center ${w.bg} ${w.border} ${w.color} shadow-sm`}>
-                                <p className="text-[9px] font-bold mb-0.5 opacity-80">{t.getHours()}:00 น.</p>
-                                <p className="text-lg leading-none mb-0.5">{w.text.split(' ')[1]}</p>
-                                <p className="text-[8px] font-bold leading-tight">{w.text.split(' ')[0]}</p>
+                              // กำหนดขนาดด้วย w-[30%] (ขนาดเทียบเท่า 3 กล่องพอดีจอ) และ shrink-0 ไม่ให้กล่องบีบตัวเอง
+                              <div key={offset} className={`snap-center shrink-0 w-[30%] p-2 rounded-lg border text-center flex flex-col justify-center ${w.bg} ${w.border} ${w.color} shadow-sm`}>
+                                <p className="text-[10px] font-bold mb-1 opacity-80">{t.getHours()}:00 น.</p>
+                                <p className="text-xl leading-none mb-1">{w.text.split(' ')[1]}</p>
+                                <p className="text-[9px] font-bold leading-tight">{w.text.split(' ')[0]}</p>
                               </div>
                             )
                           })}
