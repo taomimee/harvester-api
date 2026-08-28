@@ -1192,7 +1192,7 @@ function App() {
                         </p>
                         
                         {/* 👇 เปลี่ยนเป็น Flex แบบล้นแล้ว Scroll ได้ และซ่อน Scrollbar 👇 */}
-                        <div className="flex overflow-x-auto gap-2 pb-2 snap-x snap-mandatory [&::-webkit-scrollbar]:hidden">
+                        <div className="flex overflow-x-auto gap-2 pb-3 snap-x snap-mandatory [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-300 hover:[&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-thumb]:rounded-full">
                           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(offset => {
                             const idx = hrIndex + offset;
                             if (!weatherData.hourly?.time || !weatherData.hourly.time[idx]) return null;
