@@ -274,18 +274,26 @@ function App() {
   useEffect(() => {
     if (activeTab !== 'home') return;
     
-    let lat = 15.7012; let lon = 101.1012; 
+    // คำนวณพิกัดอัจฉริยะแบบใหม่
+    let lat = 15.7012; let lon = 101.1012; // ค่าสำรอง ต.กันจุ
     if (radarOverride) { 
-      lat = radarOverride.lat; lon = radarOverride.lon; 
+      lat = Number(radarOverride.lat); lon = Number(radarOverride.lon); 
     } else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
       const act = jobs.find(j => j.status === 'IN_PROGRESS');
-      lat = act.latitude; lon = act.longitude;
+      lat = Number(act.latitude); lon = Number(act.longitude);
     } else if (gpsPathData.length > 0) {
-      lat = gpsPathData[gpsPathData.length - 1].latitude; lon = gpsPathData[gpsPathData.length - 1].longitude;
+      lat = Number(gpsPathData[gpsPathData.length - 1].latitude); 
+      lon = Number(gpsPathData[gpsPathData.length - 1].longitude);
     } else if (autoUserLocation) {
-      lat = autoUserLocation.lat; lon = autoUserLocation.lon; 
+      lat = Number(autoUserLocation.lat); lon = Number(autoUserLocation.lon); 
     }
 
+    // 🛡️ เกราะป้องกัน! ถ้าพิกัดที่ดึงมาพัง เป็นค่าว่าง หรือไม่ได้กรอก ให้กลับไปใช้ ต.กันจุ
+    if (isNaN(lat) || isNaN(lon) || lat === 0) {
+      lat = 15.7012; lon = 101.1012;
+    }
+
+    // ดึงข้อมูลฟรีจาก Open-Meteo
     fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
       .then(res => res.json())
       .then(data => setWeatherData(data))
@@ -1132,8 +1140,8 @@ function App() {
                     )}
                   </div>
 
-                  {/* ประมวลผลข้อมูลอากาศมาแสดงเป็นข้อความ */}
-                  {weatherData ? (() => {
+                  {/* 🛡️ ประมวลผลข้อมูลอากาศมาแสดงเป็นข้อความ (เพิ่มตัวเช็กกันแครช) */}
+                  {(weatherData && weatherData.current) ? (() => {
                     const current = getThaiWeatherText(weatherData.current.weather_code);
                     const currentHour = weatherData.current.time;
                     const hrIndex = weatherData.hourly.time.findIndex(t => t >= currentHour);
@@ -1151,7 +1159,7 @@ function App() {
                         <div className="grid grid-cols-3 gap-2">
                           {[1, 2, 3].map(offset => {
                             const idx = hrIndex + offset;
-                            if (!weatherData.hourly.time[idx]) return null;
+                            if (!weatherData.hourly?.time || !weatherData.hourly.time[idx]) return null;
                             const t = new Date(weatherData.hourly.time[idx]);
                             const w = getThaiWeatherText(weatherData.hourly.weather_code[idx]);
                             return (
@@ -1165,7 +1173,9 @@ function App() {
                         </div>
                       </div>
                     )
-                  })() : (
+                  })() : weatherData?.error ? (
+                    <p className="text-xs text-center text-red-500 font-bold py-5">❌ ข้อมูลพิกัดไม่ถูกต้อง ดึงอากาศไม่ได้</p>
+                  ) : (
                     <p className="text-xs text-center text-gray-500 font-bold py-5">⏳ กำลังประมวลผลสภาพอากาศ...</p>
                   )}
                 </div>
