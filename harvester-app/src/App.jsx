@@ -260,38 +260,7 @@ function App() {
     }
   }, []);
 
-  const getThaiWeatherText = (code) => {
-    // อ้างอิงรหัสสภาพอากาศมาตรฐาน
-    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวข้าวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "ข้าวอาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
-    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว เดี๋ยวข้าวติดคอรถ", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
-    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตราย! รีบเอาผ้าใบคลุมเครื่องยนต์ด่วน", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
-    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวข้าวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-  };
-
-  useEffect(() => {
-    if (activeTab !== 'home') return;
-    
-    // คำนวณพิกัดอัจฉริยะแบบใหม่
-    let lat = 15.7012; let lon = 101.1012; // ค่าสำรอง ต.กันจุ
-    if (radarOverride) { 
-      lat = radarOverride.lat; lon = radarOverride.lon; 
-    } else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
-      const act = jobs.find(j => j.status === 'IN_PROGRESS');
-      lat = act.latitude; lon = act.longitude;
-    } else if (gpsPathData.length > 0) {
-      lat = gpsPathData[gpsPathData.length - 1].latitude; lon = gpsPathData[gpsPathData.length - 1].longitude;
-    } else if (autoUserLocation) {
-      lat = autoUserLocation.lat; lon = autoUserLocation.lon; // 👈 ใช้พิกัดปัจจุบันอัตโนมัติ
-    }
-
-    // ดึงข้อมูลฟรีจาก Open-Meteo
-    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
-      .then(res => res.json())
-      .then(data => setWeatherData(data))
-      .catch(err => console.error(err));
-      
-  }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]); // 👈 อย่าลืมเพิ่ม autoUserLocation ตรงวงเล็บนี้
+  const [weatherData, setWeatherData] = useState(null);
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
