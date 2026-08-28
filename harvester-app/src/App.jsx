@@ -246,9 +246,19 @@ function App() {
   const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
   const [dashYear, setDashYear] = useState(new Date().getFullYear());
   const [isFetchingDash, setIsFetchingDash] = useState(false);
-  const [radarOverride, setRadarOverride] = useState(null);
-  // 👇 ระบบดึงพิกัดและแปลสภาพอากาศเป็นข้อความ 👇
-  const [weatherData, setWeatherData] = useState(null);
+  const [radarOverride, setRadarOverride] = useState(null); 
+  
+  // 👇 เพิ่ม State ดึงพิกัดอัตโนมัติตอนเปิดเว็บ 👇
+  const [autoUserLocation, setAutoUserLocation] = useState(null);
+
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setAutoUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        (err) => console.log('ยังไม่ได้อนุญาต GPS อัตโนมัติ')
+      );
+    }
+  }, []);
 
   const getThaiWeatherText = (code) => {
     // อ้างอิงรหัสสภาพอากาศมาตรฐาน
@@ -262,14 +272,17 @@ function App() {
   useEffect(() => {
     if (activeTab !== 'home') return;
     
-    // คำนวณพิกัดอัจฉริยะ (เอาโค้ดเดิมมารวมไว้ตรงนี้เลย)
-    let lat = 15.7012; let lon = 101.1012;
-    if (radarOverride) { lat = radarOverride.lat; lon = radarOverride.lon; }
-    else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
+    // คำนวณพิกัดอัจฉริยะแบบใหม่
+    let lat = 15.7012; let lon = 101.1012; // ค่าสำรอง ต.กันจุ
+    if (radarOverride) { 
+      lat = radarOverride.lat; lon = radarOverride.lon; 
+    } else if (jobs.find(j => j.status === 'IN_PROGRESS')?.latitude) {
       const act = jobs.find(j => j.status === 'IN_PROGRESS');
       lat = act.latitude; lon = act.longitude;
     } else if (gpsPathData.length > 0) {
       lat = gpsPathData[gpsPathData.length - 1].latitude; lon = gpsPathData[gpsPathData.length - 1].longitude;
+    } else if (autoUserLocation) {
+      lat = autoUserLocation.lat; lon = autoUserLocation.lon; // 👈 ใช้พิกัดปัจจุบันอัตโนมัติ
     }
 
     // ดึงข้อมูลฟรีจาก Open-Meteo
@@ -277,8 +290,8 @@ function App() {
       .then(res => res.json())
       .then(data => setWeatherData(data))
       .catch(err => console.error(err));
-  }, [activeTab, radarOverride, jobs, gpsPathData]);
-  // 👆 จบระบบสภาพอากาศ 👆
+      
+  }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]); // 👈 อย่าลืมเพิ่ม autoUserLocation ตรงวงเล็บนี้
   
   // ระบบแบ่งหน้า 
   const [currentPage, setCurrentPage] = useState(1);
@@ -438,6 +451,39 @@ function App() {
     fetchVehicles(); 
     fetchAllCustomers(); // ดึงลูกค้ามาเตรียมไว้
   }, []);
+
+  // ==========================================
+  // 👇 วางสมองคำนวณหน้าแรก (Dashboard) ตรงนี้! 👇
+  // ==========================================
+  const todayStr = new Date().toDateString();
+  // 1. งานวันนี้
+  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
+  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  // 2. ลูกหนี้ทั้งหมด
+  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
+  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  
+  // 3. สถานะรถปัจจุบัน (มีคันเดียว)
+  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
+  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  
+  // สร้างชื่อสถานที่ให้กล่องสภาพอากาศแบบใหม่
+  let radarLocationName = "(รอพิกัด...)";
+  if (radarOverride) {
+    radarLocationName = "ตำแหน่งที่กดเลือก 🎯";
+  } else if (activeJobNow && activeJobNow.latitude) {
+    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
+  } else if (gpsPathData.length > 0) {
+    radarLocationName = "พิกัดรถล่าสุด";
+  } else if (autoUserLocation) {
+    radarLocationName = "ตำแหน่งปัจจุบันของคุณ 📍";
+  }
+  // 👆 จบสมองคำนวณหน้าแรก 👆
+  // ==========================================
+
+  // (ฟังก์ชัน handle ต่างๆ เช่น handleAddVehicle...)
 
   const handleAddVehicle = async () => {
     if (!newVehicle.name.trim()) return alert("กรุณาใส่ชื่อรถครับ");
@@ -895,32 +941,6 @@ function App() {
       </div>
     );
   };
-
-// 👇 สมองคำนวณสำหรับหน้าแรก (Dashboard) 👇
-  const todayStr = new Date().toDateString();
-  // 1. งานวันนี้
-  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
-  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
-  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-  
-  // 2. ลูกหนี้ทั้งหมด
-  const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
-  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-  
-  // 3. สถานะรถปัจจุบัน (มีคันเดียว)
-  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
-  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
-  
-  // 👇 เพิ่มโค้ดชุดนี้ลงไป เพื่อสร้างชื่อสถานที่ให้กล่องสภาพอากาศ 👇
-  let radarLocationName = "ต.กันจุ (เริ่มต้น)";
-  if (radarOverride) {
-    radarLocationName = "ตำแหน่งของฉัน 🎯";
-  } else if (activeJobNow && activeJobNow.latitude) {
-    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
-  } else if (gpsPathData.length > 0) {
-    radarLocationName = "พิกัดรถล่าสุด";
-  }
-  // 👆 จบสมองคำนวณหน้าแรก 👆
 
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
