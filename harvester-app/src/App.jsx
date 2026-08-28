@@ -225,6 +225,7 @@ function App() {
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
   const [weatherData, setWeatherData] = useState(null);
+  const [weatherLocationName, setWeatherLocationName] = useState('กำลังค้นหาพิกัด...');
 
   // 📸 State สำหรับระบบแกลเลอรี่รูปภาพ
   const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
@@ -452,11 +453,27 @@ function App() {
       lat = 15.7012; lon = 101.1012;
     }
 
+    // 1. ดึงข้อมูลสภาพอากาศ
     fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
       .then(res => res.json())
       .then(data => setWeatherData(data))
       .catch(err => console.error(err));
       
+    // 2. ดึงข้อมูล ตำบล/จังหวัด (Reverse Geocoding) 👈 เพิ่มส่วนนี้เข้าไป
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.address) {
+          const subdistrict = data.address.suburb || data.address.village || data.address.quarter || data.address.hamlet || '';
+          const province = data.address.state || data.address.province || '';
+          let locStr = '';
+          if (subdistrict) locStr += `ต.${subdistrict.replace('Tambon ', '')} `;
+          if (province) locStr += `จ.${province.replace('Province ', '')}`;
+          setWeatherLocationName(locStr.trim() || 'ไม่พบชื่อตำบล/จังหวัด');
+        }
+      })
+      .catch(err => setWeatherLocationName('ดึงข้อมูลที่อยู่ไม่สำเร็จ'));
+
   }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
 
   const todayStr = new Date().toDateString();
@@ -1111,7 +1128,10 @@ function App() {
                 {/* 🌤️ ระบบผู้ช่วยดูอากาศแบบข้อความ (ไม่ต้องดูเรดาร์เอง) */}
                 <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-200 shadow-inner">
                   <div className="flex justify-between items-center mb-3 border-b border-blue-100 pb-2">
-                    <p className="text-xs font-bold text-blue-900">🌤️ สภาพอากาศ ({radarLocationName})</p>
+                    <p className="text-xs font-bold text-blue-900">
+                      🌤️ สภาพอากาศ ({radarLocationName}) <br/>
+                      <span className="text-[10px] text-blue-700">📍 {weatherLocationName}</span>
+                    </p>
                     
                     {/* ปุ่มดึงพิกัดสลับโหมด */}
                     {radarOverride ? (
@@ -1146,19 +1166,19 @@ function App() {
                           <p className="text-xs font-semibold">{current.desc}</p>
                         </div>
 
-                        {/* 🕒 กล่องพยากรณ์ 3 ชั่วโมงข้างหน้า */}
-                        <p className="text-[11px] font-bold text-gray-500 mb-1.5">พยากรณ์ล่วงหน้า 3 ชั่วโมง:</p>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[1, 2, 3].map(offset => {
+                        {/* 🕒 กล่องพยากรณ์ 5 ชั่วโมงข้างหน้า */}
+                        <p className="text-[11px] font-bold text-gray-500 mb-1.5">พยากรณ์ล่วงหน้า 5 ชั่วโมง:</p>
+                        <div className="grid grid-cols-5 gap-1">
+                          {[1, 2, 3, 4, 5].map(offset => {
                             const idx = hrIndex + offset;
                             if (!weatherData.hourly?.time || !weatherData.hourly.time[idx]) return null;
                             const t = new Date(weatherData.hourly.time[idx]);
                             const w = getThaiWeatherText(weatherData.hourly.weather_code[idx]);
                             return (
-                              <div key={offset} className={`p-2 rounded-lg border text-center flex flex-col justify-center ${w.bg} ${w.border} ${w.color} shadow-sm`}>
-                                <p className="text-[10px] font-bold mb-1 opacity-80">{t.getHours()}:00 น.</p>
-                                <p className="text-xl leading-none mb-1">{w.text.split(' ')[1]}</p>
-                                <p className="text-[9px] font-bold leading-tight">{w.text.split(' ')[0]}</p>
+                              <div key={offset} className={`p-1 rounded-lg border text-center flex flex-col justify-center ${w.bg} ${w.border} ${w.color} shadow-sm`}>
+                                <p className="text-[9px] font-bold mb-0.5 opacity-80">{t.getHours()}:00 น.</p>
+                                <p className="text-lg leading-none mb-0.5">{w.text.split(' ')[1]}</p>
+                                <p className="text-[8px] font-bold leading-tight">{w.text.split(' ')[0]}</p>
                               </div>
                             )
                           })}
