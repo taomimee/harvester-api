@@ -2258,19 +2258,10 @@ function App() {
 
                     return (
                     <div key={tx.id} className={`bg-white p-4 rounded-xl shadow-sm relative overflow-hidden flex flex-col gap-2 border ${isWage ? 'border-red-100' : 'border-orange-100'}`}>
-                       <div className={`absolute top-0 left-0 w-1 h-full ${isWage ? 'bg-red-400' : 'bg-orange-400'}`}></div>
-                       
-                       {/* 👇 ปุ่มลบ เปลี่ยนเป็นถังขยะซ่อนมุมขวาบน ป้องกันกดพลาด 👇 */}
-                       <button 
-                         onClick={() => handleDeleteExpense(tx.id)}
-                         className="absolute top-3 right-3 text-gray-300 hover:text-red-500 transition p-1 text-base z-10"
-                         title="ลบรายการนี้"
-                       >
-                         🗑️
-                       </button>
+                       <div className={`absolute top-0 left-0 w-1.5 h-full ${isWage ? 'bg-red-400' : 'bg-orange-400'}`}></div>
 
                        <div className="flex justify-between items-start pl-2">
-                         <div className="flex-1 pr-6">
+                         <div className="flex-1 pr-4">
                            <div className="flex items-center gap-2 mb-1">
                              <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${isWage ? 'bg-red-50 text-red-700 border-red-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
                                {tx.category === 'WAGE' ? 'ค่าแรง' : (tx.category || 'ทั่วไป')}
@@ -2280,7 +2271,6 @@ function App() {
                              </span>
                            </div>
                            
-                           {/* 👇 ปรับหัวข้อ: ซ่อน "ผู้จ่าย: ไม่ระบุ" ดึงหมวดหมู่มาโชว์แทน 👇 */}
                            <h3 className="font-bold text-gray-800 text-sm mt-1.5">
                              {isWage ? 'จ่ายค่าแรงทีมงาน' : (tx.spender_name ? `ผู้จ่าย: ${tx.spender_name}` : `ค่า${tx.category || 'ใช้จ่ายทั่วไป'}`)}
                            </h3>
@@ -2290,16 +2280,26 @@ function App() {
                            </p>
                          </div>
                          
-                         <div className="text-right shrink-0 flex flex-col items-end mt-1">
+                         {/* ฝั่งขวา: ตัวเลขชัดเจน และปุ่มการทำงานเรียงไว้ด้านล่าง */}
+                         <div className="text-right shrink-0 flex flex-col items-end">
                            <span className="block font-black text-red-600 text-xl leading-none">
-                             -{Number(tx.total_amount).toLocaleString()} <span className="text-sm font-normal">฿</span>
+                             -{Number(tx.total_amount).toLocaleString()} <span className="text-xs font-normal">฿</span>
                            </span>
-                           {/* 👇 ปรับปุ่มดูใบเสร็จให้ดูเรียบง่ายขึ้น (Text Link) 👇 */}
-                           {tx.receipt_url && (
-                             <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-[10px] text-blue-600 font-bold hover:underline">
-                               📄 ดูใบเสร็จ
-                             </a>
-                           )}
+
+                           <div className="flex items-center gap-2.5 mt-2.5">
+                             {tx.receipt_url && (
+                               <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-600 font-bold hover:underline">
+                                 📄 ดูใบเสร็จ
+                               </a>
+                             )}
+                             <button 
+                               onClick={() => handleDeleteExpense(tx.id)}
+                               className="text-gray-400 hover:text-red-500 p-0.5 text-sm transition"
+                               title="ลบรายการนี้"
+                             >
+                               🗑️
+                             </button>
+                           </div>
                          </div>
                        </div>
                     </div>
