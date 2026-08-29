@@ -1991,33 +1991,87 @@ function App() {
                        {job.address_note && <p className="text-xs text-gray-500 mt-1">📍 {job.address_note}</p>}
                      </div>
 
-                     <div className="flex gap-2 pl-2">
+                     <div className="flex gap-1.5 pl-2">
                         <button 
                           onClick={() => {
-                            // 💬 จัดฟอร์แมตข้อความทวงหนี้แบบสุภาพ
                             const text = `แจ้งยอดค้างชำระค่าเกี่ยวข้าวครับ 🌾\n\n👤 ชื่อลูกค้า: ${job.customers?.name}\n📅 วันที่เกี่ยว: ${new Date(job.job_date).toLocaleDateString('th-TH')}\n📐 พื้นที่: ${job.area_size || 0} ไร่ (${job.crop_type})\n\n💰 ยอดที่ต้องชำระ: ${Number(job.total_price).toLocaleString()} บาท\n\nรบกวนโอนชำระและส่งสลิปให้ด้วยนะครับ ขอบคุณครับ 🙏`;
                             navigator.clipboard.writeText(text);
                             alert('📋 คัดลอกข้อความทวงหนี้เรียบร้อยแล้ว!\nนำไปกด "วาง" (Paste) ในแชท LINE ลูกค้าได้เลยครับ');
                           }}
-                          className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-1 shadow-sm"
+                          className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs transition flex items-center justify-center shadow-sm"
                         >
-                          💬 ก๊อปปี้ข้อความทวง
+                          💬 ก๊อปปี้ทวง
                         </button>
                         
-                        {/* 👇 ซ่อนปุ่มรับเงิน ให้เถ้าแก่ (BOSS) เห็นและกดได้คนเดียว 👇 */}
+                        {/* 👇 ปุ่มเก็บเงิน (เถ้าแก่เห็นเท่านั้น แบ่งเป็นจ่ายบางส่วน กับ จ่ายเต็ม) 👇 */}
                         {userRole === 'BOSS' && (
-                          <button 
-                            onClick={() => {
-                              if(window.confirm(`ยืนยันว่าลูกค้า [ ${job.customers?.name} ] จ่ายเงินยอด ${Number(job.total_price).toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?\n\n(ถ้ายืนยัน งานนี้จะหายไปจากหน้าลูกหนี้ทันที)`)) {
-                                updatePaymentStatus(job.id, 'PAID');
-                              }
-                            }}
-                            className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
-                          >
-                            ✅ รับเงินเรียบร้อย
-                          </button>
+                          <>
+                            <button 
+                              onClick={() => {
+                                const amountStr = window.prompt(`ยอดหนี้ปัจจุบัน: ${Number(job.total_price).toLocaleString()} บาท\n\nลูกค้าจ่ายมาก่อนเท่าไหร่? (ระบุเป็นตัวเลข):`);
+                                if (!amountStr) return;
+                                const paidAmount = Number(amountStr);
+                                if (isNaN(paidAmount) || paidAmount <= 0) return alert("❌ กรุณาระบุตัวเลขให้ถูกต้องครับ");
+                                
+                                if (paidAmount >= Number(job.total_price)) {
+                                  if(window.confirm("ยอดเงินที่ระบุครอบคลุมหนี้ทั้งหมด ระบบจะบันทึกว่า 'จ่ายเต็มบิล' ยืนยันหรือไม่?")) {
+                                    updatePaymentStatus(job.id, 'PAID');
+                                  }
+                                } else {
+                                  const remaining = (Number(job.total_price) - paidAmount).toFixed(2);
+                                  if (window.confirm(`รับเงินมาแล้ว: ${paidAmount.toLocaleString()} บาท\nค้างจ่ายส่วนที่เหลือ: ${Number(remaining).toLocaleString()} บาท\n\nยืนยันการหักลบยอดหนี้ใช่หรือไม่?`)) {
+                                    
+                                    // ส่งข้อมูลไปอัปเดตยอดหนี้ที่เหลือ
+                                    const updatePayload = {
+                                      customer_name: job.customers?.name || '',
+                                      phone: job.customers?.phone || '',
+                                      address_note: job.address_note || '',
+                                      crop_type: job.crop_type || 'ข้าว',
+                                      area_size: job.area_size,
+                                      job_date: job.job_date,
+                                      latitude: job.latitude,
+                                      longitude: job.longitude,
+                                      vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
+                                      boundaries: job.boundaries || [],
+                                      price_per_rai: job.price_per_rai,
+                                      total_price: remaining, // 👈 ยอดหนี้ที่อัปเดตใหม่
+                                      payment_status: 'DEPOSIT' // 👈 เปลี่ยนป้ายเป็น มัดจำแล้ว
+                                    };
+
+                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify(updatePayload)
+                                    })
+                                    .then(res => {
+                                      if(res.ok) {
+                                        alert("✅ หักลบยอดหนี้เรียบร้อยแล้ว");
+                                        fetchJobs();
+                                      } else {
+                                        alert("❌ บันทึกไม่สำเร็จ");
+                                      }
+                                    })
+                                    .catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
+                                  }
+                                }
+                              }}
+                              className="flex-1 bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs shadow-md transition flex items-center justify-center"
+                            >
+                              💳 จ่ายบางส่วน
+                            </button>
+
+                            <button 
+                              onClick={() => {
+                                if(window.confirm(`ยืนยันว่าลูกค้า [ ${job.customers?.name} ] จ่ายเงินยอดเต็ม ${Number(job.total_price).toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?\n\n(ถ้ายืนยัน งานนี้จะหายไปจากหน้าลูกหนี้ทันที)`)) {
+                                  updatePaymentStatus(job.id, 'PAID');
+                                }
+                              }}
+                              className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs shadow-md transition flex items-center justify-center"
+                            >
+                              ✅ รับเงินเรียบร้อย
+                            </button>
+                          </>
                         )}
-                        {/* 👆 จบส่วนที่แก้ไข 👆 */}
                      </div>
                   </div>
               ))
