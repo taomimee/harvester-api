@@ -2019,11 +2019,6 @@ function App() {
                       <p className="text-2xl font-black text-amber-600 mt-1">{formatMoney(Math.max(Number(dashboardData.totalUnpaid || 0), debtAmount))} <span className="text-xs">฿</span></p>
                       <p className="text-[10px] text-amber-700 font-bold mt-1">{debtJobs.length} รายการ • กดเพื่อดูรายละเอียด</p>
                     </button>
-                    <div className="bg-sky-50 rounded-2xl p-4 border border-sky-100 shadow-sm">
-                      <p className="text-[10px] font-black text-sky-900">👷 ค่าแรงเฉลี่ยต่อไร่</p>
-                      <p className="text-2xl font-black text-sky-600 mt-1">{formatMoney(laborCostPerRai)} <span className="text-xs">฿/ไร่</span></p>
-                      <p className="text-[10px] text-sky-700 font-bold mt-1">รวมค่าแรงที่จ่ายแล้ว + รอจ่าย</p>
-                    </div>
                   </div>
 
                   {/* Income / expense ratio */}
