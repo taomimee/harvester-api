@@ -2037,65 +2037,36 @@ function App() {
                                   }
                                 } else {
                                   const remaining = (Number(job.total_price) - paidAmount).toFixed(2);
-                                  if (window.confirm(`รับเงินมาแล้ว: ${paidAmount.toLocaleString()} บาท\nค้างจ่ายส่วนที่เหลือ: ${Number(remaining).toLocaleString()} บาท\n\nระบบจะนำยอดที่จ่ายแล้วเข้า 'ประวัติรับเงิน' และเก็บยอดคงเหลือไว้ในบัญชีลูกหนี้ ยืนยันหรือไม่?`)) {
+                                  if (window.confirm(`รับเงินมาแล้ว: ${paidAmount.toLocaleString()} บาท\nค้างจ่ายส่วนที่เหลือ: ${Number(remaining).toLocaleString()} บาท\n\nยืนยันการหักลบยอดหนี้ใช่หรือไม่?`)) {
                                     
-                                    // 1. สร้างบิลจำลองเพื่อเก็บยอด 200 บาท เข้าหน้ารายรับ
-                                    const incomePayload = {
-                                      customer_name: (job.customers?.name || 'ไม่ระบุ') + ' (จ่ายบางส่วน)',
+                                    // ส่งข้อมูลไปอัปเดตยอดหนี้ที่เหลือ
+                                    const updatePayload = {
+                                      customer_name: job.customers?.name || '',
                                       phone: job.customers?.phone || '',
-                                      address_note: `รับเงินบางส่วน จากแปลง ${job.area_size || 0} ไร่`,
+                                      address_note: job.address_note || '',
                                       crop_type: job.crop_type || 'ข้าว',
-                                      area_size: '', // ปล่อยว่างไม่ให้พื้นที่ซ้ำ
-                                      job_date: new Date().toISOString().slice(0, 16),
+                                      area_size: job.area_size,
+                                      job_date: job.job_date,
                                       latitude: job.latitude,
                                       longitude: job.longitude,
                                       vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
-                                      boundaries: [],
-                                      price_per_rai: '',
-                                      total_price: paidAmount, // 👈 ยอดที่รับมา (200)
-                                      payment_status: 'PAID',  // 👈 ถือว่าบิลนี้จ่ายแล้ว
-                                      status: 'DONE'
+                                      boundaries: job.boundaries || [],
+                                      price_per_rai: job.price_per_rai,
+                                      total_price: remaining, // 👈 ยอดหนี้ที่อัปเดตใหม่
+                                      payment_status: 'DEPOSIT' // 👈 เปลี่ยนป้ายเป็น มัดจำแล้ว
                                     };
 
-                                    fetch('https://harvester-api-server.onrender.com/api/jobs', {
-                                      method: 'POST',
+                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
+                                      method: 'PUT',
                                       headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify(incomePayload)
+                                      body: JSON.stringify(updatePayload)
                                     })
                                     .then(res => {
                                       if(res.ok) {
-                                        // 2. อัปเดตบิลลูกหนี้ตัวเดิม ให้เหลือหนี้แค่ 500
-                                        const updatePayload = {
-                                          customer_name: job.customers?.name || '',
-                                          phone: job.customers?.phone || '',
-                                          address_note: job.address_note || '',
-                                          crop_type: job.crop_type || 'ข้าว',
-                                          area_size: job.area_size,
-                                          job_date: job.job_date,
-                                          latitude: job.latitude,
-                                          longitude: job.longitude,
-                                          vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
-                                          boundaries: job.boundaries || [],
-                                          price_per_rai: job.price_per_rai,
-                                          total_price: remaining, // 👈 หนี้คงเหลือ
-                                          payment_status: 'DEPOSIT' // 👈 ติดป้ายว่ามัดจำแล้ว
-                                        };
-
-                                        return fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
-                                          method: 'PUT',
-                                          headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify(updatePayload)
-                                        });
-                                      } else {
-                                        throw new Error();
-                                      }
-                                    })
-                                    .then(res => {
-                                      if(res && res.ok) {
-                                        alert("✅ บันทึกรายรับและหักลบยอดหนี้เรียบร้อยแล้ว");
+                                        alert("✅ หักลบยอดหนี้เรียบร้อยแล้ว");
                                         fetchJobs();
                                       } else {
-                                        alert("❌ หักลบยอดหนี้ไม่สำเร็จ");
+                                        alert("❌ บันทึกไม่สำเร็จ");
                                       }
                                     })
                                     .catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
