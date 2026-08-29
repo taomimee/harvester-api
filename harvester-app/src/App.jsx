@@ -3078,14 +3078,23 @@ function App() {
           </div>
         )}
 
-        {/* 👇 วางตรงนี้ 👇 */}
         {/* 💸 Popup ฟอร์มบันทึกค่าใช้จ่ายทั่วไป */}
         {showExpenseForm && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
             <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl">
-              <h2 className="text-xl font-bold mb-4 text-red-700 flex items-center gap-2">
-                <span>💸</span> บันทึกค่าใช้จ่าย
-              </h2>
+              
+              {/* 👇 1. เพิ่ม Header ที่มีปุ่ม (X) ปิดหน้าต่าง 👇 */}
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-red-700 flex items-center gap-2">
+                  <span>💸</span> บันทึกค่าใช้จ่าย
+                </h2>
+                <button 
+                  onClick={() => setShowExpenseForm(false)} 
+                  className="text-gray-400 hover:text-red-500 bg-gray-100 hover:bg-red-50 rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg transition"
+                >
+                  ✕
+                </button>
+              </div>
               
               <form onSubmit={handleExpenseSubmit} className="space-y-3">
                 {/* หมวดหมู่ */}
@@ -3143,7 +3152,6 @@ function App() {
                    <label className="block text-gray-700 font-semibold mb-2 text-sm">🧾 แนบรูปใบเสร็จ</label>
                    
                    <div className="flex gap-2">
-                     {/* 👇 ปุ่มที่ 1: เปิดกล้องถ่ายรูปทันที (capture="environment") 👇 */}
                      <label className="flex-1 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 py-2 rounded-xl text-xs font-bold text-center cursor-pointer transition shadow-sm flex flex-col items-center justify-center gap-1">
                        <span className="text-xl">📸</span>
                        <span>ถ่ายรูปใบเสร็จ</span>
@@ -3156,7 +3164,6 @@ function App() {
                        />
                      </label>
 
-                     {/* 👇 ปุ่มที่ 2: เลือกจากคลังภาพในเครื่อง 👇 */}
                      <label className="flex-1 bg-white text-gray-700 border border-gray-300 hover:bg-gray-100 py-2 rounded-xl text-xs font-bold text-center cursor-pointer transition shadow-sm flex flex-col items-center justify-center gap-1">
                        <span className="text-xl">🖼️</span>
                        <span>เลือกจากคลัง</span>
@@ -3169,7 +3176,6 @@ function App() {
                      </label>
                    </div>
 
-                   {/* 👇 โชว์ชื่อไฟล์เมื่อถ่ายรูปหรือเลือกรูปเสร็จแล้ว 👇 */}
                    {expenseData.receipt && (
                      <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg flex justify-between items-center text-xs text-green-800 font-bold shadow-inner">
                        <span className="truncate max-w-[80%] flex items-center gap-1">
@@ -3185,11 +3191,28 @@ function App() {
                      </div>
                    )}
                 </div>
+
+                {/* 👇 2. เพิ่มกลุ่มปุ่ม ยกเลิก / บันทึกรายจ่าย ไว้ด้านล่างสุด 👇 */}
+                <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowExpenseForm(false)} 
+                    className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2.5 rounded-xl font-bold transition"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl font-bold shadow-lg transition"
+                  >
+                    บันทึกรายจ่าย
+                  </button>
+                </div>
+
               </form>
             </div>
           </div>
         )}
-        {/* 👆 จบ Popup บันทึกค่าใช้จ่าย 👆 */}
 
         {/* 🔍 Popup แสดงรูปภาพแบบเต็มจอ (รองรับการปัด Swipe) */}
         {fullScreenIndex !== null && jobAttachments[fullScreenIndex] && (
