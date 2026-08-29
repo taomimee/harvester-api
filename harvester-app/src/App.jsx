@@ -1089,15 +1089,12 @@ function App() {
           </div>
         )}
 
-        {/* 📑 เมนูย่อยสำหรับแท็บบัญชี (โชว์เฉพาะตอนกดแท็บ 💰 บัญชี) */}
-        {activeTab === 'finance' && (
+        {/* 📑 เมนูย่อยสำหรับแท็บบัญชี (ซ่อนจากคนขับ โชว์เฉพาะเถ้าแก่) */}
+        {activeTab === 'finance' && userRole === 'BOSS' && (
           <div className="flex bg-gray-200 rounded-xl p-1 mb-5 gap-1 shadow-inner overflow-x-auto">
              <button onClick={() => { setFinanceSubTab('dashboard'); fetchDashboard(); }} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'dashboard' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📊 สรุปยอด</button>
              <button onClick={() => setFinanceSubTab('debt')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'debt' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ลูกหนี้</button>
-             
-             {/* 👇 ปุ่มที่เพิ่มใหม่ สำหรับดูคนเพิ่งจ่ายเงิน 👇 */}
              <button onClick={() => setFinanceSubTab('income')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'income' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💵 รับเงิน</button>
-             
              <button onClick={() => setFinanceSubTab('history')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'history' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📋 ประวัติ</button>
           </div>
         )}
