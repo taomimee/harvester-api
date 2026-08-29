@@ -251,6 +251,10 @@ function App() {
   const [isFetchingDash, setIsFetchingDash] = useState(false);
   const [radarOverride, setRadarOverride] = useState(null); 
   
+  // 🔐 State สำหรับระบบ 2 ร่าง (ค่าเริ่มต้นเป็น DRIVER เปิดมาใช้งานได้เลย)
+  const [userRole, setUserRole] = useState('DRIVER'); 
+  const [currentDriverName, setCurrentDriverName] = useState(''); // เก็บชื่อคนขับเพื่อให้ดึงค่าแรงถูกคน
+
   // 👇 เพิ่ม State ดึงพิกัดอัตโนมัติตอนเปิดเว็บ 👇
   const [autoUserLocation, setAutoUserLocation] = useState(null);
 
@@ -988,8 +992,31 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
       <div className="max-w-md mx-auto">
-        {/* 🐘 Header ช้างขาวเจริญทรัพย์ */}
+        {/* 🐘 Header ช้างขาวเจริญทรัพย์ (พร้อมทางลับเถ้าแก่) */}
         <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
+          
+          {/* 👇 ทางลับเถ้าแก่ (ปุ่มกุญแจมุมขวาบน) 👇 */}
+          <div 
+            className="absolute top-3 right-3 z-50 bg-black/20 hover:bg-black/40 backdrop-blur-sm p-1.5 rounded-full cursor-pointer transition text-xs border border-white/10"
+            onClick={() => {
+              if (userRole === 'DRIVER') {
+                const pin = window.prompt("🧑‍💼 โหมดเถ้าแก่\nกรุณาใส่รหัสผ่าน (PIN):");
+                if (pin === '9999') { // 👈 เปลี่ยนรหัสผ่านตรงนี้ได้เลยครับ
+                  setUserRole('BOSS');
+                  alert("✅ เข้าสู่โหมดเถ้าแก่เรียบร้อย");
+                } else if (pin) {
+                  alert("❌ รหัสผ่านไม่ถูกต้อง");
+                }
+              } else {
+                if (window.confirm("ต้องการออกจากโหมดเถ้าแก่ กลับไปเป็นโหมดคนขับ ใช่หรือไม่?")) {
+                  setUserRole('DRIVER');
+                }
+              }
+            }}
+          >
+            {userRole === 'BOSS' ? '🔓' : '🔒'}
+          </div>
+
           <div className="relative z-10 flex flex-col items-center">
             <div className="relative mb-1">
               <div className="absolute inset-0 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 rounded-xl blur-lg opacity-80 animate-pulse"></div>
@@ -1021,11 +1048,50 @@ function App() {
           
           <button onClick={() => setActiveTab('gps')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัด</button>
           
-          {/* 💡 รวบเมนู บัญชี, ลูกหนี้, ประวัติ ไว้ในแท็บนี้ */}
-          <button onClick={() => { setActiveTab('finance'); fetchDashboard(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'finance' ? 'bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white shadow-md shadow-purple-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>💰 บัญชี</button>
-          
-          <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
+          {/* 👇 ซ่อนปุ่ม บัญชี และ ตั้งค่า ถ้าเป็นคนขับรถ 👇 */}
+          {userRole === 'BOSS' && (
+            <>
+              <button onClick={() => { setActiveTab('finance'); fetchDashboard(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'finance' ? 'bg-gradient-to-r from-purple-500 to-fuchsia-600 text-white shadow-md shadow-purple-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>💰 บัญชี</button>
+              
+              <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
+            </>
+          )}
         </div>
+
+        {/* 👇 แถบเลือกชื่อคนขับ (โชว์เฉพาะโหมดคนขับ) 👇 */}
+        {userRole === 'DRIVER' && (
+          <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl mb-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-blue-800 flex items-center gap-1">
+                👨‍🌾 คนขับ: 
+                {currentDriverName ? <span className="text-blue-600 bg-blue-100 px-2 py-0.5 rounded border border-blue-200">{currentDriverName}</span> : <span className="text-red-500 animate-pulse">ยังไม่ระบุตัวตน</span>}
+              </span>
+              <select 
+                className="text-xs border border-blue-300 p-1.5 rounded-lg bg-white font-bold text-blue-700 outline-none"
+                value={currentDriverName}
+                onChange={e => setCurrentDriverName(e.target.value)}
+              >
+                <option value="">-- เลือกชื่อคุณ --</option>
+                <option value="พี่ยันต์">พี่ยันต์</option>
+                <option value="จักร กฤษณ์">จักร กฤษณ์</option>
+              </select>
+            </div>
+            
+            {/* ปุ่มดูสมุดค่าแรง (ดึงเฉพาะยอดของคนขับรายนี้มาโชว์) */}
+            {currentDriverName && (
+               <button 
+                 onClick={() => {
+                   setWageFilter([currentDriverName]); // บังคับกรองเฉพาะชื่อตัวเอง
+                   setShowWageSummary(true);
+                   fetchWages();
+                 }}
+                 className="w-full bg-green-500 hover:bg-green-600 text-white text-xs font-bold py-2 rounded-lg shadow-sm transition"
+               >
+                 💰 ดูสมุดค่าแรงของฉัน (ส่วนแบ่ง)
+               </button>
+            )}
+          </div>
+        )}
 
         {/* 📑 เมนูย่อยสำหรับแท็บบัญชี (โชว์เฉพาะตอนกดแท็บ 💰 บัญชี) */}
         {activeTab === 'finance' && (
@@ -1054,17 +1120,23 @@ function App() {
                 <span className="text-gray-500 text-xs font-bold mb-1">🌾 พื้นที่รวมวันนี้</span>
                 <span className="text-2xl font-black text-emerald-600">{todayArea} <span className="text-sm font-normal">ไร่</span></span>
               </div>
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
-                <span className="text-gray-500 text-xs font-bold mb-1">💰 คาดการณ์รายได้</span>
-                <span className="text-2xl font-black text-blue-600">{todayIncome.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
-              </div>
-              <div 
-                onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                className="bg-red-50 p-4 rounded-xl shadow-sm border border-red-200 flex flex-col justify-center cursor-pointer hover:bg-red-100 transition"
-              >
-                <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ (กดเพื่อดู)</span>
-                <span className="text-2xl font-black text-red-600">{totalDebtValue.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
-              </div>
+              
+              {/* 👇 ซ่อนกล่องรายได้และลูกหนี้จากคนขับ 👇 */}
+              {userRole === 'BOSS' && (
+                <>
+                  <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+                    <span className="text-gray-500 text-xs font-bold mb-1">💰 คาดการณ์รายได้</span>
+                    <span className="text-2xl font-black text-blue-600">{todayIncome.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
+                  </div>
+                  <div 
+                    onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                    className="bg-red-50 p-4 rounded-xl shadow-sm border border-red-200 flex flex-col justify-center cursor-pointer hover:bg-red-100 transition"
+                  >
+                    <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ (กดเพื่อดู)</span>
+                    <span className="text-2xl font-black text-red-600">{totalDebtValue.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* 2. สถานะรถเกี่ยว */}
@@ -1538,8 +1610,8 @@ function App() {
                       </div>
                     </div>
                     
-                    {/* 💰 กล่องโชว์ยอดเงิน (แก้บั๊กเลข 0 ลอยตัว) */}
-                    {(Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
+                    {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
+                    {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
@@ -1592,7 +1664,8 @@ function App() {
                             <option value="BEFORE">🌾 ก่อนเกี่ยว</option>
                             <option value="DURING">🚜 ระหว่างทำ</option>
                             <option value="AFTER">✅ หลังเกี่ยวเสร็จ</option>
-                            <option value="SLIP">🧾 สลิปโอนเงิน</option>
+                            {/* 👇 ซ่อนตัวเลือกสลิปเงินจากคนขับ 👇 */}
+                            {userRole === 'BOSS' && <option value="SLIP">🧾 สลิปโอนเงิน</option>}
                             <option value="DAMAGE">⚠️ รถพัง/เสียหาย</option>
                             <option value="OTHER">📁 อื่นๆ</option>
                           </select>
@@ -1618,13 +1691,15 @@ function App() {
                             {jobAttachments.map((img, idx) => (
                               <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 shadow-sm cursor-pointer hover:opacity-90 transition group" onClick={(e) => { e.stopPropagation(); setFullScreenIndex(idx); }}>
                                 
-                                {/* ปุ่มกากบาทสีแดงสำหรับลบรูป */}
-                                <button 
-                                  onClick={(e) => handleDeleteImage(e, img.id, img.image_url, job.id)}
-                                  className="absolute top-1 right-1 bg-red-500/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
-                                >
-                                  ✕
-                                </button>
+                                {/* 👇 ซ่อนปุ่มกากบาทสีแดงสำหรับลบรูป (ให้เถ้าแก่ลบได้คนเดียว) 👇 */}
+                                {userRole === 'BOSS' && (
+                                  <button 
+                                    onClick={(e) => handleDeleteImage(e, img.id, img.image_url, job.id)}
+                                    className="absolute top-1 right-1 bg-red-500/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
 
                                 <img src={img.image_url} alt="job-attachment" className="w-full h-full object-cover" />
                                 
@@ -1649,9 +1724,18 @@ function App() {
 
                       {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
                       <div className="flex gap-2 pt-3 border-t border-gray-200">
-                        {job.status !== 'IN_PROGRESS' && <button onClick={() => updateStatus(job.id, 'IN_PROGRESS')} className="flex-1 bg-blue-500 hover:bg-blue-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition">▶️ เริ่มเกี่ยว</button>}
+                        {job.status !== 'IN_PROGRESS' && (
+                          <button 
+                            onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
+                            /* 👇 ขยายปุ่มให้ใหญ่ขึ้นถ้าเป็นคนขับ 👇 */
+                            className={`flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
+                          >
+                            ▶️ เริ่มเกี่ยว
+                          </button>
+                        )}
                         
-                        {job.status !== 'DONE' && (
+                        {/* 👇 ซ่อนปุ่มปิดจ๊อบให้โชว์เฉพาะเถ้าแก่ 👇 */}
+                        {userRole === 'BOSS' && job.status !== 'DONE' && (
                           <button 
                             onClick={(e) => { 
                               e.stopPropagation(); 
@@ -1660,18 +1744,28 @@ function App() {
                             }} 
                             className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
                           >
-                            ✅ เสร็จสิ้น
+                            ✅ ปิดจ๊อบ&คิดเงิน
                           </button>
                         )}
 
-                        {job.status !== 'PENDING' && <button onClick={() => updateStatus(job.id, 'PENDING')} className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition">⏳ รอคิว</button>}
+                        {/* 👇 ซ่อนปุ่มรอคิวให้โชว์เฉพาะเถ้าแก่ 👇 */}
+                        {userRole === 'BOSS' && job.status !== 'PENDING' && (
+                          <button 
+                            onClick={() => updateStatus(job.id, 'PENDING')} 
+                            className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
+                          >
+                            ⏳ รอคิว
+                          </button>
+                        )}
                       </div>
 
-                      {/* กลุ่มปุ่มแก้ไขข้อมูล */}
-                      <div className="flex gap-2 pt-2 mt-2">
-                        <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
-                        <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
-                      </div>
+                      {/* 👇 ซ่อนกลุ่มปุ่มแก้ไข/ลบงานจากคนขับ (แถมไปให้เพื่อความสมบูรณ์ครับ) 👇 */}
+                      {userRole === 'BOSS' && (
+                        <div className="flex gap-2 pt-2 mt-2">
+                          <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
+                        </div>
+                      )}
                     </div>
                   )}
                   
