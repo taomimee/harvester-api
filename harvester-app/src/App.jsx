@@ -515,6 +515,10 @@ function App() {
   const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
   const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
   
+  // 👇 เพิ่มโค้ดบรรทัดนี้ เพื่อคำนวณหางานที่ผิดนัด (เลยกำหนดวันมาแล้วแต่ยังไม่เสร็จ)
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const overdueJobs = jobs.filter(j => j.status !== 'DONE' && new Date(j.job_date) < todayStart);
+  
   const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
   const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
   
@@ -872,11 +876,11 @@ function App() {
     try {
       const payload = { status: newStatus, wageData: extraWageData };
       
-      // 💡 แก้บั๊กเวลา: ปรับให้เป็นเวลาประเทศไทย (Local Time) ก่อนส่งไปหลังบ้าน
-      if (newStatus === 'DONE') {
+      // 💡 อัปเกรด: ปรับเวลาให้เป็นปัจจุบัน (Local Time) ทันทีที่กด "เริ่มเกี่ยว" หรือ "เสร็จสิ้น"
+      if (newStatus === 'DONE' || newStatus === 'IN_PROGRESS') {
         const now = new Date();
-        now.setMinutes(now.getMinutes() - now.getTimezoneOffset()); // ชดเชยเวลาให้ตรงกับเขตเวลาของเครื่อง
-        payload.job_date = now.toISOString().slice(0, 16); // ตัดเอาแค่ ปี-เดือน-วันTชั่วโมง:นาที
+        now.setMinutes(now.getMinutes() - now.getTimezoneOffset()); 
+        payload.job_date = now.toISOString().slice(0, 16); 
       }
 
       const response = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/status`, {
@@ -1366,6 +1370,20 @@ function App() {
                     <p className="text-xs text-center text-gray-500 font-bold py-5">⏳ กำลังประมวลผลสภาพอากาศ...</p>
                   )}
                 </div>
+
+                {/* 👇 แจ้งเตือนงานผิดนัด/ค้าง (โชว์เฉพาะเวลามีงานค้างเท่านั้น) 👇 */}
+                {overdueJobs.length > 0 && (
+                  <div 
+                    onClick={() => setActiveTab('active')}
+                    className="flex items-center gap-3 bg-orange-50 p-2.5 rounded-lg border border-orange-200 cursor-pointer hover:bg-orange-100 transition mt-2 shadow-sm"
+                  >
+                    <div className="text-xl animate-bounce">⚠️</div>
+                    <div>
+                      <p className="text-xs font-bold text-orange-900">มีงานค้าง / ผิดนัด {overdueJobs.length} คิว</p>
+                      <p className="text-[10px] text-orange-700 font-semibold mt-0.5">กดเพื่อไปยังหน้าคิวงาน จัดการเลื่อนหรือเริ่มเกี่ยว</p>
+                    </div>
+                  </div>
+                )}
 
                 {/* แจ้งเตือนลูกหนี้ (ถ้ามี) */}
                 {debtorsList.length > 0 && (
