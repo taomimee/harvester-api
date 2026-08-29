@@ -348,6 +348,7 @@ function App() {
           vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null
         });
         fetchDashboard(); // รีเฟรชหน้าสรุปยอด
+        fetchExpenses();  // 👈 เติมบรรทัดนี้ เพื่อให้หน้ารายจ่ายรีเฟรชข้อมูลใหม่ทันที
       } else {
         // 💡 ดึงข้อความ Error จากฐานข้อมูลมาโชว์ให้รู้สาเหตุ
         const errData = await res.json();

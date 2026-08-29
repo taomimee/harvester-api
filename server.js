@@ -480,6 +480,23 @@ app.post('/api/transactions/expenses', upload.single('receipt'), async (req, res
     }
 });
 
+// เพิ่ม Route สำหรับดึงข้อมูลรายจ่าย
+app.get('/api/transactions/expenses', async (req, res) => {
+  try {
+    // ดึงข้อมูลจากตาราง transactions โดยกรองเอาเฉพาะรายการที่มีการระบุ category
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .not('category', 'is', null) // กรองเฉพาะรายการที่เป็นค่าใช้จ่าย
+      .order('transaction_date', { ascending: false }); // เรียงจากล่าสุดไปเก่าสุด
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ==========================================
 // 💸 API สำหรับจัดการสถานะการเงิน (ทวงหนี้)
