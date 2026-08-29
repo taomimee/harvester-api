@@ -2941,14 +2941,51 @@ function App() {
                 </div>
 
                 {/* แนบรูปใบเสร็จ */}
-                <div className="mt-2 bg-gray-50 p-3 rounded-lg border border-dashed border-gray-300">
-                   <label className="block text-gray-700 font-semibold mb-1 text-sm">🧾 แนบรูปใบเสร็จ</label>
-                   <input type="file" accept="image/*" onChange={e => setExpenseData({...expenseData, receipt: e.target.files[0]})} className="text-sm w-full" />
-                </div>
+                <div className="mt-3 bg-gray-50 p-3 rounded-lg border border-dashed border-gray-300">
+                   <label className="block text-gray-700 font-semibold mb-2 text-sm">🧾 แนบรูปใบเสร็จ</label>
+                   
+                   <div className="flex gap-2">
+                     {/* 👇 ปุ่มที่ 1: เปิดกล้องถ่ายรูปทันที (capture="environment") 👇 */}
+                     <label className="flex-1 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 py-2 rounded-xl text-xs font-bold text-center cursor-pointer transition shadow-sm flex flex-col items-center justify-center gap-1">
+                       <span className="text-xl">📸</span>
+                       <span>ถ่ายรูปใบเสร็จ</span>
+                       <input 
+                         type="file" 
+                         accept="image/*" 
+                         capture="environment" 
+                         onChange={e => setExpenseData({...expenseData, receipt: e.target.files[0]})} 
+                         className="hidden" 
+                       />
+                     </label>
 
-                <div className="flex gap-3 mt-5">
-                  <button type="button" onClick={() => setShowExpenseForm(false)} className="flex-1 bg-gray-200 text-gray-800 py-2.5 rounded-xl font-bold">ยกเลิก</button>
-                  <button type="submit" className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl font-bold shadow-lg transition">บันทึกรายจ่าย</button>
+                     {/* 👇 ปุ่มที่ 2: เลือกจากคลังภาพในเครื่อง 👇 */}
+                     <label className="flex-1 bg-white text-gray-700 border border-gray-300 hover:bg-gray-100 py-2 rounded-xl text-xs font-bold text-center cursor-pointer transition shadow-sm flex flex-col items-center justify-center gap-1">
+                       <span className="text-xl">🖼️</span>
+                       <span>เลือกจากคลัง</span>
+                       <input 
+                         type="file" 
+                         accept="image/*" 
+                         onChange={e => setExpenseData({...expenseData, receipt: e.target.files[0]})} 
+                         className="hidden" 
+                       />
+                     </label>
+                   </div>
+
+                   {/* 👇 โชว์ชื่อไฟล์เมื่อถ่ายรูปหรือเลือกรูปเสร็จแล้ว 👇 */}
+                   {expenseData.receipt && (
+                     <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg flex justify-between items-center text-xs text-green-800 font-bold shadow-inner">
+                       <span className="truncate max-w-[80%] flex items-center gap-1">
+                         ✅ {expenseData.receipt.name || 'แนบรูปภาพเรียบร้อย'}
+                       </span>
+                       <button 
+                         type="button" 
+                         onClick={() => setExpenseData({...expenseData, receipt: null})} 
+                         className="text-red-500 hover:text-red-700 px-2 py-1 bg-white rounded-md border border-red-100 shadow-sm"
+                       >
+                         ✕ ลบ
+                       </button>
+                     </div>
+                   )}
                 </div>
               </form>
             </div>
