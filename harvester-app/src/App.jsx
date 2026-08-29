@@ -1954,8 +1954,16 @@ function App() {
               </div>
             ) : (
               jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID')
-                .sort((a, b) => new Date(b.job_date) - new Date(a.job_date)) // เรียงจากเก่าไปใหม่
-                .map(job => (
+                .sort((a, b) => new Date(b.job_date) - new Date(a.job_date))
+                .map(job => {
+                  // 👇 คำนวณยอดที่จ่ายมาแล้ว โดยเอา (จำนวนไร่ x ราคาต่อไร่) มาลบด้วย ยอดคงเหลือ
+                  const originalPrice = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                  const isDeposit = job.payment_status === 'DEPOSIT';
+                  const paidAmount = (isDeposit && originalPrice > Number(job.total_price)) 
+                                      ? (originalPrice - Number(job.total_price)) 
+                                      : 0;
+
+                  return (
                   <div key={job.id} className="bg-white p-5 rounded-xl shadow-md border border-red-100 relative overflow-hidden">
                      <div className="absolute top-0 left-0 w-1.5 h-full bg-red-400"></div>
                      <div className="flex justify-between items-start mb-3 pl-2">
@@ -1976,12 +1984,22 @@ function App() {
                           </p>
                         </div>
                         <div className="text-right">
+                          {isDeposit && <span className="block text-[10px] text-gray-500 font-bold mb-0.5">เหลือค้างจ่าย:</span>}
                           <span className="block font-black text-red-600 text-2xl leading-none">
                             {Number(job.total_price).toLocaleString()} <span className="text-sm">฿</span>
                           </span>
-                          <span className={`inline-block px-2 py-1 rounded text-[10px] font-bold mt-1.5 ${job.payment_status === 'DEPOSIT' ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
-                            {job.payment_status === 'DEPOSIT' ? '💳 มัดจำแล้ว (ค้างส่วนต่าง)' : '⏳ ยังไม่จ่ายเลย'}
+                          
+                          {/* 👇 เปลี่ยนข้อความในป้าย เป็น "จ่ายบางส่วน (ค้างส่วนต่าง)" 👇 */}
+                          <span className={`inline-block px-2 py-1 rounded text-[10px] font-bold mt-1.5 ${isDeposit ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                            {isDeposit ? '💳 จ่ายบางส่วน (ค้างส่วนต่าง)' : '⏳ ยังไม่จ่ายเลย'}
                           </span>
+                          
+                          {/* 👇 โชว์ยอดที่จ่ายมาแล้ว (สีเขียวตัวเล็กๆ) 👇 */}
+                          {isDeposit && paidAmount > 0 && (
+                            <span className="block text-[10px] text-emerald-600 font-bold mt-1">
+                              (จ่ายมาแล้ว {paidAmount.toLocaleString()} ฿)
+                            </span>
+                          )}
                         </div>
                      </div>
                      
@@ -2074,7 +2092,8 @@ function App() {
                         )}
                      </div>
                   </div>
-              ))
+                );
+              })
             )}
           </div>
         )}
