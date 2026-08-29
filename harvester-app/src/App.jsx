@@ -496,7 +496,10 @@ function App() {
   }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
 
   const todayStr = new Date().toDateString();
-  const todayJobs = jobs.filter(j => new Date(j.job_date).toDateString() === todayStr);
+  // 💡 ดึงงานของวันนี้ "หรือ" งานที่กำลังเกี่ยวอยู่ (ค้างจากวันอื่น) มาโชว์ด้วย
+  const todayJobs = jobs.filter(j => 
+    new Date(j.job_date).toDateString() === todayStr || j.status === 'IN_PROGRESS'
+  );
   const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
   const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
   
@@ -1104,7 +1107,7 @@ function App() {
             {/* 3. คิวงานวันนี้ */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
               <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold text-gray-800 text-sm">📅 คิวงานวันนี้</h3>
+                <h3 className="font-bold text-gray-800 text-sm">📅 คิวงานวันนี้ & งานค้าง</h3>
                 <button onClick={() => setActiveTab('active')} className="text-xs text-orange-600 font-bold hover:underline">ดูทั้งหมด ▶</button>
               </div>
               
@@ -1114,14 +1117,28 @@ function App() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {todayJobs.sort((a, b) => new Date(a.job_date) - new Date(b.job_date)).map((job, idx) => {
-                    const timeStr = new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+                  {/* 👇 จัดเรียงให้งาน "กำลังเกี่ยว" ลอยขึ้นบนสุดเสมอ 👇 */}
+                  {todayJobs.sort((a, b) => {
+                    if (a.status === 'IN_PROGRESS' && b.status !== 'IN_PROGRESS') return -1;
+                    if (b.status === 'IN_PROGRESS' && a.status !== 'IN_PROGRESS') return 1;
+                    return new Date(a.job_date) - new Date(b.job_date);
+                  }).map((job, idx) => {
+                    const jobDate = new Date(job.job_date);
+                    const isToday = jobDate.toDateString() === todayStr;
+                    
+                    // ถ้าเป็นงานค้างจากเมื่อวาน ให้เพิ่ม วัน/เดือน เข้าไปหน้าเวลา
+                    const timeStr = isToday 
+                      ? jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+                      : `${jobDate.getDate()}/${jobDate.getMonth() + 1} ` + jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+                      
                     const isDone = job.status === 'DONE';
                     
                     return (
                       <div key={job.id} onClick={() => setActiveTab('active')} className={`flex items-center p-2.5 rounded-lg border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}>
                         <div className="w-14 shrink-0 text-center border-r border-gray-200 pr-2 mr-3">
                           <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-700'}`}>{timeStr}</span>
+                          {/* แจ้งเตือนเล็กๆ ถ้านี่คืองานค้างจากวันอื่น */}
+                          {!isToday && <span className="text-[9px] text-red-500 font-bold block mt-0.5">ค้าง!</span>}
                         </div>
                         <div className="flex-1">
                           <p className={`text-sm font-bold ${isDone ? 'text-green-800' : 'text-gray-900'}`}>{job.customers?.name}</p>
@@ -1185,23 +1202,37 @@ function App() {
                           <p className="text-xs font-semibold">{current.desc}</p>
                         </div>
 
-                        {/* 🕒 กล่องพยากรณ์ 12 ชั่วโมงข้างหน้า (เลื่อนซ้ายขวาได้) */}
+                        {/* 🕒 กล่องพยากรณ์ 24 ชั่วโมงข้างหน้า (เลื่อนซ้ายขวาได้) */}
                         <p className="text-[11px] font-bold text-gray-500 mb-1.5 flex justify-between items-center">
-                          <span>พยากรณ์ล่วงหน้า 12 ชั่วโมง:</span>
-                          <span className="text-[9px] bg-white px-2 py-0.5 rounded-full border shadow-sm animate-pulse">เลื่อนดู 👉</span>
+                          <span>พยากรณ์ล่วงหน้า 24 ชั่วโมง (1 วัน):</span>
+                          <span className="text-[9px] bg-white px-2 py-0.5 rounded-full border shadow-sm animate-pulse text-blue-600">เลื่อนดู 👉</span>
                         </p>
                         
-                        {/* 👇 เปลี่ยนเป็น Flex แบบล้นแล้ว Scroll ได้ และซ่อน Scrollbar 👇 */}
                         <div className="flex overflow-x-auto gap-2 pb-3 snap-x snap-mandatory [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-300 hover:[&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-thumb]:rounded-full">
-                          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(offset => {
+                          {/* 👇 เปลี่ยนเป็น Array.from เพื่อสร้าง 24 กล่องอัตโนมัติ ไม่ต้องพิมพ์เลขเอง */}
+                          {Array.from({ length: 24 }, (_, i) => i + 1).map(offset => {
                             const idx = hrIndex + offset;
                             if (!weatherData.hourly?.time || !weatherData.hourly.time[idx]) return null;
+                            
                             const t = new Date(weatherData.hourly.time[idx]);
                             const w = getThaiWeatherText(weatherData.hourly.weather_code[idx]);
+                            
+                            // 💡 เช็คว่าเวลาของกล่องนี้ ข้ามไปเป็นของ "วันพรุ่งนี้" หรือยัง
+                            const isTomorrow = t.getDate() !== new Date().getDate();
+
                             return (
-                              // กำหนดขนาดด้วย w-[30%] (ขนาดเทียบเท่า 3 กล่องพอดีจอ) และ shrink-0 ไม่ให้กล่องบีบตัวเอง
-                              <div key={offset} className={`snap-center shrink-0 w-[30%] p-2 rounded-lg border text-center flex flex-col justify-center ${w.bg} ${w.border} ${w.color} shadow-sm`}>
-                                <p className="text-[10px] font-bold mb-1 opacity-80">{t.getHours()}:00 น.</p>
+                              <div key={offset} className={`snap-center shrink-0 w-[30%] p-2 rounded-lg border text-center flex flex-col justify-center shadow-sm relative overflow-hidden ${w.bg} ${w.border} ${w.color}`}>
+                                
+                                {/* ถ้าเป็นของวันพรุ่งนี้ ให้มีแถบสีเตือนด้านบนเล็กๆ */}
+                                {isTomorrow && (
+                                  <div className="absolute top-0 left-0 right-0 bg-blue-500/20 text-blue-800 text-[8px] py-0.5 font-bold">
+                                    พรุ่งนี้
+                                  </div>
+                                )}
+                                
+                                <p className={`text-[10px] font-bold mb-1 opacity-80 ${isTomorrow ? 'mt-3' : ''}`}>
+                                  {t.getHours()}:00 น.
+                                </p>
                                 <p className="text-xl leading-none mb-1">{w.text.split(' ')[1]}</p>
                                 <p className="text-[9px] font-bold leading-tight">{w.text.split(' ')[0]}</p>
                               </div>
