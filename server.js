@@ -498,6 +498,22 @@ app.get('/api/transactions/expenses', async (req, res) => {
   }
 });
 
+// เพิ่ม Route สำหรับลบรายจ่าย
+app.delete('/api/transactions/:id', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 💸 API สำหรับจัดการสถานะการเงิน (ทวงหนี้)
 app.patch('/api/jobs/:id/payment', async (req, res) => {

@@ -359,6 +359,26 @@ function App() {
       alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
   };
+  
+  // 👇 ฟังก์ชันสำหรับลบรายจ่าย/ค่าแรง 👇
+  const handleDeleteExpense = async (id) => {
+    if (!window.confirm('⚠️ แน่ใจหรือไม่ว่าต้องการ "ลบทิ้ง" ?\n(ยอดเงินจะถูกดึงกลับคืนอัตโนมัติ)')) return;
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/transactions/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        alert('🗑️ ลบรายการเรียบร้อย');
+        fetchExpenses();  // รีเฟรชหน้ารายจ่าย
+        fetchDashboard(); // รีเฟรชยอดรวมหน้า Dashboard
+      } else {
+        alert('❌ ลบไม่สำเร็จ');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    }
+  };
 
 // 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
   useEffect(() => {
@@ -2265,11 +2285,20 @@ function App() {
                            <span className="block font-black text-red-500 text-xl leading-none">
                              -{Number(tx.total_amount).toLocaleString()} <span className="text-sm">฿</span>
                            </span>
-                           {tx.receipt_url && (
-                             <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md font-bold hover:bg-blue-100 transition shadow-sm">
-                               🧾 ดูใบเสร็จ
-                             </a>
-                           )}
+                           <div className="flex flex-col items-end gap-1.5 mt-2">
+                             {tx.receipt_url && (
+                               <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-block text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md font-bold hover:bg-blue-100 transition shadow-sm">
+                                 🧾 ดูใบเสร็จ
+                               </a>
+                             )}
+                             {/* 👇 ปุ่มลบทิ้ง 👇 */}
+                             <button 
+                               onClick={() => handleDeleteExpense(tx.id)}
+                               className="inline-block text-[10px] bg-red-50 text-red-600 border border-red-200 px-2.5 py-1 rounded-md font-bold hover:bg-red-100 transition shadow-sm"
+                             >
+                               🗑️ ลบทิ้ง
+                             </button>
+                           </div>
                          </div>
                        </div>
                     </div>
