@@ -1058,49 +1058,34 @@ function App() {
           )}
         </div>
 
-        {/* 👇 แถบสมุดจดค่าแรงส่วนตัว (สำหรับคนขับ) 👇 */}
+        {/* 👇 แถบสมุดจดค่าแรง (สำหรับคนขับ - แบบการ์ดกดได้เลย) 👇 */}
         {userRole === 'DRIVER' && (
-          <div className="bg-gradient-to-br from-blue-100 to-indigo-50 border border-blue-200 p-4 rounded-2xl mb-5 shadow-sm relative overflow-hidden">
+          <div 
+            onClick={() => {
+              setWageFilter([]); // 💡 ไม่กรองชื่อ โชว์หน้าเต็มรวมทุกคนแบบเถ้าแก่เลย
+              setShowWageSummary(true);
+              fetchWages(); 
+            }}
+            className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-4 rounded-2xl mb-5 shadow-md cursor-pointer transition flex items-center justify-between group relative overflow-hidden"
+          >
             {/* ลายน้ำตกแต่ง */}
-            <div className="absolute -right-2 -bottom-2 text-6xl opacity-10 drop-shadow-md pointer-events-none">💰</div>
-
-            <div className="relative z-10">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm tracking-wide">ส่วนตัว</span>
-                <h3 className="font-black text-blue-900 text-sm">ระบบสรุปยอดค่าแรง</h3>
+            <div className="absolute -right-2 -bottom-2 text-6xl opacity-10 drop-shadow-md pointer-events-none group-hover:scale-110 transition-transform duration-300">💰</div>
+            
+            <div className="flex items-center gap-3 relative z-10">
+              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl shadow-inner backdrop-blur-sm">
+                💰
               </div>
-              <p className="text-[11px] text-blue-700/80 font-bold mb-3">เลือกระบุชื่อของคุณ เพื่อดูภาพรวมรายได้และยอดส่วนแบ่ง</p>
-
-              <div className="flex flex-col gap-2.5">
-                <div className="flex bg-white rounded-xl border border-blue-300 p-1 shadow-inner items-center">
-                  <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-lg flex items-center justify-center text-lg border border-blue-100 shrink-0">
-                    👨‍🌾
-                  </div>
-                  <select 
-                    className="flex-1 bg-transparent px-3 font-bold text-blue-900 outline-none text-sm w-full"
-                    value={currentDriverName}
-                    onChange={e => setCurrentDriverName(e.target.value)}
-                  >
-                    <option value="" className="text-gray-400 font-normal">-- เลือกระบุตัวตนคนขับ --</option>
-                    <option value="พี่ยันต์">พี่ยันต์</option>
-                    <option value="จักร กฤษณ์">จักร กฤษณ์</option>
-                  </select>
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="bg-white text-teal-800 text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm tracking-wide">ทีมงาน</span>
                 </div>
-                
-                {/* ปุ่มดูสมุดค่าแรง (จะโผล่มาเมื่อเลือกชื่อแล้ว) */}
-                {currentDriverName && (
-                   <button 
-                     onClick={() => {
-                       setWageFilter([currentDriverName]); // บังคับกรองเฉพาะชื่อตัวเอง
-                       setShowWageSummary(true);
-                       fetchWages(); // ดึงข้อมูลค่าแรงล่าสุด
-                     }}
-                     className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-3 rounded-xl shadow-md transition flex justify-center items-center gap-2"
-                   >
-                     <span>📊</span> ดูภาพรวมค่าแรงของ {currentDriverName}
-                   </button>
-                )}
+                <h3 className="font-black text-base tracking-wide leading-tight">สมุดจดค่าแรง</h3>
+                <p className="text-[11px] text-emerald-100 font-semibold mt-0.5">กดเพื่อดูยอดค่าแรงและเงินส่วนแบ่งทั้งหมด</p>
               </div>
+            </div>
+            
+            <div className="text-xl font-bold bg-white/10 w-9 h-9 rounded-full flex items-center justify-center group-hover:translate-x-1 transition relative z-10">
+              ▶
             </div>
           </div>
         )}
@@ -2543,30 +2528,35 @@ function App() {
                          </div>
                        </div>
 
-                       {/* 👇 การ์ดปุ่มกด "สรุปยอดค่าแรง" สำหรับคนขับ (หน้าตาแบบของเถ้าแก่ แต่ไม่มีปุ่มจ่ายเงิน) 👇 */}
-        {userRole === 'DRIVER' && (
-          <div 
-            onClick={() => {
-              setWageFilter([]); // ไม่ต้องกรองชื่อ ให้โชว์ทั้งหมดเหมือนของเถ้าแก่
-              setShowWageSummary(true);
-              fetchWages();
-            }}
-            className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-4 rounded-2xl mb-4 shadow-md cursor-pointer transition flex items-center justify-between group"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl shadow-inner backdrop-blur-sm">
-                💰
-              </div>
-              <div>
-                <h3 className="font-black text-base tracking-wide">สมุดจดค่าแรง</h3>
-                <p className="text-xs text-emerald-100 font-semibold mt-0.5">กดเพื่อตรวจสอบยอดค่าแรงและเงินส่วนแบ่งทั้งหมด</p>
-              </div>
-            </div>
-            <div className="text-xl font-bold bg-white/10 w-9 h-9 rounded-full flex items-center justify-center group-hover:translate-x-1 transition">
-              ▶
-            </div>
-          </div>
-        )}
+                       {/* กดเพื่อจ่ายเงิน (จะกดจ่ายได้ก็ต่อเมื่อ "ไม่ได้ติ๊กกรองชื่อ") */}
+                       {wageTab === 'UNPAID' && (
+                         wageFilter.length === 0 ? (
+                           <button 
+                             onClick={async () => {
+                               if(!window.confirm('ยืนยันว่าเคลียร์ยอดนี้ให้ลูกจ้าง (ทุกคนในบิล) แล้วใช่ไหม?')) return;
+                               try {
+                                 const now = new Date();
+                                 now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                                 const paid_at = now.toISOString();
+
+                                 await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
+                                   method: 'PATCH',
+                                   headers: { 'Content-Type': 'application/json' },
+                                   body: JSON.stringify({ status: 'PAID', paid_at })
+                                 });
+                                 fetchWages(); 
+                               } catch(e) { console.error(e); }
+                             }}
+                             className="w-full bg-gray-50 hover:bg-green-50 text-gray-600 hover:text-green-700 border border-gray-200 hover:border-green-300 font-bold py-2 rounded-lg text-sm transition flex items-center justify-center gap-2"
+                           >
+                             ✅ จ่ายเงินยอดเต็มบิลนี้แล้ว
+                           </button>
+                         ) : (
+                           <div className="text-[10px] text-center text-red-400 font-bold bg-red-50 py-1.5 rounded-lg border border-red-100">
+                             *กดยกเลิกตัวกรองชื่อ เพื่อกดปุ่มทำรายการจ่ายเงิน
+                           </div>
+                         )
+                       )}
                     </div>
                   )
                 })}
