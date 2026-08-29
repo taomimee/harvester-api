@@ -1217,11 +1217,28 @@ function App() {
                     return (
                       <div 
                         key={job.id} 
-                        // 👇 แก้ไขตรง onClick ให้ทำ 3 อย่างพร้อมกัน 👇
+                        // 👇 แก้ไขตรง onClick ให้ทำระบบ "ล็อกเป้า" เลื่อนจอไปหาการ์ดอัตโนมัติ 👇
                         onClick={() => {
                           setActiveTab('active'); // 1. ย้ายไปหน้าคิวงาน
                           setExpandedId(job.id);  // 2. สั่งกางการ์ดงานนี้ออกทันที
-                          window.scrollTo({ top: 0, behavior: 'smooth' }); // 3. (แถมให้) เลื่อนจอขึ้นบนสุดนิ่มๆ จะได้เห็นการ์ดชัดๆ
+                          
+                          // 3. หน่วงเวลา 0.1 วิให้หน้าคิวงานโหลดเสร็จ แล้วสไลด์ตามไปหาการ์ดนั้น
+                          setTimeout(() => {
+                            const targetCard = document.getElementById(`job-card-${job.id}`);
+                            if (targetCard) {
+                              // เลื่อนจอให้การ์ดมาอยู่ตรงกลาง
+                              targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              
+                              // แถมลูกเล่นไฮไลท์กรอบสีส้มกระพริบ 2 วินาที
+                              targetCard.classList.add('ring-4', 'ring-orange-500', 'scale-[1.02]');
+                              setTimeout(() => {
+                                targetCard.classList.remove('ring-4', 'ring-orange-500', 'scale-[1.02]');
+                              }, 2000);
+                            } else {
+                              // ถ้าหาไม่เจอจริงๆ ค่อยเลื่อนขึ้นบนสุดแก้ขัด
+                              window.scrollTo({ top: 0, behavior: 'smooth' }); 
+                            }
+                          }, 100);
                         }} 
                         className={`flex items-center p-2.5 rounded-lg border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}
                       >
@@ -1560,7 +1577,11 @@ function App() {
               const assignedVehicle = vehicles.find(v => v.id === job.vehicle_id);
 
               return (
-                <div key={job.id} className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
+                <div 
+                  key={job.id} 
+                  id={`job-card-${job.id}`} 
+                  className="bg-white rounded-xl p-5 shadow-md border border-gray-200 transition-all duration-500"
+                >
                   <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2 mb-3">
                     <div className="text-indigo-800 font-bold text-sm flex justify-between px-1">
                       <span>📅 {jobDateTime.date}</span>
