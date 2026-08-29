@@ -2107,10 +2107,13 @@ function App() {
                  <span className="block text-xs text-green-700 font-bold mb-1">ยอดรับรวมทั้งหมด</span>
                  <span className="text-3xl font-black text-green-600">
                    {jobs.filter(j => j.payment_status === 'PAID' || j.payment_status === 'DEPOSIT').reduce((sum, j) => {
-                      if (j.payment_status === 'PAID') return sum + (Number(j.total_price) || 0);
-                      // ดึงยอดมัดจำมารวมเป็นรายได้
-                      const originalPrice = Number(j.area_size || 0) * Number(j.price_per_rai || 0);
-                      const paidAmount = originalPrice > Number(j.total_price) ? originalPrice - Number(j.total_price) : 0;
+                      // 💡 สมองกลคำนวณยอดจริง (ดึงพื้นที่ x ราคา มาเปรียบเทียบ)
+                      const orig = Number(j.area_size || 0) * Number(j.price_per_rai || 0);
+                      const trueTotal = orig > Number(j.total_price) ? orig : (Number(j.total_price) || 0);
+
+                      if (j.payment_status === 'PAID') return sum + trueTotal;
+                      
+                      const paidAmount = trueTotal > Number(j.total_price) ? trueTotal - Number(j.total_price) : 0;
                       return sum + paidAmount;
                    }, 0).toLocaleString()} <span className="text-sm">฿</span>
                  </span>
@@ -2128,9 +2131,11 @@ function App() {
                   .slice(0, 50)
                   .map(job => {
                     const isDeposit = job.payment_status === 'DEPOSIT';
-                    const originalPrice = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
-                    // ถ้ารายการนี้เป็นมัดจำ ให้โชว์แค่ยอดเงินที่รับมาแล้ว
-                    const displayIncome = isDeposit ? (originalPrice - Number(job.total_price)) : Number(job.total_price);
+                    // 💡 ดึงยอดจริงมาแสดง
+                    const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                    const trueTotal = orig > Number(job.total_price) ? orig : (Number(job.total_price) || 0);
+                    
+                    const displayIncome = isDeposit ? (trueTotal - Number(job.total_price)) : trueTotal;
 
                     return (
                     <div key={job.id} className={`bg-white p-4 rounded-xl shadow-md relative overflow-hidden flex justify-between items-center ${isDeposit ? 'border border-amber-100' : 'border border-green-100'}`}>
