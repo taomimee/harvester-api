@@ -442,13 +442,13 @@ app.post('/api/transactions/expenses', upload.single('receipt'), async (req, res
             const fileName = `expense_${Date.now()}.${fileExt}`;
             
             const { data: storageData, error: storageError } = await supabase.storage
-                .from('receipts') // แนะนำให้สร้าง Bucket ใหม่ชื่อ receipts
+                .from('job-attachments') // ✅ เปลี่ยนเป็นชื่อถังที่มีอยู่แล้ว
                 .upload(fileName, file.buffer, { contentType: file.mimetype });
             
             if (storageError) throw storageError;
 
             const { data: publicUrlData } = supabase.storage
-                .from('receipts')
+                .from('job-attachments') // ✅ เปลี่ยนเป็นชื่อถังที่มีอยู่แล้ว
                 .getPublicUrl(fileName);
             receiptUrl = publicUrlData.publicUrl;
         }
