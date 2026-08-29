@@ -1999,7 +1999,7 @@ function App() {
                 <div className="relative z-10 flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.18em] text-indigo-200 font-black">ACCOUNT CENTER</p>
-                    <h2 className="text-2xl font-black mt-1">📊 บัญชีหลัก</h2>
+                    <h2 className="text-2xl font-black mt-1 text-white drop-shadow-md">📊 บัญชีหลัก</h2>
                     <p className="text-xs text-indigo-100/80 mt-1">ภาพรวมการเงินและผลประกอบการ • {monthName} {dashYear + 543}</p>
                   </div>
                 </div>
