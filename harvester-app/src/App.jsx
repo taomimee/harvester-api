@@ -1215,7 +1215,16 @@ function App() {
                     const isDone = job.status === 'DONE';
                     
                     return (
-                      <div key={job.id} onClick={() => setActiveTab('active')} className={`flex items-center p-2.5 rounded-lg border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}>
+                      <div 
+                        key={job.id} 
+                        // 👇 แก้ไขตรง onClick ให้ทำ 3 อย่างพร้อมกัน 👇
+                        onClick={() => {
+                          setActiveTab('active'); // 1. ย้ายไปหน้าคิวงาน
+                          setExpandedId(job.id);  // 2. สั่งกางการ์ดงานนี้ออกทันที
+                          window.scrollTo({ top: 0, behavior: 'smooth' }); // 3. (แถมให้) เลื่อนจอขึ้นบนสุดนิ่มๆ จะได้เห็นการ์ดชัดๆ
+                        }} 
+                        className={`flex items-center p-2.5 rounded-lg border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}
+                      >
                         <div className="w-14 shrink-0 text-center border-r border-gray-200 pr-2 mr-3">
                           <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-700'}`}>{timeStr}</span>
                           {/* แจ้งเตือนเล็กๆ ถ้านี่คืองานค้างจากวันอื่น */}
@@ -1744,7 +1753,7 @@ function App() {
                             }} 
                             className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
                           >
-                            ✅ ปิดจ๊อบ&คิดเงิน
+                            ✅ เสร็จสิ้น
                           </button>
                         )}
 
