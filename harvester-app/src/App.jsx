@@ -421,6 +421,16 @@ function App() {
     } catch (err) { console.error("ดึงข้อมูลค่าแรงไม่ได้:", err); }
   };
 
+  // 👇 เพิ่ม State และฟังก์ชันดึงประวัติรายจ่าย 👇
+  const [expenseTransactions, setExpenseTransactions] = useState([]);
+  const fetchExpenses = async () => {
+    try {
+      const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/expenses');
+      const data = await res.json();
+      setExpenseTransactions(data || []);
+    } catch (err) { console.error("ดึงข้อมูลรายจ่ายไม่ได้:", err); }
+  };
+
   const fetchDashboard = async () => {
     setIsFetchingDash(true);
     try {
@@ -1127,6 +1137,7 @@ function App() {
              <button onClick={() => { setFinanceSubTab('dashboard'); fetchDashboard(); }} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'dashboard' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📊 สรุปยอด</button>
              <button onClick={() => setFinanceSubTab('debt')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'debt' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ลูกหนี้</button>
              <button onClick={() => setFinanceSubTab('income')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'income' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💵 รับเงิน</button>
+             <button onClick={() => { setFinanceSubTab('expense'); fetchExpenses(); }} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'expense' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📉 รายจ่าย</button>
              <button onClick={() => setFinanceSubTab('history')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'history' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📋 ประวัติ</button>
           </div>
         )}
@@ -2190,6 +2201,63 @@ function App() {
                        </div>
                     </div>
                   )})
+            )}
+          </div>
+        )}
+
+        {/* 📉 หน้าจอประวัติรายจ่าย */}
+        {activeTab === 'finance' && financeSubTab === 'expense' && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-r from-orange-50 to-red-50 p-5 rounded-xl border border-orange-200 shadow-sm flex justify-between items-center">
+               <div>
+                 <h2 className="text-lg font-black text-orange-800">📉 ประวัติรายจ่าย</h2>
+                 <p className="text-xs text-orange-600 font-semibold mt-1">ค่าน้ำมัน, ซ่อมบำรุง, จิปาถะ</p>
+               </div>
+               <div className="text-right">
+                 <span className="block text-xs text-orange-700 font-bold mb-1">ยอดจ่ายรวมทั้งหมด</span>
+                 <span className="text-3xl font-black text-red-600">
+                   {expenseTransactions.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0).toLocaleString()} <span className="text-sm">฿</span>
+                 </span>
+               </div>
+            </div>
+
+            {expenseTransactions.length === 0 ? (
+               <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
+                 <span className="text-4xl mb-2 block">🍃</span>
+                 <p className="font-bold">ยังไม่มีประวัติการบันทึกรายจ่าย</p>
+              </div>
+            ) : (
+              expenseTransactions
+                  .sort((a, b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at))
+                  .map(tx => (
+                    <div key={tx.id} className="bg-white p-4 rounded-xl shadow-md border border-orange-100 relative overflow-hidden flex flex-col gap-2">
+                       <div className="absolute top-0 left-0 w-1.5 h-full bg-orange-400"></div>
+                       <div className="flex justify-between items-start pl-2">
+                         <div>
+                           <div className="flex items-center gap-2 mb-1">
+                             <span className="bg-orange-100 text-orange-800 text-[10px] px-2 py-0.5 rounded-md font-bold border border-orange-200">
+                               {tx.category || 'ทั่วไป'}
+                             </span>
+                             <span className="text-[11px] text-gray-500 font-bold">
+                               📅 {tx.transaction_date ? new Date(tx.transaction_date).toLocaleDateString('th-TH') : ''}
+                             </span>
+                           </div>
+                           <h3 className="font-bold text-gray-900 text-sm mt-1.5">ผู้จ่าย: {tx.spender_name || 'ไม่ระบุ'}</h3>
+                           <p className="text-[11px] text-gray-600 mt-0.5">📝 {tx.note || '-'}</p>
+                         </div>
+                         <div className="text-right shrink-0">
+                           <span className="block font-black text-red-500 text-xl leading-none">
+                             -{Number(tx.total_amount).toLocaleString()} <span className="text-sm">฿</span>
+                           </span>
+                           {tx.receipt_url && (
+                             <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md font-bold hover:bg-blue-100 transition shadow-sm">
+                               🧾 ดูใบเสร็จ
+                             </a>
+                           )}
+                         </div>
+                       </div>
+                    </div>
+                  ))
             )}
           </div>
         )}
