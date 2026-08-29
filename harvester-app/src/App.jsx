@@ -2230,21 +2230,36 @@ function App() {
             ) : (
               expenseTransactions
                   .sort((a, b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at))
-                  .map(tx => (
-                    <div key={tx.id} className="bg-white p-4 rounded-xl shadow-md border border-orange-100 relative overflow-hidden flex flex-col gap-2">
-                       <div className="absolute top-0 left-0 w-1.5 h-full bg-orange-400"></div>
+                  .map(tx => {
+                    // 💡 เช็คว่าเป็นค่าแรงหรือไม่ เพื่อปรับหน้าตาให้เข้ากัน
+                    const isWage = tx.category === 'WAGE' || tx.category === 'ค่าแรง';
+                    // 💡 ดึงเวลาจ่าย (ถ้าไม่มีให้ใช้เวลาลงระบบแทน)
+                    const displayDate = tx.transaction_date || tx.created_at;
+
+                    return (
+                    <div key={tx.id} className={`bg-white p-4 rounded-xl shadow-md relative overflow-hidden flex flex-col gap-2 ${isWage ? 'border-red-100' : 'border-orange-100'}`}>
+                       <div className={`absolute top-0 left-0 w-1.5 h-full ${isWage ? 'bg-red-400' : 'bg-orange-400'}`}></div>
                        <div className="flex justify-between items-start pl-2">
-                         <div>
+                         <div className="flex-1 pr-2">
                            <div className="flex items-center gap-2 mb-1">
-                             <span className="bg-orange-100 text-orange-800 text-[10px] px-2 py-0.5 rounded-md font-bold border border-orange-200">
-                               {tx.category || 'ทั่วไป'}
+                             <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${isWage ? 'bg-red-100 text-red-800 border-red-200' : 'bg-orange-100 text-orange-800 border-orange-200'}`}>
+                               {tx.category === 'WAGE' ? 'ค่าแรง' : (tx.category || 'ทั่วไป')}
                              </span>
                              <span className="text-[11px] text-gray-500 font-bold">
-                               📅 {tx.transaction_date ? new Date(tx.transaction_date).toLocaleDateString('th-TH') : ''}
+                               📅 {displayDate ? new Date(displayDate).toLocaleDateString('th-TH') : ''}
                              </span>
                            </div>
-                           <h3 className="font-bold text-gray-900 text-sm mt-1.5">ผู้จ่าย: {tx.spender_name || 'ไม่ระบุ'}</h3>
-                           <p className="text-[11px] text-gray-600 mt-0.5">📝 {tx.note || '-'}</p>
+                           
+                           {/* 💡 ปรับการแสดงผล "ผู้จ่าย" ให้เหมาะกับงานแต่ละประเภท */}
+                           {isWage ? (
+                             <h3 className="font-bold text-gray-900 text-sm mt-1.5">จ่ายค่าแรงทีมงาน</h3>
+                           ) : (
+                             <h3 className="font-bold text-gray-900 text-sm mt-1.5">ผู้จ่าย: {tx.spender_name || 'ไม่ระบุ'}</h3>
+                           )}
+                           
+                           <p className={`text-[11px] mt-0.5 ${isWage ? 'text-blue-700 font-semibold' : 'text-gray-600'}`}>
+                             {isWage ? '👷‍♂️' : '📝'} {tx.note || '-'}
+                           </p>
                          </div>
                          <div className="text-right shrink-0">
                            <span className="block font-black text-red-500 text-xl leading-none">
@@ -2258,7 +2273,7 @@ function App() {
                          </div>
                        </div>
                     </div>
-                  ))
+                  )})
             )}
           </div>
         )}
