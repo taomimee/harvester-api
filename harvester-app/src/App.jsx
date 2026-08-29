@@ -251,8 +251,10 @@ function App() {
   const [isFetchingDash, setIsFetchingDash] = useState(false);
   const [radarOverride, setRadarOverride] = useState(null); 
   
-  // 🔐 State สำหรับระบบ 2 ร่าง (ค่าเริ่มต้นเป็น DRIVER เปิดมาใช้งานได้เลย)
-  const [userRole, setUserRole] = useState('DRIVER'); 
+  // 🔐 State สำหรับระบบ 2 ร่าง (ดึงค่าความจำจากเครื่องก่อน ถ้าไม่มีค่อยเป็น DRIVER)
+  const [userRole, setUserRole] = useState(() => {
+    return localStorage.getItem('harvester_role') || 'DRIVER';
+  });
   const [currentDriverName, setCurrentDriverName] = useState(''); // เก็บชื่อคนขับเพื่อให้ดึงค่าแรงถูกคน
 
   // 👇 เพิ่ม State ดึงพิกัดอัตโนมัติตอนเปิดเว็บ 👇
@@ -995,14 +997,15 @@ function App() {
         {/* 🐘 Header ช้างขาวเจริญทรัพย์ (พร้อมทางลับเถ้าแก่) */}
         <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
           
-          {/* 👇 ทางลับเถ้าแก่ (ปุ่มกุญแจมุมขวาบน) 👇 */}
+          {/* 👇 ทางลับเถ้าแก่ (ปุ่มกุญแจมุมขวาบน - อัปเกรดจำสถานะ) 👇 */}
           <div 
             className="absolute top-3 right-3 z-50 bg-black/20 hover:bg-black/40 backdrop-blur-sm p-1.5 rounded-full cursor-pointer transition text-xs border border-white/10"
             onClick={() => {
               if (userRole === 'DRIVER') {
                 const pin = window.prompt("🧑‍💼 โหมดเถ้าแก่\nกรุณาใส่รหัสผ่าน (PIN):");
-                if (pin === '9999') { // 👈 เปลี่ยนรหัสผ่านตรงนี้ได้เลยครับ
+                if (pin === '9999') { 
                   setUserRole('BOSS');
+                  localStorage.setItem('harvester_role', 'BOSS'); // 💾 สั่งจำลงเครื่อง
                   alert("✅ เข้าสู่โหมดเถ้าแก่เรียบร้อย");
                 } else if (pin) {
                   alert("❌ รหัสผ่านไม่ถูกต้อง");
@@ -1010,6 +1013,7 @@ function App() {
               } else {
                 if (window.confirm("ต้องการออกจากโหมดเถ้าแก่ กลับไปเป็นโหมดคนขับ ใช่หรือไม่?")) {
                   setUserRole('DRIVER');
+                  localStorage.setItem('harvester_role', 'DRIVER'); // 💾 ล้างความจำกลับเป็นคนขับ
                 }
               }
             }}
