@@ -1906,123 +1906,132 @@ function App() {
           </div>
         )}
 
-        {/* 📊 บัญชีหลัก (Account Dashboard) */}
+        {/* 📊 หน้าจอ Dashboard (อัปเกรดแบบมืออาชีพ) */}
         {activeTab === 'finance' && financeSubTab === 'dashboard' && (
-          <div className="bg-gray-50 rounded-2xl p-4 shadow-md border border-gray-200 font-sans">
+          <div className="space-y-4">
             
-            {/* Header & Filter */}
-            <div className="flex justify-between items-end pb-4 border-b border-gray-200 mb-4">
-              <div>
-                <h2 className="text-xl font-black text-gray-800 flex items-center gap-2">📊 บัญชีหลัก</h2>
-                <p className="text-[10px] text-gray-500 mt-1 font-semibold">อัปเดตล่าสุด {new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.</p>
-              </div>
-              <select className="bg-white border border-gray-300 rounded-lg p-1.5 text-xs font-bold text-gray-700 shadow-sm outline-none focus:ring-2 focus:ring-indigo-400">
-                <option>สิงหาคม 2569</option>
-                <option>วันนี้</option>
-                <option>เดือนนี้</option>
-                <option>ปีนี้</option>
-              </select>
-            </div>
+            {/* ปุ่มบันทึกค่าใช้จ่าย (ดึงขึ้นมาเด่นๆ กดง่ายๆ) */}
+            <button 
+              onClick={() => setShowExpenseForm(true)}
+              className="w-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white font-bold py-3.5 rounded-2xl shadow-md transition transform active:scale-95 flex justify-center items-center gap-2 border border-red-400"
+            >
+              <span className="text-xl">➕</span> บันทึกค่าใช้จ่าย (น้ำมัน, ซ่อม, จิปาถะ)
+            </button>
 
-            {/* Hero Section: กระแสเงินสด & กำไร */}
-            <div className="space-y-3 mb-4">
-              <div className="bg-gradient-to-r from-emerald-500 to-teal-600 p-5 rounded-2xl shadow-lg text-white relative overflow-hidden">
-                <div className="absolute -right-4 -bottom-4 text-7xl opacity-10">💰</div>
-                <p className="text-emerald-100 text-xs font-bold mb-1">เงินรับจริง (CASH IN)</p>
-                <p className="text-4xl font-black tracking-tight">185,500 <span className="text-lg font-normal">บาท</span></p>
-              </div>
-
-              <div className="bg-gradient-to-r from-indigo-600 to-purple-700 p-5 rounded-2xl shadow-lg text-white relative overflow-hidden">
-                <div className="absolute -right-4 -bottom-4 text-7xl opacity-10">📈</div>
-                <p className="text-indigo-200 text-xs font-bold mb-1">กำไรสุทธิ (NET PROFIT)</p>
-                <p className="text-4xl font-black tracking-tight">112,800 <span className="text-lg font-normal">บาท</span></p>
-              </div>
-            </div>
-
-            {/* Sub-Hero: ลูกหนี้ & เงินออก */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm">
-                <p className="text-amber-800 text-[11px] font-bold mb-1">💳 ลูกหนี้คงเหลือ</p>
-                <p className="text-2xl font-black text-amber-600">32,500 <span className="text-xs">฿</span></p>
-              </div>
-              <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 shadow-sm">
-                <p className="text-rose-800 text-[11px] font-bold mb-1">💸 เงินออกจริง</p>
-                <p className="text-2xl font-black text-rose-600">72,700 <span className="text-xs">฿</span></p>
-              </div>
-            </div>
-
-            {/* KPI: ผลงานเดือนนี้ */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
-              <p className="text-gray-800 text-sm font-bold mb-3 border-b pb-2 flex items-center gap-2">🌾 ผลงานเดือนนี้</p>
-              <div className="grid grid-cols-2 gap-y-3 text-sm">
-                <div>
-                  <span className="block text-[10px] text-gray-500 font-bold">พื้นที่รวม / จำนวนงาน</span>
-                  <span className="font-black text-gray-800">520 ไร่ <span className="text-xs font-normal text-gray-500">| 38 งาน</span></span>
-                </div>
-                <div>
-                  <span className="block text-[10px] text-gray-500 font-bold">รายได้เฉลี่ย</span>
-                  <span className="font-black text-emerald-600">590 ฿ <span className="text-xs font-normal text-gray-500">/ ไร่</span></span>
-                </div>
-                <div>
-                  <span className="block text-[10px] text-gray-500 font-bold">ต้นทุนเฉลี่ย</span>
-                  <span className="font-black text-rose-600">210 ฿ <span className="text-xs font-normal text-gray-500">/ ไร่</span></span>
-                </div>
-                <div>
-                  <span className="block text-[10px] text-gray-500 font-bold">กำไรเฉลี่ย</span>
-                  <span className="font-black text-indigo-600">380 ฿ <span className="text-xs font-normal text-gray-500">/ ไร่</span></span>
+            <div className="bg-white rounded-2xl p-5 shadow-md border border-gray-100">
+              
+              {/* ส่วนหัว: ชื่อหน้า & ตัวกรองเดือน/ปี */}
+              <div className="flex justify-between items-center mb-5 pb-4 border-b border-gray-100">
+                <h2 className="text-lg font-black text-gray-800 flex items-center gap-2">
+                  <span className="text-2xl">📊</span> ภาพรวมบัญชี
+                </h2>
+                <div className="flex gap-2">
+                  <select 
+                    className="border border-gray-200 p-1.5 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none text-xs focus:ring-2 focus:ring-purple-400"
+                    value={dashMonth} onChange={(e) => setDashMonth(Number(e.target.value))}
+                  >
+                    {["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"].map((m, i) => (
+                      <option key={i} value={i + 1}>{m}</option>
+                    ))}
+                  </select>
+                  <select 
+                    className="border border-gray-200 p-1.5 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none text-xs focus:ring-2 focus:ring-purple-400"
+                    value={dashYear} onChange={(e) => setDashYear(Number(e.target.value))}
+                  >
+                    <option value={new Date().getFullYear()}>ปีนี้</option>
+                    <option value={new Date().getFullYear() - 1}>ปีที่แล้ว</option>
+                  </select>
                 </div>
               </div>
-            </div>
 
-            {/* หมวดค่าแรง */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-4 flex justify-between items-center cursor-pointer hover:bg-gray-50 transition">
-              <div>
-                <p className="text-gray-800 text-sm font-bold flex items-center gap-2">👷 ค่าแรงทีมงาน</p>
-                <p className="text-[11px] text-gray-500 font-semibold mt-1">
-                  จ่ายแล้ว <span className="text-emerald-600 font-bold">28,500</span> | ค้าง <span className="text-rose-500 font-bold">12,000</span>
-                </p>
-              </div>
-              <span className="text-gray-400 font-bold">▶</span>
-            </div>
-
-            {/* ประสิทธิภาพรถ */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
-              <p className="text-gray-800 text-sm font-bold mb-3 border-b pb-2 flex items-center gap-2">🚜 รถที่ทำเงินสูงสุด</p>
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="font-black text-gray-800">รถ A <span className="text-xs font-semibold text-gray-500 ml-1">(180 ไร่)</span></p>
-                  <p className="text-[11px] text-gray-500 mt-0.5">รายได้ 108,000 | จ่าย 42,000</p>
+              {/* ส่วนแสดงผลข้อมูล */}
+              {isFetchingDash ? (
+                <div className="flex flex-col items-center justify-center py-10 text-gray-400">
+                  <span className="text-4xl animate-spin mb-3">⏳</span>
+                  <span className="font-bold text-sm">กำลังประมวลผลบัญชี...</span>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] text-indigo-500 font-bold">กำไรสุทธิ</p>
-                  <p className="font-black text-indigo-600 text-lg">66,000 ฿</p>
+              ) : (
+                <div className="space-y-5">
+                  
+                  {/* Hero Box: กำไรสุทธิ (ใหญ่ที่สุด) */}
+                  <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-fuchsia-600 p-5 rounded-2xl shadow-lg text-white relative overflow-hidden">
+                    <div className="absolute -right-4 -bottom-4 text-8xl opacity-10 drop-shadow-md">💰</div>
+                    <p className="text-indigo-100 text-xs font-bold mb-1 opacity-90 tracking-wide">กำไรสุทธิ (NET PROFIT)</p>
+                    <div className="flex items-baseline gap-2">
+                      <p className="text-4xl sm:text-5xl font-black drop-shadow-md tracking-tight">
+                        {dashboardData.netProfit.toLocaleString()}
+                      </p>
+                      <span className="text-lg font-semibold opacity-80">บาท</span>
+                    </div>
+                  </div>
+
+                  {/* แถบ Visual Bar: เทียบสัดส่วน รับ-จ่าย */}
+                  {(dashboardData.totalIncome > 0 || dashboardData.totalExpense > 0) && (() => {
+                    const total = dashboardData.totalIncome + dashboardData.totalExpense;
+                    const incomePercent = (dashboardData.totalIncome / total) * 100;
+                    const expensePercent = (dashboardData.totalExpense / total) * 100;
+                    return (
+                      <div className="px-1">
+                        <div className="flex justify-between text-[10px] font-black mb-1.5">
+                          <span className="text-emerald-600">รายรับ {incomePercent.toFixed(0)}%</span>
+                          <span className="text-rose-500">รายจ่าย {expensePercent.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-2.5 w-full bg-gray-100 rounded-full overflow-hidden flex shadow-inner">
+                          <div style={{ width: `${incomePercent}%` }} className="bg-emerald-500 h-full transition-all duration-1000"></div>
+                          <div style={{ width: `${expensePercent}%` }} className="bg-rose-500 h-full transition-all duration-1000"></div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Grid ย่อย 4 กล่อง: รายรับ, รายจ่าย, พื้นที่, ลูกหนี้ */}
+                  <div className="grid grid-cols-2 gap-3">
+                    
+                    {/* กล่องรายรับ */}
+                    <div className="bg-emerald-50 p-3.5 rounded-xl border border-emerald-100 shadow-sm relative overflow-hidden">
+                      <div className="absolute right-[-10px] bottom-[-10px] text-4xl opacity-10">📈</div>
+                      <p className="text-emerald-800 text-[11px] font-bold mb-0.5">เงินเข้า (รายรับ)</p>
+                      <p className="text-xl sm:text-2xl font-black text-emerald-600">
+                        {dashboardData.totalIncome.toLocaleString()} <span className="text-xs font-normal">฿</span>
+                      </p>
+                    </div>
+                    
+                    {/* กล่องรายจ่าย */}
+                    <div className="bg-rose-50 p-3.5 rounded-xl border border-rose-100 shadow-sm relative overflow-hidden">
+                      <div className="absolute right-[-10px] bottom-[-10px] text-4xl opacity-10">📉</div>
+                      <p className="text-rose-800 text-[11px] font-bold mb-0.5">เงินออก (รายจ่าย)</p>
+                      <p className="text-xl sm:text-2xl font-black text-rose-600">
+                        {dashboardData.totalExpense.toLocaleString()} <span className="text-xs font-normal">฿</span>
+                      </p>
+                    </div>
+
+                    {/* กล่องพื้นที่ */}
+                    <div className="bg-teal-50 p-3.5 rounded-xl border border-teal-100 shadow-sm relative overflow-hidden">
+                      <div className="absolute right-[-5px] bottom-[-5px] text-4xl opacity-10">🌾</div>
+                      <p className="text-teal-800 text-[11px] font-bold mb-0.5">พื้นที่เก็บเกี่ยวรวม</p>
+                      <p className="text-lg font-black text-teal-700">
+                        {dashboardData.totalArea.toLocaleString()} <span className="text-xs font-normal">ไร่</span>
+                      </p>
+                    </div>
+
+                    {/* กล่องลูกหนี้ (กดได้) */}
+                    <div 
+                      onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                      className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 shadow-sm cursor-pointer hover:bg-amber-100 transition relative overflow-hidden group"
+                    >
+                      <div className="absolute right-2 top-2 text-xs opacity-50 group-hover:translate-x-1 transition">▶</div>
+                      <p className="text-amber-900 text-[11px] font-bold mb-0.5 flex items-center gap-1">
+                        <span className="animate-pulse">⚠️</span> ลูกหนี้ค้างชำระ
+                      </p>
+                      <p className="text-lg font-black text-amber-600">
+                        {dashboardData.totalUnpaid.toLocaleString()} <span className="text-xs font-normal">฿</span>
+                      </p>
+                    </div>
+
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
-
-            {/* แจ้งเตือน (Alerts) */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
-              <p className="text-gray-800 text-sm font-bold mb-3 border-b pb-2 flex items-center gap-2">⚠️ สิ่งที่ต้องจัดการ</p>
-              <ul className="space-y-2 text-xs font-semibold">
-                <li className="flex items-center gap-2 text-rose-700 bg-rose-50 p-2 rounded-lg"><span className="text-base">🔴</span> ลูกหนี้เกิน 30 วัน — 3 ราย</li>
-                <li className="flex items-center gap-2 text-amber-700 bg-amber-50 p-2 rounded-lg"><span className="text-base">🟠</span> ค่าแรงยังไม่จ่าย — 18,500 บาท</li>
-                <li className="flex items-center gap-2 text-amber-700 bg-amber-50 p-2 rounded-lg"><span className="text-base">🟠</span> รถคันที่ 2 มีค่าใช้จ่ายสูงผิดปกติ</li>
-                <li className="flex items-center gap-2 text-blue-700 bg-blue-50 p-2 rounded-lg"><span className="text-base">🔵</span> พรุ่งนี้มีงาน 4 คิว</li>
-              </ul>
-            </div>
-
-            {/* กราฟจำลอง */}
-            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-4">
-              <div>
-                <p className="text-gray-800 text-sm font-bold mb-2">📈 เงินเข้า / เงินออก (12 เดือน)</p>
-                <div className="h-24 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-center text-xs text-gray-400">[ พื้นที่สำหรับ Bar Chart ]</div>
-              </div>
-              <div>
-                <p className="text-gray-800 text-sm font-bold mb-2">💸 รายจ่ายตามหมวด</p>
-                <div className="h-24 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-center text-xs text-gray-400">[ พื้นที่สำหรับ Horizontal Bar Chart ]</div>
-              </div>
-            </div>
-
           </div>
         )}
 
