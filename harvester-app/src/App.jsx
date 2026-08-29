@@ -1961,16 +1961,21 @@ function App() {
                         >
                           💬 ก๊อปปี้ข้อความทวง
                         </button>
-                        <button 
-                          onClick={() => {
-                            if(window.confirm(`ยืนยันว่าลูกค้า [ ${job.customers?.name} ] จ่ายเงินยอด ${Number(job.total_price).toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?\n\n(ถ้ายืนยัน งานนี้จะหายไปจากหน้าลูกหนี้ทันที)`)) {
-                              updatePaymentStatus(job.id, 'PAID');
-                            }
-                          }}
-                          className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
-                        >
-                          ✅ รับเงินเรียบร้อย
-                        </button>
+                        
+                        {/* 👇 ซ่อนปุ่มรับเงิน ให้เถ้าแก่ (BOSS) เห็นและกดได้คนเดียว 👇 */}
+                        {userRole === 'BOSS' && (
+                          <button 
+                            onClick={() => {
+                              if(window.confirm(`ยืนยันว่าลูกค้า [ ${job.customers?.name} ] จ่ายเงินยอด ${Number(job.total_price).toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?\n\n(ถ้ายืนยัน งานนี้จะหายไปจากหน้าลูกหนี้ทันที)`)) {
+                                updatePaymentStatus(job.id, 'PAID');
+                              }
+                            }}
+                            className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition flex items-center justify-center gap-1"
+                          >
+                            ✅ รับเงินเรียบร้อย
+                          </button>
+                        )}
+                        {/* 👆 จบส่วนที่แก้ไข 👆 */}
                      </div>
                   </div>
               ))
