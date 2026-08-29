@@ -1093,10 +1093,16 @@ function App() {
                 </div>
                 
                 <div className={`mt-3 p-3 rounded-lg border flex items-center gap-3 ${activeJobNow ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
-                  <div className="text-2xl">{activeJobNow ? '🌾' : '☕'}</div>
+                  {/* 👇 เปลี่ยนให้แสดงไอคอนตามประเภทพืช */}
+                  <div className="text-2xl">
+                    {activeJobNow 
+                      ? (activeJobNow.crop_type === 'ข้าวโพด' ? '🌽' : activeJobNow.crop_type === 'ถั่ว' ? '🥜' : '🌾') 
+                      : '☕'}
+                  </div>
                   <div>
+                    {/* 👇 เปลี่ยนข้อความให้ดึงชื่อพืชมาแสดงแทนคำว่าข้าว */}
                     <span className={`block text-xs font-bold mb-0.5 ${activeJobNow ? 'text-blue-800' : 'text-gray-500'}`}>
-                      {activeJobNow ? 'กำลังเกี่ยวข้าวอยู่' : 'สแตนด์บาย (ว่าง)'}
+                      {activeJobNow ? `กำลังเก็บเกี่ยว${activeJobNow.crop_type || 'ข้าว'}` : 'สแตนด์บาย (ว่าง)'}
                     </span>
                     <span className="font-semibold text-gray-800 text-sm">
                       {activeJobNow ? `ลูกค้า: ${activeJobNow.customers?.name} (${activeJobNow.area_size} ไร่)` : 'รอรับคำสั่งงานถัดไป'}
@@ -1144,7 +1150,7 @@ function App() {
                         </div>
                         <div className="flex-1">
                           <p className={`text-sm font-bold ${isDone ? 'text-green-800' : 'text-gray-900'}`}>{job.customers?.name}</p>
-                          <p className="text-[11px] text-gray-500 mt-0.5">🌾 {job.area_size} ไร่</p>
+                          <p className="text-[11px] text-gray-500 mt-0.5"> {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {job.area_size} ไร่ </p>
                         </div>
                         <div>
                           {isDone ? <span className="text-green-500 font-bold text-xs">✅ เสร็จแล้ว</span> : 
