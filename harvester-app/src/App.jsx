@@ -1106,33 +1106,29 @@ function App() {
         {activeTab === 'home' && (
           <div className="space-y-4">
             
-            {/* 1. สรุปภาพรวมวันนี้ */}
+            {/* 1. สรุปภาพรวมวันนี้ (เปิดให้ทุกคนเห็น 4 กล่องและจัดให้อยู่ตรงกลางแบบในรูป) */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
                 <span className="text-gray-500 text-xs font-bold mb-1">🚜 งานวันนี้</span>
                 <span className="text-2xl font-black text-gray-800">{todayJobs.length} <span className="text-sm font-normal">งาน</span></span>
               </div>
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
                 <span className="text-gray-500 text-xs font-bold mb-1">🌾 พื้นที่รวมวันนี้</span>
                 <span className="text-2xl font-black text-emerald-600">{todayArea} <span className="text-sm font-normal">ไร่</span></span>
               </div>
               
-              {/* 👇 ซ่อนกล่องรายได้และลูกหนี้จากคนขับ 👇 */}
-              {userRole === 'BOSS' && (
-                <>
-                  <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col justify-center">
-                    <span className="text-gray-500 text-xs font-bold mb-1">💰 คาดการณ์รายได้</span>
-                    <span className="text-2xl font-black text-blue-600">{todayIncome.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
-                  </div>
-                  <div 
-                    onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                    className="bg-red-50 p-4 rounded-xl shadow-sm border border-red-200 flex flex-col justify-center cursor-pointer hover:bg-red-100 transition"
-                  >
-                    <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ (กดเพื่อดู)</span>
-                    <span className="text-2xl font-black text-red-600">{totalDebtValue.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
-                  </div>
-                </>
-              )}
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
+                <span className="text-gray-500 text-xs font-bold mb-1">💰 คาดการณ์รายได้</span>
+                <span className="text-2xl font-black text-blue-600">{todayIncome.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
+              </div>
+              
+              <div 
+                onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                className="bg-red-50 p-4 rounded-xl shadow-sm border border-red-200 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-red-100 transition"
+              >
+                <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ (กดเพื่อดู)</span>
+                <span className="text-2xl font-black text-red-600">{totalDebtValue.toLocaleString()} <span className="text-sm font-normal">฿</span></span>
+              </div>
             </div>
 
             {/* 2. สถานะรถเกี่ยว */}
