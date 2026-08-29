@@ -1003,7 +1003,7 @@ function App() {
             onClick={() => {
               if (userRole === 'DRIVER') {
                 const pin = window.prompt("🧑‍💼 โหมดเถ้าแก่\nกรุณาใส่รหัสผ่าน (PIN):");
-                if (pin === '9999') { 
+                if (pin === '2518') { 
                   setUserRole('BOSS');
                   localStorage.setItem('harvester_role', 'BOSS'); // 💾 สั่งจำลงเครื่อง
                   alert("✅ เข้าสู่โหมดเถ้าแก่เรียบร้อย");
