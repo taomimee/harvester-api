@@ -2269,7 +2269,7 @@ function App() {
                      <div className="flex gap-1.5 pl-2">
                         <button 
                           onClick={() => {
-                            const text = `แจ้งยอดค้างชำระค่าเกี่ยวข้าวครับ 🌾\n\n👤 ชื่อลูกค้า: ${job.customers?.name}\n📅 วันที่เกี่ยว: ${new Date(job.job_date).toLocaleDateString('th-TH')}\n📐 พื้นที่: ${job.area_size || 0} ไร่ (${job.crop_type})\n\n💰 ยอดที่ต้องชำระ: ${Number(job.total_price).toLocaleString()} บาท\n\nรบกวนโอนชำระและส่งสลิปให้ด้วยนะครับ ขอบคุณครับ 🙏`;
+                            const text = `แจ้งยอดค้างชำระค่าเกี่ยวครับ 🌾\n\n👤 ชื่อลูกค้า: ${job.customers?.name}\n📅 วันที่เกี่ยว: ${new Date(job.job_date).toLocaleDateString('th-TH')}\n📐 พื้นที่: ${job.area_size || 0} ไร่ (${job.crop_type})\n\n💰 ยอดที่ต้องชำระ: ${Number(job.total_price).toLocaleString()} บาท\n\nรบกวนโอนชำระและส่งสลิปให้ด้วยนะครับ ขอบคุณครับ 🙏`;
                             navigator.clipboard.writeText(text);
                             alert('📋 คัดลอกข้อความทวงหนี้เรียบร้อยแล้ว!\nนำไปกด "วาง" (Paste) ในแชท LINE ลูกค้าได้เลยครับ');
                           }}
