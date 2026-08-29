@@ -515,9 +515,13 @@ function App() {
   const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
   const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
   
-  // 👇 เพิ่มโค้ดบรรทัดนี้ เพื่อคำนวณหางานที่ผิดนัด (เลยกำหนดวันมาแล้วแต่ยังไม่เสร็จ)
+  // 👇 คำนวณหางานผิดนัด (ละเว้นงานที่ "กำลังเกี่ยว" และ "เสร็จสิ้น" แล้ว)
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-  const overdueJobs = jobs.filter(j => j.status !== 'DONE' && new Date(j.job_date) < todayStart);
+  const overdueJobs = jobs.filter(j => 
+    j.status !== 'DONE' && 
+    j.status !== 'IN_PROGRESS' && 
+    new Date(j.job_date) < todayStart
+  );
   
   const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
   const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
