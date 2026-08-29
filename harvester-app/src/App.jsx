@@ -1058,38 +1058,50 @@ function App() {
           )}
         </div>
 
-        {/* 👇 แถบเลือกชื่อคนขับ (โชว์เฉพาะโหมดคนขับ) 👇 */}
+        {/* 👇 แถบสมุดจดค่าแรงส่วนตัว (สำหรับคนขับ) 👇 */}
         {userRole === 'DRIVER' && (
-          <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl mb-4 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-blue-800 flex items-center gap-1">
-                👨‍🌾 คนขับ: 
-                {currentDriverName ? <span className="text-blue-600 bg-blue-100 px-2 py-0.5 rounded border border-blue-200">{currentDriverName}</span> : <span className="text-red-500 animate-pulse">ยังไม่ระบุตัวตน</span>}
-              </span>
-              <select 
-                className="text-xs border border-blue-300 p-1.5 rounded-lg bg-white font-bold text-blue-700 outline-none"
-                value={currentDriverName}
-                onChange={e => setCurrentDriverName(e.target.value)}
-              >
-                <option value="">-- เลือกชื่อคุณ --</option>
-                <option value="พี่ยันต์">พี่ยันต์</option>
-                <option value="จักร กฤษณ์">จักร กฤษณ์</option>
-              </select>
+          <div className="bg-gradient-to-br from-blue-100 to-indigo-50 border border-blue-200 p-4 rounded-2xl mb-5 shadow-sm relative overflow-hidden">
+            {/* ลายน้ำตกแต่ง */}
+            <div className="absolute -right-2 -bottom-2 text-6xl opacity-10 drop-shadow-md pointer-events-none">💰</div>
+
+            <div className="relative z-10">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="bg-blue-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm tracking-wide">ส่วนตัว</span>
+                <h3 className="font-black text-blue-900 text-sm">ระบบสรุปยอดค่าแรง</h3>
+              </div>
+              <p className="text-[11px] text-blue-700/80 font-bold mb-3">เลือกระบุชื่อของคุณ เพื่อดูภาพรวมรายได้และยอดส่วนแบ่ง</p>
+
+              <div className="flex flex-col gap-2.5">
+                <div className="flex bg-white rounded-xl border border-blue-300 p-1 shadow-inner items-center">
+                  <div className="bg-blue-50 text-blue-600 w-10 h-10 rounded-lg flex items-center justify-center text-lg border border-blue-100 shrink-0">
+                    👨‍🌾
+                  </div>
+                  <select 
+                    className="flex-1 bg-transparent px-3 font-bold text-blue-900 outline-none text-sm w-full"
+                    value={currentDriverName}
+                    onChange={e => setCurrentDriverName(e.target.value)}
+                  >
+                    <option value="" className="text-gray-400 font-normal">-- เลือกระบุตัวตนคนขับ --</option>
+                    <option value="พี่ยันต์">พี่ยันต์</option>
+                    <option value="จักร กฤษณ์">จักร กฤษณ์</option>
+                  </select>
+                </div>
+                
+                {/* ปุ่มดูสมุดค่าแรง (จะโผล่มาเมื่อเลือกชื่อแล้ว) */}
+                {currentDriverName && (
+                   <button 
+                     onClick={() => {
+                       setWageFilter([currentDriverName]); // บังคับกรองเฉพาะชื่อตัวเอง
+                       setShowWageSummary(true);
+                       fetchWages(); // ดึงข้อมูลค่าแรงล่าสุด
+                     }}
+                     className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-3 rounded-xl shadow-md transition flex justify-center items-center gap-2"
+                   >
+                     <span>📊</span> ดูภาพรวมค่าแรงของ {currentDriverName}
+                   </button>
+                )}
+              </div>
             </div>
-            
-            {/* ปุ่มดูสมุดค่าแรง (ดึงเฉพาะยอดของคนขับรายนี้มาโชว์) */}
-            {currentDriverName && (
-               <button 
-                 onClick={() => {
-                   setWageFilter([currentDriverName]); // บังคับกรองเฉพาะชื่อตัวเอง
-                   setShowWageSummary(true);
-                   fetchWages();
-                 }}
-                 className="w-full bg-green-500 hover:bg-green-600 text-white text-xs font-bold py-2 rounded-lg shadow-sm transition"
-               >
-                 💰 ดูสมุดค่าแรงของฉัน (ส่วนแบ่ง)
-               </button>
-            )}
           </div>
         )}
 
