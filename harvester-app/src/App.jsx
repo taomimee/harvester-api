@@ -1062,13 +1062,12 @@ function App() {
         {userRole === 'DRIVER' && (
           <div 
             onClick={() => {
-              setWageFilter([]); // 💡 ไม่กรองชื่อ โชว์หน้าเต็มรวมทุกคนแบบเถ้าแก่เลย
+              setWageFilter([]); 
               setShowWageSummary(true);
               fetchWages(); 
             }}
             className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-4 rounded-2xl mb-5 shadow-md cursor-pointer transition flex items-center justify-between group relative overflow-hidden"
           >
-            {/* ลายน้ำตกแต่ง */}
             <div className="absolute -right-2 -bottom-2 text-6xl opacity-10 drop-shadow-md pointer-events-none group-hover:scale-110 transition-transform duration-300">💰</div>
             
             <div className="flex items-center gap-3 relative z-10">
@@ -2528,8 +2527,8 @@ function App() {
                          </div>
                        </div>
 
-                       {/* กดเพื่อจ่ายเงิน (จะกดจ่ายได้ก็ต่อเมื่อ "ไม่ได้ติ๊กกรองชื่อ") */}
-                       {wageTab === 'UNPAID' && (
+                       {/* 👇 กดเพื่อจ่ายเงิน (ซ่อนไม่ให้ลูกจ้างเห็น โชว์เฉพาะเถ้าแก่) 👇 */}
+                       {userRole === 'BOSS' && wageTab === 'UNPAID' && (
                          wageFilter.length === 0 ? (
                            <button 
                              onClick={async () => {
