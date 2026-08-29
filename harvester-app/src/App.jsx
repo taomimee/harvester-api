@@ -2543,35 +2543,30 @@ function App() {
                          </div>
                        </div>
 
-                       {/* 👇 ให้แสดงปุ่มจ่ายเงิน ก็ต่อเมื่อ "เป็นเถ้าแก่" และ "ไม่ได้กรองชื่ออยู่" เท่านั้น 👇 */}
-{userRole === 'BOSS' && wageTab === 'UNPAID' && (
-  wageFilter.length === 0 ? (
-    <button 
-      onClick={async () => {
-        if(!window.confirm('ยืนยันว่าเคลียร์ยอดนี้ให้ลูกจ้าง (ทุกคนในบิล) แล้วใช่ไหม?')) return;
-        try {
-          const now = new Date();
-          now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-          const paid_at = now.toISOString();
-
-          await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'PAID', paid_at })
-          });
-          fetchWages(); 
-        } catch(e) { console.error(e); }
-      }}
-      className="w-full bg-gray-50 hover:bg-green-50 text-gray-600 hover:text-green-700 border border-gray-200 hover:border-green-300 font-bold py-2 rounded-lg text-sm transition flex items-center justify-center gap-2"
-    >
-      ✅ จ่ายเงินยอดเต็มบิลนี้แล้ว
-    </button>
-  ) : (
-    <div className="text-[10px] text-center text-red-400 font-bold bg-red-50 py-1.5 rounded-lg border border-red-100">
-      *กดยกเลิกตัวกรองชื่อ เพื่อกดปุ่มทำรายการจ่ายเงิน
-    </div>
-  )
-)}
+                       {/* 👇 การ์ดปุ่มกด "สรุปยอดค่าแรง" สำหรับคนขับ (หน้าตาแบบของเถ้าแก่ แต่ไม่มีปุ่มจ่ายเงิน) 👇 */}
+        {userRole === 'DRIVER' && (
+          <div 
+            onClick={() => {
+              setWageFilter([]); // ไม่ต้องกรองชื่อ ให้โชว์ทั้งหมดเหมือนของเถ้าแก่
+              setShowWageSummary(true);
+              fetchWages();
+            }}
+            className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-4 rounded-2xl mb-4 shadow-md cursor-pointer transition flex items-center justify-between group"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center text-2xl shadow-inner backdrop-blur-sm">
+                💰
+              </div>
+              <div>
+                <h3 className="font-black text-base tracking-wide">สมุดจดค่าแรง</h3>
+                <p className="text-xs text-emerald-100 font-semibold mt-0.5">กดเพื่อตรวจสอบยอดค่าแรงและเงินส่วนแบ่งทั้งหมด</p>
+              </div>
+            </div>
+            <div className="text-xl font-bold bg-white/10 w-9 h-9 rounded-full flex items-center justify-center group-hover:translate-x-1 transition">
+              ▶
+            </div>
+          </div>
+        )}
                     </div>
                   )
                 })}
