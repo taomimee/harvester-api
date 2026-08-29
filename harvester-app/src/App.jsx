@@ -1906,28 +1906,29 @@ function App() {
           </div>
         )}
 
-        {/* 📊 หน้าจอ Dashboard (อัปเกรดแบบมืออาชีพ) */}
+        {/* 📊 หน้าจอ Dashboard (CFO Level - วิเคราะห์ภาพรวมกิจการ) */}
         {activeTab === 'finance' && financeSubTab === 'dashboard' && (
           <div className="space-y-4">
             
-            {/* ปุ่มบันทึกค่าใช้จ่าย (ดึงขึ้นมาเด่นๆ กดง่ายๆ) */}
-            <button 
-              onClick={() => setShowExpenseForm(true)}
-              className="w-full bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white font-bold py-3.5 rounded-2xl shadow-md transition transform active:scale-95 flex justify-center items-center gap-2 border border-red-400"
-            >
-              <span className="text-xl">➕</span> บันทึกค่าใช้จ่าย (น้ำมัน, ซ่อม, จิปาถะ)
-            </button>
-
-            <div className="bg-white rounded-2xl p-5 shadow-md border border-gray-100">
+            <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-md border border-gray-100">
               
-              {/* ส่วนหัว: ชื่อหน้า & ตัวกรองเดือน/ปี */}
-              <div className="flex justify-between items-center mb-5 pb-4 border-b border-gray-100">
-                <h2 className="text-lg font-black text-gray-800 flex items-center gap-2">
-                  <span className="text-2xl">📊</span> ภาพรวมบัญชี
-                </h2>
-                <div className="flex gap-2">
+              {/* ส่วนหัว: ชื่อหน้า & ตัวกรองเดือน/ปี & ปุ่มบวกรายจ่าย */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-5 pb-4 border-b border-gray-100 gap-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-black text-gray-800 flex items-center gap-2">
+                    <span className="text-2xl">📊</span> ภาพรวมกิจการ
+                  </h2>
+                  <button 
+                    onClick={() => setShowExpenseForm(true)}
+                    className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm flex items-center gap-1"
+                  >
+                    <span>➕</span> บันทึกรายจ่าย
+                  </button>
+                </div>
+                
+                <div className="flex gap-2 w-full sm:w-auto">
                   <select 
-                    className="border border-gray-200 p-1.5 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none text-xs focus:ring-2 focus:ring-purple-400"
+                    className="flex-1 sm:flex-none border border-gray-200 p-1.5 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none text-xs focus:ring-2 focus:ring-purple-400"
                     value={dashMonth} onChange={(e) => setDashMonth(Number(e.target.value))}
                   >
                     {["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"].map((m, i) => (
@@ -1935,7 +1936,7 @@ function App() {
                     ))}
                   </select>
                   <select 
-                    className="border border-gray-200 p-1.5 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none text-xs focus:ring-2 focus:ring-purple-400"
+                    className="flex-1 sm:flex-none border border-gray-200 p-1.5 rounded-lg bg-gray-50 font-bold text-gray-700 outline-none text-xs focus:ring-2 focus:ring-purple-400"
                     value={dashYear} onChange={(e) => setDashYear(Number(e.target.value))}
                   >
                     <option value={new Date().getFullYear()}>ปีนี้</option>
@@ -1951,85 +1952,202 @@ function App() {
                   <span className="font-bold text-sm">กำลังประมวลผลบัญชี...</span>
                 </div>
               ) : (
-                <div className="space-y-5">
+                (() => {
+                  // --- 🧠 สมองกลคำนวณข้อมูลย่อยสำหรับ Dashboard (คำนวณสดจาก State) ---
                   
-                  {/* Hero Box: กำไรสุทธิ (ใหญ่ที่สุด) */}
-                  <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-fuchsia-600 p-5 rounded-2xl shadow-lg text-white relative overflow-hidden">
-                    <div className="absolute -right-4 -bottom-4 text-8xl opacity-10 drop-shadow-md">💰</div>
-                    <p className="text-indigo-100 text-xs font-bold mb-1 opacity-90 tracking-wide">กำไรสุทธิ (NET PROFIT)</p>
-                    <div className="flex items-baseline gap-2">
-                      <p className="text-4xl sm:text-5xl font-black drop-shadow-md tracking-tight">
-                        {dashboardData.netProfit.toLocaleString()}
-                      </p>
-                      <span className="text-lg font-semibold opacity-80">บาท</span>
-                    </div>
-                  </div>
+                  // 1. กรองงานของเดือนนี้
+                  const currentMonthJobs = jobs.filter(j => {
+                    if (!j.job_date) return false;
+                    const d = new Date(j.job_date);
+                    return (d.getMonth() + 1) === dashMonth && d.getFullYear() === dashYear;
+                  });
+                  const doneJobs = currentMonthJobs.filter(j => j.status === 'DONE');
+                  const pendingJobsCount = currentMonthJobs.filter(j => j.status !== 'DONE').length;
+                  
+                  // คำนวณรายได้เฉลี่ยต่อไร่ (อ้างอิงยอดที่ควรจะได้ทั้งหมด หารด้วยพื้นที่)
+                  const totalPotentialIncome = dashboardData.totalIncome + dashboardData.totalUnpaid;
+                  const avgPerRai = dashboardData.totalArea > 0 ? (totalPotentialIncome / dashboardData.totalArea).toFixed(0) : 0;
 
-                  {/* แถบ Visual Bar: เทียบสัดส่วน รับ-จ่าย */}
-                  {(dashboardData.totalIncome > 0 || dashboardData.totalExpense > 0) && (() => {
-                    const total = dashboardData.totalIncome + dashboardData.totalExpense;
-                    const incomePercent = (dashboardData.totalIncome / total) * 100;
-                    const expensePercent = (dashboardData.totalExpense / total) * 100;
-                    return (
-                      <div className="px-1">
-                        <div className="flex justify-between text-[10px] font-black mb-1.5">
-                          <span className="text-emerald-600">รายรับ {incomePercent.toFixed(0)}%</span>
-                          <span className="text-rose-500">รายจ่าย {expensePercent.toFixed(0)}%</span>
+                  // 2. กรองรายจ่ายของเดือนนี้ และแยกหมวดหมู่
+                  const currentMonthExpenses = expenseTransactions.filter(tx => {
+                    const d = new Date(tx.transaction_date || tx.created_at);
+                    return (d.getMonth() + 1) === dashMonth && d.getFullYear() === dashYear;
+                  });
+
+                  const costBreakdown = { 'ค่าแรง': 0, 'น้ำมัน': 0, 'ซ่อมรถ/อะไหล่': 0, 'อื่นๆ': 0 };
+                  currentMonthExpenses.forEach(tx => {
+                    const amt = Number(tx.total_amount) || 0;
+                    if (tx.category === 'WAGE' || tx.category === 'ค่าแรง') costBreakdown['ค่าแรง'] += amt;
+                    else if (tx.category === 'น้ำมัน') costBreakdown['น้ำมัน'] += amt;
+                    else if (tx.category === 'ซ่อมรถ' || tx.category === 'อะไหล่') costBreakdown['ซ่อมรถ/อะไหล่'] += amt;
+                    else costBreakdown['อื่นๆ'] += amt;
+                  });
+
+                  // 3. กรองแจ้งเตือน (ลูกหนี้ และ ค่าแรงค้างจ่าย)
+                  const unpaidWagesCount = wageTransactions.filter(tx => tx.status === 'UNPAID').length;
+                  const debtorsCount = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID').length;
+
+                  return (
+                    <div className="space-y-6">
+                      
+                      {/* ============================== */}
+                      {/* 1. 💰 หมวดกระแสเงินสดและกำไร */}
+                      {/* ============================== */}
+                      <div>
+                        <h3 className="text-sm font-black text-gray-700 mb-3 flex items-center gap-1.5 border-l-4 border-indigo-500 pl-2">
+                          เงินสดและกำไร
+                        </h3>
+                        
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          {/* เงินรับจริง */}
+                          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-4 rounded-xl shadow-md text-white relative overflow-hidden flex flex-col justify-between h-28">
+                            <div className="absolute -right-4 -bottom-4 text-6xl opacity-10 drop-shadow-md">💰</div>
+                            <p className="text-emerald-50 text-xs font-bold opacity-90">รับเงินแล้ว (เงินสดเข้า)</p>
+                            <div>
+                              <p className="text-2xl sm:text-3xl font-black drop-shadow-sm tracking-tight leading-none">
+                                {dashboardData.totalIncome.toLocaleString()} <span className="text-sm font-normal">฿</span>
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* สรุปกำไรสุทธิ */}
+                          <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-4 rounded-xl shadow-md text-white relative overflow-hidden flex flex-col justify-between h-28">
+                            <div className="absolute -right-4 -bottom-4 text-6xl opacity-10 drop-shadow-md">📈</div>
+                            <p className="text-indigo-100 text-xs font-bold opacity-90">กำไรสุทธิ (Net Profit)</p>
+                            <div>
+                              <p className="text-2xl sm:text-3xl font-black drop-shadow-sm tracking-tight leading-none text-yellow-300">
+                                {dashboardData.netProfit.toLocaleString()} <span className="text-sm font-normal text-indigo-100">฿</span>
+                              </p>
+                            </div>
+                          </div>
                         </div>
-                        <div className="h-2.5 w-full bg-gray-100 rounded-full overflow-hidden flex shadow-inner">
-                          <div style={{ width: `${incomePercent}%` }} className="bg-emerald-500 h-full transition-all duration-1000"></div>
-                          <div style={{ width: `${expensePercent}%` }} className="bg-rose-500 h-full transition-all duration-1000"></div>
+
+                        {/* กล่องลูกหนี้ & รายจ่าย (รอง) */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div 
+                            onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                            className="bg-amber-50 p-3 rounded-xl border border-amber-200 shadow-sm cursor-pointer hover:bg-amber-100 transition"
+                          >
+                            <p className="text-amber-800 text-[10px] font-bold mb-1 flex items-center gap-1">
+                              <span className="animate-pulse">⚠️</span> ลูกหนี้ค้างชำระ
+                            </p>
+                            <p className="text-lg font-black text-amber-600 leading-none">
+                              {dashboardData.totalUnpaid.toLocaleString()} <span className="text-xs font-normal">฿</span>
+                            </p>
+                          </div>
+                          
+                          <div 
+                            onClick={() => { setActiveTab('finance'); setFinanceSubTab('expense'); }}
+                            className="bg-rose-50 p-3 rounded-xl border border-rose-200 shadow-sm cursor-pointer hover:bg-rose-100 transition"
+                          >
+                            <p className="text-rose-800 text-[10px] font-bold mb-1">💸 รายจ่ายรวม</p>
+                            <p className="text-lg font-black text-rose-600 leading-none">
+                              {dashboardData.totalExpense.toLocaleString()} <span className="text-xs font-normal">฿</span>
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    );
-                  })()}
 
-                  {/* Grid ย่อย 4 กล่อง: รายรับ, รายจ่าย, พื้นที่, ลูกหนี้ */}
-                  <div className="grid grid-cols-2 gap-3">
-                    
-                    {/* กล่องรายรับ */}
-                    <div className="bg-emerald-50 p-3.5 rounded-xl border border-emerald-100 shadow-sm relative overflow-hidden">
-                      <div className="absolute right-[-10px] bottom-[-10px] text-4xl opacity-10">📈</div>
-                      <p className="text-emerald-800 text-[11px] font-bold mb-0.5">เงินเข้า (รายรับ)</p>
-                      <p className="text-xl sm:text-2xl font-black text-emerald-600">
-                        {dashboardData.totalIncome.toLocaleString()} <span className="text-xs font-normal">฿</span>
-                      </p>
-                    </div>
-                    
-                    {/* กล่องรายจ่าย */}
-                    <div className="bg-rose-50 p-3.5 rounded-xl border border-rose-100 shadow-sm relative overflow-hidden">
-                      <div className="absolute right-[-10px] bottom-[-10px] text-4xl opacity-10">📉</div>
-                      <p className="text-rose-800 text-[11px] font-bold mb-0.5">เงินออก (รายจ่าย)</p>
-                      <p className="text-xl sm:text-2xl font-black text-rose-600">
-                        {dashboardData.totalExpense.toLocaleString()} <span className="text-xs font-normal">฿</span>
-                      </p>
-                    </div>
+                      <hr className="border-gray-100" />
 
-                    {/* กล่องพื้นที่ */}
-                    <div className="bg-teal-50 p-3.5 rounded-xl border border-teal-100 shadow-sm relative overflow-hidden">
-                      <div className="absolute right-[-5px] bottom-[-5px] text-4xl opacity-10">🌾</div>
-                      <p className="text-teal-800 text-[11px] font-bold mb-0.5">พื้นที่เก็บเกี่ยวรวม</p>
-                      <p className="text-lg font-black text-teal-700">
-                        {dashboardData.totalArea.toLocaleString()} <span className="text-xs font-normal">ไร่</span>
-                      </p>
-                    </div>
+                      {/* ============================== */}
+                      {/* 2. 🌾 หมวดผลงาน & 3. 💸 หมวดต้นทุน (Grid แบ่ง 2 ฝั่งบนจอใหญ่) */}
+                      {/* ============================== */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                        
+                        {/* ฝั่งซ้าย: ผลงาน */}
+                        <div>
+                          <h3 className="text-sm font-black text-gray-700 mb-3 flex items-center gap-1.5 border-l-4 border-green-500 pl-2">
+                            ผลงานเก็บเกี่ยว
+                          </h3>
+                          <div className="bg-gray-50 border border-gray-200 p-4 rounded-xl shadow-sm space-y-3">
+                            <div className="flex justify-between items-end border-b border-gray-200 pb-2">
+                              <div>
+                                <p className="text-[10px] text-gray-500 font-bold">พื้นที่รวม (เดือนนี้)</p>
+                                <p className="text-2xl font-black text-green-700 leading-none mt-1">{dashboardData.totalArea.toLocaleString()} <span className="text-sm font-normal text-gray-600">ไร่</span></p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[10px] text-gray-500 font-bold">รายได้เฉลี่ย</p>
+                                <p className="text-sm font-black text-gray-800 leading-none mt-1">{avgPerRai} ฿/ไร่</p>
+                              </div>
+                            </div>
+                            
+                            <div className="flex justify-between text-xs font-semibold text-gray-600 pt-1">
+                              <span>✅ ปิดงานแล้ว: <span className="font-bold text-gray-900">{doneJobs.length}</span> งาน</span>
+                              <span>รวมทั้งหมด: <span className="font-bold text-gray-900">{currentMonthJobs.length}</span> งาน</span>
+                            </div>
+                          </div>
+                        </div>
 
-                    {/* กล่องลูกหนี้ (กดได้) */}
-                    <div 
-                      onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                      className="bg-amber-50 p-3.5 rounded-xl border border-amber-200 shadow-sm cursor-pointer hover:bg-amber-100 transition relative overflow-hidden group"
-                    >
-                      <div className="absolute right-2 top-2 text-xs opacity-50 group-hover:translate-x-1 transition">▶</div>
-                      <p className="text-amber-900 text-[11px] font-bold mb-0.5 flex items-center gap-1">
-                        <span className="animate-pulse">⚠️</span> ลูกหนี้ค้างชำระ
-                      </p>
-                      <p className="text-lg font-black text-amber-600">
-                        {dashboardData.totalUnpaid.toLocaleString()} <span className="text-xs font-normal">฿</span>
-                      </p>
-                    </div>
+                        {/* ฝั่งขวา: โครงสร้างต้นทุน */}
+                        <div>
+                          <h3 className="text-sm font-black text-gray-700 mb-3 flex items-center gap-1.5 border-l-4 border-rose-500 pl-2">
+                            โครงสร้างต้นทุน
+                          </h3>
+                          <div className="bg-gray-50 border border-gray-200 p-3 rounded-xl shadow-sm space-y-2.5">
+                            {Object.entries(costBreakdown).map(([name, amount], idx) => {
+                              const percent = dashboardData.totalExpense > 0 ? ((amount / dashboardData.totalExpense) * 100).toFixed(0) : 0;
+                              return (
+                                <div key={idx}>
+                                  <div className="flex justify-between text-[11px] font-bold mb-1">
+                                    <span className="text-gray-700">{name}</span>
+                                    <span className="text-gray-900">{amount.toLocaleString()} ฿ <span className="text-gray-400 font-normal">({percent}%)</span></span>
+                                  </div>
+                                  <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                                    <div 
+                                      style={{ width: `${percent}%` }} 
+                                      className={`h-full ${name === 'ค่าแรง' ? 'bg-blue-500' : name === 'น้ำมัน' ? 'bg-orange-500' : name === 'ซ่อมรถ/อะไหล่' ? 'bg-rose-500' : 'bg-gray-400'}`}
+                                    ></div>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
 
-                  </div>
-                </div>
+                      <hr className="border-gray-100" />
+
+                      {/* ============================== */}
+                      {/* 4. ⚠️ สิ่งที่ต้องจัดการ (Action Items) */}
+                      {/* ============================== */}
+                      <div>
+                        <h3 className="text-sm font-black text-gray-700 mb-3 flex items-center gap-1.5 border-l-4 border-amber-500 pl-2">
+                          สิ่งที่ต้องจัดการ
+                        </h3>
+                        <div className="grid grid-cols-3 gap-2">
+                          {/* ปุ่มลูกหนี้ */}
+                          <div 
+                            onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                            className={`p-2 rounded-lg border text-center flex flex-col justify-center cursor-pointer transition ${debtorsCount > 0 ? 'bg-amber-50 border-amber-300 hover:bg-amber-100' : 'bg-gray-50 border-gray-200'}`}
+                          >
+                            <span className="text-lg mb-1">{debtorsCount > 0 ? '🔴' : '✅'}</span>
+                            <span className="text-[10px] font-bold text-gray-700 leading-tight">ตามเก็บหนี้<br/>{debtorsCount} ราย</span>
+                          </div>
+
+                          {/* ปุ่มค่าแรง */}
+                          <div 
+                            onClick={() => { setActiveTab('finance'); setFinanceSubTab('wage'); setWageTab('UNPAID'); }}
+                            className={`p-2 rounded-lg border text-center flex flex-col justify-center cursor-pointer transition ${unpaidWagesCount > 0 ? 'bg-blue-50 border-blue-300 hover:bg-blue-100' : 'bg-gray-50 border-gray-200'}`}
+                          >
+                            <span className="text-lg mb-1">{unpaidWagesCount > 0 ? '👷' : '✅'}</span>
+                            <span className="text-[10px] font-bold text-gray-700 leading-tight">ค่าแรงรอจ่าย<br/>{unpaidWagesCount} บิล</span>
+                          </div>
+
+                          {/* ปุ่มงานค้าง */}
+                          <div 
+                            onClick={() => setActiveTab('active')}
+                            className={`p-2 rounded-lg border text-center flex flex-col justify-center cursor-pointer transition ${pendingJobsCount > 0 ? 'bg-orange-50 border-orange-300 hover:bg-orange-100' : 'bg-gray-50 border-gray-200'}`}
+                          >
+                            <span className="text-lg mb-1">{pendingJobsCount > 0 ? '🚜' : '✅'}</span>
+                            <span className="text-[10px] font-bold text-gray-700 leading-tight">งานค้าง/รอคิว<br/>{pendingJobsCount} คิว</span>
+                          </div>
+                        </div>
+                      </div>
+
+                    </div>
+                  );
+                })()
               )}
             </div>
           </div>
