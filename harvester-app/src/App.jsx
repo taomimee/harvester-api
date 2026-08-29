@@ -2039,9 +2039,9 @@ function App() {
                                   const remaining = (Number(job.total_price) - paidAmount).toFixed(2);
                                   if (window.confirm(`รับเงินมาแล้ว: ${paidAmount.toLocaleString()} บาท\nค้างจ่ายส่วนที่เหลือ: ${Number(remaining).toLocaleString()} บาท\n\nยืนยันการหักลบยอดหนี้ใช่หรือไม่?`)) {
                                     
-                                    // ส่งข้อมูลไปอัปเดตยอดหนี้ที่เหลือ
+                                    // ส่งไปอัปเดตแค่ยอดหนี้ที่เหลือ (ไม่แก้ไขชื่อลูกค้า)
                                     const updatePayload = {
-                                      customer_name: job.customers?.name || '',
+                                      customer_name: job.customers?.name || '', 
                                       phone: job.customers?.phone || '',
                                       address_note: job.address_note || '',
                                       crop_type: job.crop_type || 'ข้าว',
@@ -2052,8 +2052,8 @@ function App() {
                                       vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
                                       boundaries: job.boundaries || [],
                                       price_per_rai: job.price_per_rai,
-                                      total_price: remaining, // 👈 ยอดหนี้ที่อัปเดตใหม่
-                                      payment_status: 'DEPOSIT' // 👈 เปลี่ยนป้ายเป็น มัดจำแล้ว
+                                      total_price: remaining, // 👈 ยอดหนี้ที่เหลือ
+                                      payment_status: 'DEPOSIT' 
                                     };
 
                                     fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
@@ -2065,11 +2065,8 @@ function App() {
                                       if(res.ok) {
                                         alert("✅ หักลบยอดหนี้เรียบร้อยแล้ว");
                                         fetchJobs();
-                                      } else {
-                                        alert("❌ บันทึกไม่สำเร็จ");
-                                      }
-                                    })
-                                    .catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
+                                      } else { alert("❌ บันทึกไม่สำเร็จ"); }
+                                    }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
                                   }
                                 }
                               }}
@@ -2104,44 +2101,56 @@ function App() {
             <div className="bg-gradient-to-r from-green-50 to-emerald-50 p-5 rounded-xl border border-green-200 shadow-sm flex justify-between items-center">
                <div>
                  <h2 className="text-lg font-black text-green-800">💵 ประวัติรับเงิน</h2>
-                 <p className="text-xs text-green-600 font-semibold mt-1">รายการโอน/เงินสด ที่เก็บแล้ว</p>
+                 <p className="text-xs text-green-600 font-semibold mt-1">รายการจ่ายเต็ม และจ่ายมัดจำ</p>
                </div>
                <div className="text-right">
                  <span className="block text-xs text-green-700 font-bold mb-1">ยอดรับรวมทั้งหมด</span>
                  <span className="text-3xl font-black text-green-600">
-                   {jobs.filter(j => j.payment_status === 'PAID').reduce((sum, j) => sum + (Number(j.total_price) || 0), 0).toLocaleString()} <span className="text-sm">฿</span>
+                   {jobs.filter(j => j.payment_status === 'PAID' || j.payment_status === 'DEPOSIT').reduce((sum, j) => {
+                      if (j.payment_status === 'PAID') return sum + (Number(j.total_price) || 0);
+                      // ดึงยอดมัดจำมารวมเป็นรายได้
+                      const originalPrice = Number(j.area_size || 0) * Number(j.price_per_rai || 0);
+                      const paidAmount = originalPrice > Number(j.total_price) ? originalPrice - Number(j.total_price) : 0;
+                      return sum + paidAmount;
+                   }, 0).toLocaleString()} <span className="text-sm">฿</span>
                  </span>
                </div>
             </div>
 
-            {jobs.filter(j => j.payment_status === 'PAID').length === 0 ? (
+            {jobs.filter(j => j.payment_status === 'PAID' || (j.payment_status === 'DEPOSIT' && (Number(j.area_size || 0) * Number(j.price_per_rai || 0)) > Number(j.total_price))).length === 0 ? (
                <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
                  <span className="text-4xl mb-2 block">🍃</span>
                  <p className="font-bold">ยังไม่มีประวัติการรับเงินครับ</p>
               </div>
             ) : (
-              jobs.filter(j => j.payment_status === 'PAID')
-                  .sort((a, b) => new Date(b.paid_at || b.job_date) - new Date(a.paid_at || a.job_date)) // เรียงจากรับเงินล่าสุดอยู่บน
-                  .slice(0, 50) // โชว์แค่ 50 รายการล่าสุด ป้องกันเครื่องค้าง
-                  .map(job => (
-                    <div key={job.id} className="bg-white p-4 rounded-xl shadow-md border border-green-100 relative overflow-hidden flex justify-between items-center">
-                       <div className="absolute top-0 left-0 w-1.5 h-full bg-green-400"></div>
+              jobs.filter(j => j.payment_status === 'PAID' || (j.payment_status === 'DEPOSIT' && (Number(j.area_size || 0) * Number(j.price_per_rai || 0)) > Number(j.total_price)))
+                  .sort((a, b) => new Date(b.paid_at || b.job_date) - new Date(a.paid_at || a.job_date))
+                  .slice(0, 50)
+                  .map(job => {
+                    const isDeposit = job.payment_status === 'DEPOSIT';
+                    const originalPrice = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                    // ถ้ารายการนี้เป็นมัดจำ ให้โชว์แค่ยอดเงินที่รับมาแล้ว
+                    const displayIncome = isDeposit ? (originalPrice - Number(job.total_price)) : Number(job.total_price);
+
+                    return (
+                    <div key={job.id} className={`bg-white p-4 rounded-xl shadow-md relative overflow-hidden flex justify-between items-center ${isDeposit ? 'border border-amber-100' : 'border border-green-100'}`}>
+                       <div className={`absolute top-0 left-0 w-1.5 h-full ${isDeposit ? 'bg-amber-400' : 'bg-green-400'}`}></div>
                        <div className="pl-2">
                          <h3 className="font-bold text-gray-900 text-lg">{job.customers?.name || 'ไม่ระบุชื่อ'}</h3>
                          <p className="text-[11px] text-gray-500 mt-0.5">
-                           📅 รับเงิน: <span className="font-semibold text-gray-800">{job.paid_at ? new Date(job.paid_at).toLocaleString('th-TH') : 'ไม่มีข้อมูลเวลา (งานเก่า)'}</span>
+                           📅 รับเงิน: <span className="font-semibold text-gray-800">{job.paid_at ? new Date(job.paid_at).toLocaleString('th-TH') : 'ไม่มีข้อมูลเวลา'}</span>
                          </p>
                        </div>
                        <div className="text-right">
                          <span className="block font-black text-green-600 text-xl leading-none">
-                           {Number(job.total_price).toLocaleString()} <span className="text-sm">฿</span>
+                           {displayIncome.toLocaleString()} <span className="text-sm">฿</span>
                          </span>
-                         <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold mt-1.5 bg-green-100 text-green-700 border border-green-200">
-                           ✅ จ่ายแล้ว
+                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold mt-1.5 ${isDeposit ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-green-100 text-green-700 border border-green-200'}`}>
+                           {isDeposit ? '💳 จ่ายบางส่วน' : '✅ จ่ายเต็ม'}
                          </span>
                        </div>
                     </div>
-                  ))
+                  )})
             )}
           </div>
         )}
