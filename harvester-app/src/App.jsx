@@ -2182,7 +2182,7 @@ function App() {
               </div>
             </div>
           );
-        })()}ฏ
+        })()}
 
         {/* 💸 หน้าจอจัดการลูกหนี้ */}
         {activeTab === 'finance' && financeSubTab === 'debt' && (
