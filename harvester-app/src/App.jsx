@@ -315,10 +315,20 @@ function App() {
   // ฟังก์ชันสำหรับส่งข้อมูลค่าใช้จ่ายไปบันทึก
   const handleExpenseSubmit = async (e) => {
     e.preventDefault();
+    
+    // ดักจับกรณีลืมใส่จำนวนเงิน
+    if (!expenseData.total_amount || Number(expenseData.total_amount) <= 0) {
+      return alert("❌ กรุณาระบุจำนวนเงินให้ถูกต้องครับ");
+    }
+
     const formData = new FormData();
     formData.append('category', expenseData.category);
     formData.append('total_amount', expenseData.total_amount);
-    formData.append('transaction_date', expenseData.transaction_date);
+    
+    // แปลงเวลาให้เป็นมาตรฐานก่อนส่ง
+    const d = new Date(expenseData.transaction_date);
+    formData.append('transaction_date', d.toISOString());
+    
     if(expenseData.vehicle_id) formData.append('vehicle_id', expenseData.vehicle_id);
     if(expenseData.spender_name) formData.append('spender_name', expenseData.spender_name);
     if(expenseData.note) formData.append('note', expenseData.note);
@@ -327,8 +337,9 @@ function App() {
     try {
       const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/expenses', {
         method: 'POST',
-        body: formData // ส่งแบบ FormData เพราะมีไฟล์รูป
+        body: formData 
       });
+      
       if (res.ok) {
         alert('✅ บันทึกค่าใช้จ่ายเรียบร้อย!');
         setShowExpenseForm(false);
@@ -338,11 +349,15 @@ function App() {
         });
         fetchDashboard(); // รีเฟรชหน้าสรุปยอด
       } else {
-        alert('❌ บันทึกไม่สำเร็จ');
+        // 💡 ดึงข้อความ Error จากฐานข้อมูลมาโชว์ให้รู้สาเหตุ
+        const errData = await res.json();
+        alert(`❌ บันทึกไม่สำเร็จ:\n${errData.error || errData.message || 'API ไม่รองรับข้อมูลแบบ FormData'}`);
       }
-    } catch (err) { console.error(err); }
+    } catch (err) { 
+      console.error(err); 
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+    }
   };
-  // 👆 จบส่วนค่าใช้จ่าย 👆
 
 // 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
   useEffect(() => {
