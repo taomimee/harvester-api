@@ -507,6 +507,11 @@ function App() {
   const todayJobs = jobs.filter(j => 
     new Date(j.job_date).toDateString() === todayStr || j.status === 'IN_PROGRESS'
   );
+  
+  // 👇 แยกคำนวณพื้นที่งานใหม่ของวันนี้ และ งานเก่าที่ค้างมาจากวันอื่น
+  const todayOnlyArea = todayJobs.filter(j => new Date(j.job_date).toDateString() === todayStr).reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  const oldJobsArea = todayJobs.filter(j => new Date(j.job_date).toDateString() !== todayStr).reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  
   const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
   const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
   
@@ -1115,7 +1120,18 @@ function App() {
               </div>
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
                 <span className="text-gray-500 text-xs font-bold mb-1">🌾 พื้นที่รวมวันนี้</span>
-                <span className="text-2xl font-black text-emerald-600">{todayArea} <span className="text-sm font-normal">ไร่</span></span>
+                <div className="flex flex-col items-center">
+                  <span className="text-2xl font-black text-emerald-600 leading-none">
+                    {todayOnlyArea} <span className="text-sm font-normal">ไร่</span>
+                  </span>
+                  
+                  {/* 👇 ถ้ายอดงานเก่ามากกว่า 0 ถึงจะโชว์ป้ายเตือนสีแดง 👇 */}
+                  {oldJobsArea > 0 && (
+                    <span className="mt-1 text-[10px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full border border-red-200 shadow-sm">
+                      + งานเก่า {oldJobsArea} ไร่
+                    </span>
+                  )}
+                </div>
               </div>
               
               {/* 👇 ซ่อนกล่องรายได้ (ให้เถ้าแก่เห็นคนเดียว) 👇 */}
