@@ -1119,16 +1119,16 @@ function App() {
                 <span className="text-2xl font-black text-gray-800">{todayJobs.length} <span className="text-sm font-normal">งาน</span></span>
               </div>
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-gray-500 text-xs font-bold mb-1">🌾 พื้นที่รวมวันนี้</span>
+                <span className="text-gray-500 text-xs font-bold mb-2">🌾 พื้นที่รวมวันนี้</span>
                 <div className="flex flex-col items-center">
                   <span className="text-2xl font-black text-emerald-600 leading-none">
                     {todayOnlyArea} <span className="text-sm font-normal">ไร่</span>
                   </span>
                   
-                  {/* 👇 ถ้ายอดงานเก่ามากกว่า 0 ถึงจะโชว์ป้ายเตือนสีแดง 👇 */}
+                  {/* 👇 ปรับป้ายงานเก่าให้ใหญ่ สีชัดขึ้น และเพิ่มไอคอน 👇 */}
                   {oldJobsArea > 0 && (
-                    <span className="mt-1 text-[10px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded-full border border-red-200 shadow-sm">
-                      + งานเก่า {oldJobsArea} ไร่
+                    <span className="mt-2.5 text-[11px] sm:text-xs font-black text-red-700 bg-red-100 px-3 py-1.5 rounded-lg border border-red-300 shadow-sm flex items-center gap-1">
+                      ⚠️ + งานค้าง {oldJobsArea} ไร่
                     </span>
                   )}
                 </div>
