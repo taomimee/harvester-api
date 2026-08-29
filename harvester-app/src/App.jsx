@@ -2325,8 +2325,17 @@ function App() {
                   .filter(t => {
                     // ถ้าไม่ได้ติ๊กใครเลย ให้โชว์ทั้งหมด
                     if (wageFilter.length === 0) return true;
-                    // ถ้าติ๊ก ให้เช็คว่างานนี้มีคนที่ติ๊กไหม
-                    const jobWorkers = (t.note || '').split(',').map(w => w.trim());
+                    
+                    // 🐛 แก้ไข: ทำความสะอาดข้อความ ตัดรายละเอียดพื้นที่ทิ้งก่อนค้นหาชื่อ
+                    let wStr = t.note || '';
+                    if (wStr.includes('คนทำ:') && wStr.includes('(')) {
+                        wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
+                    } else if (wStr.includes('(')) {
+                        wStr = wStr.split('(')[0].trim();
+                    }
+                    const jobWorkers = wStr.split(',').map(w => w.trim());
+                    
+                    // เช็คว่างานนี้มีคนที่ติ๊กเลือกอยู่ไหม
                     return wageFilter.some(fw => jobWorkers.includes(fw));
                   })
                   .map(tx => {
@@ -2335,6 +2344,10 @@ function App() {
                   if (workersStr.includes('คนทำ:') && workersStr.includes('(')) {
                       const parts = workersStr.split('(');
                       workersStr = parts[0].replace('คนทำ:', '').trim();
+                      detailsStr = parts[1].replace(')', '').trim();
+                  } else if (workersStr.includes('(')) {
+                      const parts = workersStr.split('(');
+                      workersStr = parts[0].trim();
                       detailsStr = parts[1].replace(')', '').trim();
                   }
                   
@@ -2394,7 +2407,7 @@ function App() {
                          </div>
                        </div>
 
-                       {/* กดเพื่อจ่ายเงิน (จะกดจ่ายได้ก็ต่อเมื่อ "ไม่ได้ติ๊กกรองชื่อ" เพื่อป้องกันการกดจ่ายทีละครึ่งแล้วบัญชีรวน) */}
+                       {/* กดเพื่อจ่ายเงิน (จะกดจ่ายได้ก็ต่อเมื่อ "ไม่ได้ติ๊กกรองชื่อ") */}
                        {wageTab === 'UNPAID' && (
                          wageFilter.length === 0 ? (
                            <button 
@@ -2445,7 +2458,15 @@ function App() {
                       .reduce((sum, tx) => {
                         if (wageFilter.length === 0) return sum + Number(tx.total_amount);
                         
-                        const jobWorkers = (tx.note || '').split(',').map(w => w.trim()).filter(w => w);
+                        // 🐛 แก้ไข: ทำความสะอาดข้อความก่อนนับจำนวนคน
+                        let wStr = tx.note || '';
+                        if (wStr.includes('คนทำ:') && wStr.includes('(')) {
+                            wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
+                        } else if (wStr.includes('(')) {
+                            wStr = wStr.split('(')[0].trim();
+                        }
+                        
+                        const jobWorkers = wStr.split(',').map(w => w.trim()).filter(w => w);
                         const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
                         
                         // ถ้ารายการนี้ไม่มีคนที่เลือกเลย ให้ข้ามไป
