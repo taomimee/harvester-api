@@ -1977,8 +1977,15 @@ function App() {
                     {['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'].map((m, i) => <option key={i} value={i + 1} className="text-gray-900">{m}</option>)}
                   </select>
                   <select value={dashYear} onChange={(e) => setDashYear(Number(e.target.value))} className="bg-white/10 border border-white/15 text-white p-2 rounded-xl text-xs font-bold outline-none">
-                    <option value={new Date().getFullYear()} className="text-gray-900">{new Date().getFullYear() + 543}</option>
-                    <option value={new Date().getFullYear() - 1} className="text-gray-900">{new Date().getFullYear() + 542}</option>
+                    {/* สร้างตัวเลือกย้อนหลัง 5 ปีอัตโนมัติ */}
+                    {Array.from({ length: 5 }, (_, i) => {
+                      const year = new Date().getFullYear() - i;
+                      return (
+                        <option key={year} value={year} className="text-gray-900">
+                          {year + 543} {i === 0 ? '(ปีนี้)' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               </div>
