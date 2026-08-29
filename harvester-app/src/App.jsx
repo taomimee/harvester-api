@@ -1210,7 +1210,7 @@ function App() {
                   <p className="text-gray-500 font-bold text-sm">ไม่มีคิวงานในวันนี้ครับ 🍃</p>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {/* 👇 จัดเรียงให้งาน "กำลังเกี่ยว" ลอยขึ้นบนสุดเสมอ 👇 */}
                   {todayJobs.sort((a, b) => {
                     if (a.status === 'IN_PROGRESS' && b.status !== 'IN_PROGRESS') return -1;
@@ -1219,55 +1219,54 @@ function App() {
                   }).map((job, idx) => {
                     const jobDate = new Date(job.job_date);
                     const isToday = jobDate.toDateString() === todayStr;
-                    
-                    // ถ้าเป็นงานค้างจากเมื่อวาน ให้เพิ่ม วัน/เดือน เข้าไปหน้าเวลา
-                    const timeStr = isToday 
-                      ? jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
-                      : `${jobDate.getDate()}/${jobDate.getMonth() + 1} ` + jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-                      
                     const isDone = job.status === 'DONE';
+                    
+                    // แยกวันที่ และ เวลา ออกจากกัน
+                    const dateText = `${jobDate.getDate()}/${jobDate.getMonth() + 1}`;
+                    const timeText = jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
                     
                     return (
                       <div 
                         key={job.id} 
-                        // 👇 แก้ไขตรง onClick ให้ทำระบบ "ล็อกเป้า" เลื่อนจอไปหาการ์ดอัตโนมัติ 👇
+                        id={`job-card-${job.id}`} 
                         onClick={() => {
-                          setActiveTab('active'); // 1. ย้ายไปหน้าคิวงาน
-                          setExpandedId(job.id);  // 2. สั่งกางการ์ดงานนี้ออกทันที
-                          
-                          // 3. หน่วงเวลา 0.1 วิให้หน้าคิวงานโหลดเสร็จ แล้วสไลด์ตามไปหาการ์ดนั้น
+                          setActiveTab('active');
+                          setExpandedId(job.id);  
                           setTimeout(() => {
                             const targetCard = document.getElementById(`job-card-${job.id}`);
                             if (targetCard) {
-                              // เลื่อนจอให้การ์ดมาอยู่ตรงกลาง
                               targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                              
-                              // แถมลูกเล่นไฮไลท์กรอบสีส้มกระพริบ 2 วินาที
                               targetCard.classList.add('ring-4', 'ring-orange-500', 'scale-[1.02]');
                               setTimeout(() => {
                                 targetCard.classList.remove('ring-4', 'ring-orange-500', 'scale-[1.02]');
                               }, 2000);
                             } else {
-                              // ถ้าหาไม่เจอจริงๆ ค่อยเลื่อนขึ้นบนสุดแก้ขัด
                               window.scrollTo({ top: 0, behavior: 'smooth' }); 
                             }
                           }, 100);
                         }} 
-                        className={`flex items-center p-2.5 rounded-lg border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}
+                        className={`flex items-center p-3 rounded-xl border cursor-pointer transition ${isDone ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100 hover:bg-gray-50 shadow-sm'}`}
                       >
-                        <div className="w-14 shrink-0 text-center border-r border-gray-200 pr-2 mr-3">
-                          <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-700'}`}>{timeStr}</span>
-                          {/* แจ้งเตือนเล็กๆ ถ้านี่คืองานค้างจากวันอื่น */}
-                          {!isToday && <span className="text-[9px] text-red-500 font-bold block mt-0.5">ค้าง!</span>}
+                        {/* 🕒 ฝั่งซ้าย: วันที่/เวลา และเส้นแบ่งครึ่ง */}
+                        <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3 flex flex-col justify-center">
+                          {!isToday && <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-800'}`}>{dateText}</span>}
+                          <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-800'}`}>{timeText}</span>
+                          {!isToday && <span className="text-[9px] text-red-500 font-bold block mt-1">ค้าง!</span>}
                         </div>
-                        <div className="flex-1">
-                          <p className={`text-sm font-bold ${isDone ? 'text-green-800' : 'text-gray-900'}`}>{job.customers?.name}</p>
-                          <p className="text-[11px] text-gray-500 mt-0.5"> {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {job.area_size} ไร่ </p>
+                        
+                        {/* 👤 ตรงกลาง: ชื่อลูกค้า จัดให้อยู่กึ่งกลาง */}
+                        <div className="flex-1 text-center pr-2">
+                          <p className={`text-sm font-black ${isDone ? 'text-green-800' : 'text-gray-900'}`}>{job.customers?.name}</p>
+                          <p className="text-xs text-gray-500 font-semibold mt-1"> 
+                            {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {job.area_size} ไร่ 
+                          </p>
                         </div>
-                        <div>
-                          {isDone ? <span className="text-green-500 font-bold text-xs">✅ เสร็จแล้ว</span> : 
-                           job.status === 'IN_PROGRESS' ? <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-[10px] font-bold animate-pulse">กำลังเกี่ยว</span> : 
-                           <span className="bg-yellow-100 text-yellow-700 px-2 py-1 rounded text-[10px] font-bold">รอคิว</span>}
+                        
+                        {/* 🏷️ ฝั่งขวา: ป้ายสถานะ */}
+                        <div className="shrink-0">
+                          {isDone ? <span className="text-green-600 font-bold text-[10px] bg-green-100 px-2.5 py-1.5 rounded-lg">✅ เสร็จ</span> : 
+                           job.status === 'IN_PROGRESS' ? <span className="bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">กำลังเกี่ยว</span> : 
+                           <span className="bg-gray-100 text-gray-600 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">รอคิว</span>}
                         </div>
                       </div>
                     )
