@@ -2257,48 +2257,49 @@ function App() {
                     const displayDate = tx.transaction_date || tx.created_at;
 
                     return (
-                    <div key={tx.id} className={`bg-white p-4 rounded-xl shadow-md relative overflow-hidden flex flex-col gap-2 ${isWage ? 'border-red-100' : 'border-orange-100'}`}>
-                       <div className={`absolute top-0 left-0 w-1.5 h-full ${isWage ? 'bg-red-400' : 'bg-orange-400'}`}></div>
+                    <div key={tx.id} className={`bg-white p-4 rounded-xl shadow-sm relative overflow-hidden flex flex-col gap-2 border ${isWage ? 'border-red-100' : 'border-orange-100'}`}>
+                       <div className={`absolute top-0 left-0 w-1 h-full ${isWage ? 'bg-red-400' : 'bg-orange-400'}`}></div>
+                       
+                       {/* 👇 ปุ่มลบ เปลี่ยนเป็นถังขยะซ่อนมุมขวาบน ป้องกันกดพลาด 👇 */}
+                       <button 
+                         onClick={() => handleDeleteExpense(tx.id)}
+                         className="absolute top-3 right-3 text-gray-300 hover:text-red-500 transition p-1 text-base z-10"
+                         title="ลบรายการนี้"
+                       >
+                         🗑️
+                       </button>
+
                        <div className="flex justify-between items-start pl-2">
-                         <div className="flex-1 pr-2">
+                         <div className="flex-1 pr-6">
                            <div className="flex items-center gap-2 mb-1">
-                             <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${isWage ? 'bg-red-100 text-red-800 border-red-200' : 'bg-orange-100 text-orange-800 border-orange-200'}`}>
+                             <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${isWage ? 'bg-red-50 text-red-700 border-red-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
                                {tx.category === 'WAGE' ? 'ค่าแรง' : (tx.category || 'ทั่วไป')}
                              </span>
-                             <span className="text-[11px] text-gray-500 font-bold">
+                             <span className="text-[10px] text-gray-400 font-bold">
                                📅 {displayDate ? new Date(displayDate).toLocaleDateString('th-TH') : ''}
                              </span>
                            </div>
                            
-                           {/* 💡 ปรับการแสดงผล "ผู้จ่าย" ให้เหมาะกับงานแต่ละประเภท */}
-                           {isWage ? (
-                             <h3 className="font-bold text-gray-900 text-sm mt-1.5">จ่ายค่าแรงทีมงาน</h3>
-                           ) : (
-                             <h3 className="font-bold text-gray-900 text-sm mt-1.5">ผู้จ่าย: {tx.spender_name || 'ไม่ระบุ'}</h3>
-                           )}
+                           {/* 👇 ปรับหัวข้อ: ซ่อน "ผู้จ่าย: ไม่ระบุ" ดึงหมวดหมู่มาโชว์แทน 👇 */}
+                           <h3 className="font-bold text-gray-800 text-sm mt-1.5">
+                             {isWage ? 'จ่ายค่าแรงทีมงาน' : (tx.spender_name ? `ผู้จ่าย: ${tx.spender_name}` : `ค่า${tx.category || 'ใช้จ่ายทั่วไป'}`)}
+                           </h3>
                            
-                           <p className={`text-[11px] mt-0.5 ${isWage ? 'text-blue-700 font-semibold' : 'text-gray-600'}`}>
-                             {isWage ? '👷‍♂️' : '📝'} {tx.note || '-'}
+                           <p className={`text-[11px] mt-0.5 ${isWage ? 'text-blue-600 font-semibold' : 'text-gray-500'}`}>
+                             {isWage ? '👷‍♂️' : '📝'} {tx.note || 'ไม่มีหมายเหตุ'}
                            </p>
                          </div>
-                         <div className="text-right shrink-0">
-                           <span className="block font-black text-red-500 text-xl leading-none">
-                             -{Number(tx.total_amount).toLocaleString()} <span className="text-sm">฿</span>
+                         
+                         <div className="text-right shrink-0 flex flex-col items-end mt-1">
+                           <span className="block font-black text-red-600 text-xl leading-none">
+                             -{Number(tx.total_amount).toLocaleString()} <span className="text-sm font-normal">฿</span>
                            </span>
-                           <div className="flex flex-col items-end gap-1.5 mt-2">
-                             {tx.receipt_url && (
-                               <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-block text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-2.5 py-1 rounded-md font-bold hover:bg-blue-100 transition shadow-sm">
-                                 🧾 ดูใบเสร็จ
-                               </a>
-                             )}
-                             {/* 👇 ปุ่มลบทิ้ง 👇 */}
-                             <button 
-                               onClick={() => handleDeleteExpense(tx.id)}
-                               className="inline-block text-[10px] bg-red-50 text-red-600 border border-red-200 px-2.5 py-1 rounded-md font-bold hover:bg-red-100 transition shadow-sm"
-                             >
-                               🗑️ ลบทิ้ง
-                             </button>
-                           </div>
+                           {/* 👇 ปรับปุ่มดูใบเสร็จให้ดูเรียบง่ายขึ้น (Text Link) 👇 */}
+                           {tx.receipt_url && (
+                             <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-[10px] text-blue-600 font-bold hover:underline">
+                               📄 ดูใบเสร็จ
+                             </a>
+                           )}
                          </div>
                        </div>
                     </div>
