@@ -1910,26 +1910,66 @@ function App() {
           </div>
         )}
 
-        {/* 📊 หน้าจอ Dashboard บัญชีหลัก */}
+        {/* 📊 หน้าจอ Dashboard บัญชีหลัก (อัปเกรดดูรายปีได้ + คำนวณสด) */}
         {activeTab === 'finance' && financeSubTab === 'dashboard' && (() => {
-          const monthJobs = jobs.filter(j => {
+          // 🧠 สมองกลคำนวณข้อมูลย่อย (ดึงจาก State โดยตรง รองรับทั้งรายเดือนและรายปี)
+          
+          // 1. กรองข้อมูลตามเดือนและปี (ถ้า dashMonth === 0 คือให้ดึงมา "ทั้งปี")
+          const periodJobs = jobs.filter(j => {
+            if (!j.job_date) return false;
             const d = new Date(j.job_date);
-            return d.getFullYear() === dashYear && (d.getMonth() + 1) === dashMonth;
+            return d.getFullYear() === dashYear && (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
           });
-          const completedJobs = monthJobs.filter(j => j.status === 'DONE');
-          const activeMonthJobs = monthJobs.filter(j => j.status !== 'DONE');
-          const areaTotal = monthJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
-          const costPerRai = areaTotal > 0 ? Number(dashboardData.totalExpense || 0) / areaTotal : 0;
-          const profitMargin = Number(dashboardData.totalIncome || 0) > 0
-            ? (Number(dashboardData.netProfit || 0) / Number(dashboardData.totalIncome || 0)) * 100
-            : 0;
-
-          const selectedPeriodExpenses = expenseTransactions.filter(tx => {
+          
+          const periodExpenses = expenseTransactions.filter(tx => {
             const d = new Date(tx.transaction_date || tx.created_at);
-            return !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (d.getMonth() + 1) === dashMonth;
+            return !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
+          });
+          
+          const periodWages = wageTransactions.filter(tx => {
+            const d = new Date(tx.created_at || tx.transaction_date || tx.paid_at);
+            return !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
           });
 
-          const expenseByCategory = selectedPeriodExpenses.reduce((acc, tx) => {
+          // 2. คำนวณตัวเลขทางการเงิน (ไม่ต้องรอ API dashboardData แล้ว คำนวณสดเร็วกว่า)
+          let calcTotalIncome = 0;
+          let calcTotalUnpaid = 0;
+          let areaTotal = 0;
+
+          const completedJobs = periodJobs.filter(j => j.status === 'DONE');
+          const activeMonthJobs = periodJobs.filter(j => j.status !== 'DONE');
+
+          completedJobs.forEach(j => {
+            areaTotal += (Number(j.area_size) || 0);
+            const currentTotal = Number(j.total_price) || 0;
+            
+            if (j.payment_status === 'PAID') {
+              calcTotalIncome += currentTotal;
+            } else if (j.payment_status === 'DEPOSIT') {
+              // คำนวณยอดที่จ่ายมาแล้ว
+              const orig = (Number(j.area_size) || 0) * (Number(j.price_per_rai) || 0);
+              const trueTotal = orig > currentTotal ? orig : currentTotal;
+              const paidAmt = trueTotal > currentTotal ? (trueTotal - currentTotal) : 0;
+              
+              calcTotalIncome += paidAmt;
+              calcTotalUnpaid += currentTotal; 
+            } else {
+              calcTotalUnpaid += currentTotal;
+            }
+          });
+
+          const calcTotalExpense = periodExpenses.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
+          const calcNetProfit = calcTotalIncome - calcTotalExpense;
+
+          // 3. ข้อมูลวิเคราะห์สำหรับกราฟและสัดส่วน
+          const costPerRai = areaTotal > 0 ? calcTotalExpense / areaTotal : 0;
+          const profitMargin = calcTotalIncome > 0 ? (calcNetProfit / calcTotalIncome) * 100 : 0;
+          
+          // ตัวชี้วัดอัตราการเก็บเงิน (Collection Rate)
+          const totalPotential = calcTotalIncome + calcTotalUnpaid;
+          const collectionRate = totalPotential > 0 ? (calcTotalIncome / totalPotential) * 100 : 0;
+          
+          const expenseByCategory = periodExpenses.reduce((acc, tx) => {
             const raw = tx.category === 'WAGE' || tx.category === 'ค่าแรง' ? 'ค่าแรง' : (tx.category || 'อื่นๆ');
             acc[raw] = (acc[raw] || 0) + (Number(tx.total_amount) || 0);
             return acc;
@@ -1937,20 +1977,18 @@ function App() {
           const expenseCategoryEntries = Object.entries(expenseByCategory).sort((a, b) => b[1] - a[1]);
           const expenseMax = expenseCategoryEntries.length > 0 ? expenseCategoryEntries[0][1] : 1;
 
-          const periodWages = wageTransactions.filter(tx => {
-            const d = new Date(tx.created_at || tx.transaction_date || tx.paid_at);
-            return !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (d.getMonth() + 1) === dashMonth;
-          });
           const unpaidWage = periodWages.filter(tx => tx.status === 'UNPAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           const paidWage = periodWages.filter(tx => tx.status === 'PAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
-          const laborCostPerRai = areaTotal > 0 ? (paidWage + unpaidWage) / areaTotal : 0;
-
-          const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
+          
+          const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
           const topDebtors = [...debtJobs].sort((a, b) => (Number(b.total_price) || 0) - (Number(a.total_price) || 0)).slice(0, 3);
+          
           const formatMoney = (value) => Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
           const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
-          const monthName = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"][dashMonth - 1];
+          
+          // ถ้าเลือก 0 จะแสดงคำว่า "สรุปทั้งปี"
+          const monthName = dashMonth === 0 ? "สรุปทั้งปี" : ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"][dashMonth - 1];
 
           return (
             <div className="space-y-4 pb-3">
@@ -1964,25 +2002,22 @@ function App() {
                     <h2 className="text-2xl font-black mt-1">📊 บัญชีหลัก</h2>
                     <p className="text-xs text-indigo-100/80 mt-1">ภาพรวมการเงินและผลประกอบการ • {monthName} {dashYear + 543}</p>
                   </div>
-                  <button
-                    onClick={() => { fetchDashboard(); fetchExpenses(); fetchWages(); }}
-                    className="shrink-0 w-10 h-10 rounded-xl bg-white/10 border border-white/10 hover:bg-white/20 transition flex items-center justify-center text-lg"
-                    title="รีเฟรช"
-                  >
-                    ↻
-                  </button>
                 </div>
+                
+                {/* 💡 ตัวเลือกเดือนและปี ที่เพิ่ม "สรุปทั้งปี" และ ปีย้อนหลัง 5 ปี */}
                 <div className="relative z-10 flex flex-wrap gap-2 mt-4">
                   <select value={dashMonth} onChange={(e) => setDashMonth(Number(e.target.value))} className="bg-white/10 border border-white/15 text-white p-2 rounded-xl text-xs font-bold outline-none">
+                    <option value={0} className="text-gray-900 font-bold bg-amber-100">🌟 สรุปทั้งปี</option>
                     {['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'].map((m, i) => <option key={i} value={i + 1} className="text-gray-900">{m}</option>)}
                   </select>
+                  
                   <select value={dashYear} onChange={(e) => setDashYear(Number(e.target.value))} className="bg-white/10 border border-white/15 text-white p-2 rounded-xl text-xs font-bold outline-none">
-                    {/* สร้างตัวเลือกย้อนหลัง 5 ปีอัตโนมัติ */}
+                    {/* สร้างตัวเลือกย้อนหลัง 5 ปีแบบอัตโนมัติ */}
                     {Array.from({ length: 5 }, (_, i) => {
-                      const year = new Date().getFullYear() - i;
+                      const y = new Date().getFullYear() - i;
                       return (
-                        <option key={year} value={year} className="text-gray-900">
-                          {year + 543} {i === 0 ? '(ปีนี้)' : ''}
+                        <option key={y} value={y} className="text-gray-900">
+                          {y + 543} {i === 0 ? '(ปีนี้)' : ''}
                         </option>
                       );
                     })}
@@ -1990,172 +2025,164 @@ function App() {
                 </div>
               </div>
 
-              {isFetchingDash ? (
-                <div className="bg-white rounded-3xl p-12 shadow-md border border-gray-100 flex flex-col items-center justify-center text-gray-400">
-                  <span className="text-5xl animate-spin mb-4">⏳</span>
-                  <span className="font-black text-sm">กำลังประมวลผลบัญชี...</span>
-                  <span className="text-xs mt-1">กำลังรวมรายรับ รายจ่าย ผลงาน และค่าแรง</span>
+              {/* Financial snapshot */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 bg-white rounded-3xl p-5 shadow-md border border-emerald-100 relative overflow-hidden">
+                  <div className="absolute right-3 top-3 text-5xl opacity-10">📈</div>
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest font-black text-emerald-700">NET PROFIT</p>
+                      <p className={`text-4xl sm:text-5xl font-black tracking-tight mt-1 ${calcNetProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(calcNetProfit)} <span className="text-sm text-gray-400">บาท</span></p>
+                      <p className="text-xs text-gray-500 font-semibold mt-2">กำไรสุทธิของช่วงเวลาที่เลือก</p>
+                    </div>
+                    <div className={`px-3 py-2 rounded-xl text-xs font-black ${profitMargin >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                      Margin {formatPercent(profitMargin)}
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                <>
-                  {/* Financial snapshot */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2 bg-white rounded-3xl p-5 shadow-md border border-emerald-100 relative overflow-hidden">
-                      <div className="absolute right-3 top-3 text-5xl opacity-10">📈</div>
-                      <div className="flex justify-between items-start gap-4">
-                        <div>
-                          <p className="text-[10px] uppercase tracking-widest font-black text-emerald-700">NET PROFIT</p>
-                          <p className={`text-4xl sm:text-5xl font-black tracking-tight mt-1 ${Number(dashboardData.netProfit || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(dashboardData.netProfit)} <span className="text-sm text-gray-400">บาท</span></p>
-                          <p className="text-xs text-gray-500 font-semibold mt-2">กำไรสุทธิของช่วงเวลาที่เลือก</p>
+                
+                <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 shadow-sm">
+                  <p className="text-[10px] font-black text-emerald-800">💰 รายรับ</p>
+                  <p className="text-2xl font-black text-emerald-600 mt-1">{formatMoney(calcTotalIncome)} <span className="text-xs">฿</span></p>
+                </div>
+                
+                <div className="bg-rose-50 rounded-2xl p-4 border border-rose-100 shadow-sm">
+                  <p className="text-[10px] font-black text-rose-800">💸 รายจ่าย</p>
+                  <p className="text-2xl font-black text-rose-600 mt-1">{formatMoney(calcTotalExpense)} <span className="text-xs">฿</span></p>
+                </div>
+
+                {/* 💡 แทนที่ Sky Box เดิม ด้วย "อัตราการเก็บเงินได้" */}
+                <div className="bg-sky-50 rounded-2xl p-4 border border-sky-100 shadow-sm col-span-2 sm:col-span-1">
+                  <div className="flex justify-between items-start">
+                    <p className="text-[10px] font-black text-sky-900">🎯 อัตราการเก็บเงินได้ (Collection Rate)</p>
+                  </div>
+                  <p className="text-2xl font-black text-sky-600 mt-1">{formatPercent(collectionRate)}</p>
+                  <p className="text-[10px] text-sky-700 font-bold mt-1">เก็บเงินสดเข้าจริง เทียบกับยอดบิลรวมทั้งหมด</p>
+                </div>
+
+                <button onClick={() => setFinanceSubTab('debt')} className="text-left bg-amber-50 rounded-2xl p-4 border border-amber-200 shadow-sm hover:bg-amber-100 transition col-span-2 sm:col-span-1">
+                  <p className="text-[10px] font-black text-amber-900">💳 ลูกหนี้ค้าง </p>
+                  <p className="text-2xl font-black text-amber-600 mt-1">{formatMoney(debtAmount)} <span className="text-xs">฿</span></p>
+                  <p className="text-[10px] text-amber-700 font-bold mt-1">{debtJobs.length} รายการ • กดเพื่อตามเก็บ</p>
+                </button>
+              </div>
+
+              {/* Income / expense ratio */}
+              <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-black text-gray-900">💼 ภาพรวมเงินเข้า–เงินออก</h3>
+                    <p className="text-[11px] text-gray-500 mt-1">ดูสัดส่วนต้นทุนเทียบกับรายรับในช่วงที่เลือก</p>
+                  </div>
+                  <div className="text-right text-[10px] font-black">
+                    <span className="text-emerald-600">รับ {formatPercent((calcTotalIncome / Math.max(calcTotalIncome + calcTotalExpense, 1)) * 100)}</span>
+                    <span className="text-gray-300 mx-1">/</span>
+                    <span className="text-rose-500">จ่าย {formatPercent((calcTotalExpense / Math.max(calcTotalIncome + calcTotalExpense, 1)) * 100)}</span>
+                  </div>
+                </div>
+                <div className="h-4 rounded-full bg-gray-100 overflow-hidden flex shadow-inner">
+                  <div className="bg-emerald-500 h-full transition-all" style={{ width: `${Math.min(100, (calcTotalIncome / Math.max(calcTotalIncome + calcTotalExpense, 1)) * 100)}%` }}></div>
+                  <div className="bg-rose-400 h-full transition-all" style={{ width: `${Math.min(100, (calcTotalExpense / Math.max(calcTotalIncome + calcTotalExpense, 1)) * 100)}%` }}></div>
+                </div>
+              </div>
+
+              {/* Operations */}
+              <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-black text-gray-900">🌾 ผลงานของช่วงเวลาที่เลือก</h3>
+                    <p className="text-[11px] text-gray-500 mt-1">วัดผลจากงานที่อยู่ในช่วง {monthName}</p>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 text-[10px] font-black">{periodJobs.length} งาน</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-teal-50 rounded-2xl p-3 border border-teal-100"><p className="text-[10px] font-bold text-teal-800">พื้นที่รวม</p><p className="text-xl font-black text-teal-700 mt-1">{formatMoney(areaTotal)} <span className="text-xs">ไร่</span></p></div>
+                  <div className="bg-blue-50 rounded-2xl p-3 border border-blue-100"><p className="text-[10px] font-bold text-blue-800">งานเสร็จแล้ว</p><p className="text-xl font-black text-blue-700 mt-1">{completedJobs.length} <span className="text-xs">งาน</span></p></div>
+                  <div className="bg-orange-50 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-800">งานค้าง/กำลังทำ</p><p className="text-xl font-black text-orange-700 mt-1">{activeMonthJobs.length} <span className="text-xs">งาน</span></p></div>
+                  <div className="bg-indigo-50 rounded-2xl p-3 border border-indigo-100"><p className="text-[10px] font-bold text-indigo-800">กำไรเฉลี่ยต่อไร่</p><p className="text-xl font-black text-indigo-700 mt-1">{formatMoney(areaTotal > 0 ? calcNetProfit / areaTotal : 0)} <span className="text-xs">฿/ไร่</span></p></div>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                  <div className="rounded-xl bg-gray-50 border border-gray-100 p-3"><span className="text-gray-500 font-bold">ต้นทุนเฉลี่ย/ไร่</span><strong className="block text-gray-900 text-lg mt-1">{formatMoney(costPerRai)} ฿</strong></div>
+                  <div className="rounded-xl bg-gray-50 border border-gray-100 p-3"><span className="text-gray-500 font-bold">รายได้เฉลี่ย/ไร่</span><strong className="block text-gray-900 text-lg mt-1">{formatMoney(areaTotal > 0 ? (calcTotalIncome + calcTotalUnpaid) / areaTotal : 0)} ฿</strong></div>
+                </div>
+              </div>
+
+              {/* Cost dashboard */}
+              <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-black text-gray-900">💸 โครงสร้างต้นทุน</h3>
+                    <p className="text-[11px] text-gray-500 mt-1">ดูว่าเงินออกไปกับอะไรบ้าง</p>
+                  </div>
+                  <button onClick={() => setFinanceSubTab('expense')} className="text-[10px] font-black px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-100">ดูรายจ่ายทั้งหมด →</button>
+                </div>
+                {expenseCategoryEntries.length === 0 ? (
+                  <div className="py-7 text-center text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                    <div className="text-3xl">📭</div><p className="font-bold text-xs mt-2">ยังไม่มีรายการรายจ่ายในช่วงเวลานี้</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {expenseCategoryEntries.slice(0, 6).map(([name, amount]) => (
+                      <div key={name}>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-xs font-bold text-gray-700">{name}</span>
+                          <span className="text-xs font-black text-gray-900">{formatMoney(amount)} ฿</span>
                         </div>
-                        <div className={`px-3 py-2 rounded-xl text-xs font-black ${profitMargin >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
-                          Margin {formatPercent(profitMargin)}
+                        <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                          <div className="h-full bg-gradient-to-r from-orange-400 to-rose-500 rounded-full" style={{ width: `${Math.min(100, (amount / expenseMax) * 100)}%` }}></div>
                         </div>
                       </div>
-                    </div>
-                    <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 shadow-sm">
-                      <p className="text-[10px] font-black text-emerald-800">💰 รายรับ</p>
-                      <p className="text-2xl font-black text-emerald-600 mt-1">{formatMoney(dashboardData.totalIncome)} <span className="text-xs">฿</span></p>
-                    </div>
-                    <div className="bg-rose-50 rounded-2xl p-4 border border-rose-100 shadow-sm">
-                      <p className="text-[10px] font-black text-rose-800">💸 รายจ่าย</p>
-                      <p className="text-2xl font-black text-rose-600 mt-1">{formatMoney(dashboardData.totalExpense)} <span className="text-xs">฿</span></p>
-                    </div>
-                    <button onClick={() => setFinanceSubTab('debt')} className="text-left bg-amber-50 rounded-2xl p-4 border border-amber-200 shadow-sm hover:bg-amber-100 transition">
-                      <p className="text-[10px] font-black text-amber-900">💳 ลูกหนี้ค้าง</p>
-                      <p className="text-2xl font-black text-amber-600 mt-1">{formatMoney(Math.max(Number(dashboardData.totalUnpaid || 0), debtAmount))} <span className="text-xs">฿</span></p>
-                      <p className="text-[10px] text-amber-700 font-bold mt-1">{debtJobs.length} รายการ • กดเพื่อดูรายละเอียด</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Wage snapshot */}
+              <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-3xl p-5 border border-orange-100 shadow-md">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest text-orange-700 font-black">LABOR COST</p>
+                    <h3 className="text-lg font-black text-orange-950 mt-1">👷 ค่าแรงทีมงาน ({monthName})</h3>
+                  </div>
+                  <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="px-3 py-2 bg-white rounded-xl border border-orange-200 text-orange-700 text-[10px] font-black shadow-sm">เปิดสมุดค่าแรง →</button>
+                </div>
+                <div className="grid grid-cols-2 gap-3 mt-4">
+                  <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">จ่ายแล้ว</p><p className="text-2xl font-black text-green-600 mt-1">{formatMoney(paidWage)} ฿</p></div>
+                  <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">รอจ่าย</p><p className="text-2xl font-black text-red-600 mt-1">{formatMoney(unpaidWage)} ฿</p></div>
+                </div>
+              </div>
+
+              {/* Alerts + debtors */}
+              <div className="grid grid-cols-1 gap-4">
+                <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
+                  <div className="flex items-center justify-between mb-3">
+                    <div><h3 className="font-black text-gray-900">⚠️ สิ่งที่ต้องจัดการ</h3><p className="text-[11px] text-gray-500 mt-1">รายการสำคัญที่ไม่ควรมองข้าม</p></div>
+                    <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100">{(debtJobs.length + (unpaidWage > 0 ? 1 : 0))} เรื่อง</span>
+                  </div>
+                  <div className="space-y-2">
+                    <button onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center justify-between p-3 rounded-2xl bg-red-50 border border-red-100 text-left hover:bg-red-100 transition">
+                      <span><span className="block text-xs font-black text-red-800">💳 ลูกหนี้ค้างชำระ (ทั้งหมด)</span><span className="block text-[10px] text-red-600 mt-0.5">{debtJobs.length} รายการ</span></span><strong className="text-red-600">{formatMoney(debtAmount)} ฿</strong>
                     </button>
-                    <div className="bg-sky-50 rounded-2xl p-4 border border-sky-100 shadow-sm">
-                      <div className="flex justify-between items-start">
-                        <p className="text-[10px] font-black text-sky-900">🎯 อัตราการเก็บเงินได้</p>
-                        <span className="text-lg opacity-80">💰</span>
-                      </div>
-                      <p className="text-2xl font-black text-sky-600 mt-1">
-                        {formatPercent((Number(dashboardData.totalIncome || 0) / Math.max(Number(dashboardData.totalIncome || 0) + Number(dashboardData.totalUnpaid || 0), 1)) * 100)}
-                      </p>
-                      <p className="text-[10px] text-sky-700 font-bold mt-1">เงินสดเข้าจริง เทียบกับยอดบิลรวม</p>
-                    </div>
+                    {unpaidWage > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย ({monthName})</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(unpaidWage)} ฿</strong></button>}
+                    {debtJobs.length === 0 && unpaidWage <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
                   </div>
+                </div>
 
-                  {/* Income / expense ratio */}
-                  <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="font-black text-gray-900">💼 ภาพรวมเงินเข้า–เงินออก</h3>
-                        <p className="text-[11px] text-gray-500 mt-1">ดูสัดส่วนต้นทุนเทียบกับรายรับในช่วงที่เลือก</p>
-                      </div>
-                      <div className="text-right text-[10px] font-black">
-                        <span className="text-emerald-600">รับ {formatPercent((Number(dashboardData.totalIncome || 0) / Math.max(Number(dashboardData.totalIncome || 0) + Number(dashboardData.totalExpense || 0), 1)) * 100)}</span>
-                        <span className="text-gray-300 mx-1">/</span>
-                        <span className="text-rose-500">จ่าย {formatPercent((Number(dashboardData.totalExpense || 0) / Math.max(Number(dashboardData.totalIncome || 0) + Number(dashboardData.totalExpense || 0), 1)) * 100)}</span>
-                      </div>
-                    </div>
-                    <div className="h-4 rounded-full bg-gray-100 overflow-hidden flex shadow-inner">
-                      <div className="bg-emerald-500 h-full transition-all" style={{ width: `${Math.min(100, (Number(dashboardData.totalIncome || 0) / Math.max(Number(dashboardData.totalIncome || 0) + Number(dashboardData.totalExpense || 0), 1)) * 100)}%` }}></div>
-                      <div className="bg-rose-400 h-full transition-all" style={{ width: `${Math.min(100, (Number(dashboardData.totalExpense || 0) / Math.max(Number(dashboardData.totalIncome || 0) + Number(dashboardData.totalExpense || 0), 1)) * 100)}%` }}></div>
-                    </div>
-                  </div>
+                <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
+                  <div className="flex items-center justify-between mb-4"><div><h3 className="font-black text-gray-900">👥 ลูกหนี้ก้อนใหญ่</h3><p className="text-[11px] text-gray-500 mt-1">3 รายการที่มียอดค้างสูงสุด</p></div><button onClick={() => setFinanceSubTab('debt')} className="text-[10px] font-black text-red-600">ดูทั้งหมด →</button></div>
+                  {topDebtors.length === 0 ? <p className="text-xs text-gray-400 text-center py-5">ไม่มีลูกหนี้ค้างชำระ</p> : <div className="space-y-2">{topDebtors.map((j, idx) => <button key={j.id} onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-red-50 transition text-left"><div className="w-8 h-8 rounded-xl bg-white border border-gray-200 flex items-center justify-center font-black text-gray-500">{idx + 1}</div><div className="flex-1 min-w-0"><p className="font-black text-xs text-gray-800 truncate">{j.customers?.name || 'ไม่ระบุชื่อ'}</p><p className="text-[10px] text-gray-500">{j.area_size || 0} ไร่ • {j.crop_type || 'ไม่ระบุ'}</p></div><strong className="text-sm text-red-600">{formatMoney(j.total_price)} ฿</strong></button>)}</div>}
+                </div>
+              </div>
 
-                  {/* Operations */}
-                  <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="font-black text-gray-900">🌾 ผลงานของเดือน</h3>
-                        <p className="text-[11px] text-gray-500 mt-1">วัดผลจากงานที่อยู่ในช่วง {monthName}</p>
-                      </div>
-                      <span className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 text-[10px] font-black">{monthJobs.length} งาน</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-teal-50 rounded-2xl p-3 border border-teal-100"><p className="text-[10px] font-bold text-teal-800">พื้นที่รวม</p><p className="text-xl font-black text-teal-700 mt-1">{formatMoney(areaTotal)} <span className="text-xs">ไร่</span></p></div>
-                      <div className="bg-blue-50 rounded-2xl p-3 border border-blue-100"><p className="text-[10px] font-bold text-blue-800">งานเสร็จแล้ว</p><p className="text-xl font-black text-blue-700 mt-1">{completedJobs.length} <span className="text-xs">งาน</span></p></div>
-                      <div className="bg-orange-50 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-800">งานค้าง/กำลังทำ</p><p className="text-xl font-black text-orange-700 mt-1">{activeMonthJobs.length} <span className="text-xs">งาน</span></p></div>
-                      <div className="bg-indigo-50 rounded-2xl p-3 border border-indigo-100"><p className="text-[10px] font-bold text-indigo-800">กำไรเฉลี่ยต่อไร่</p><p className="text-xl font-black text-indigo-700 mt-1">{formatMoney(areaTotal > 0 ? Number(dashboardData.netProfit || 0) / areaTotal : 0)} <span className="text-xs">฿/ไร่</span></p></div>
-                    </div>
-                    <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-                      <div className="rounded-xl bg-gray-50 border border-gray-100 p-3"><span className="text-gray-500 font-bold">ต้นทุนเฉลี่ย/ไร่</span><strong className="block text-gray-900 text-lg mt-1">{formatMoney(costPerRai)} ฿</strong></div>
-                      <div className="rounded-xl bg-gray-50 border border-gray-100 p-3"><span className="text-gray-500 font-bold">อัตรากำไรสุทธิ</span><strong className="block text-gray-900 text-lg mt-1">{formatPercent(profitMargin)}</strong></div>
-                    </div>
-                  </div>
-
-                  {/* Cost dashboard */}
-                  <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
-                    <div className="flex items-center justify-between mb-4">
-                      <div>
-                        <h3 className="font-black text-gray-900">💸 โครงสร้างต้นทุน</h3>
-                        <p className="text-[11px] text-gray-500 mt-1">ดูว่าเงินออกไปกับอะไรบ้าง</p>
-                      </div>
-                      <button onClick={() => setFinanceSubTab('expense')} className="text-[10px] font-black px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-100">ดูรายจ่ายทั้งหมด →</button>
-                    </div>
-                    {expenseCategoryEntries.length === 0 ? (
-                      <div className="py-7 text-center text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200">
-                        <div className="text-3xl">📭</div><p className="font-bold text-xs mt-2">ยังไม่มีรายการรายจ่ายในเดือนนี้</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {expenseCategoryEntries.slice(0, 6).map(([name, amount]) => (
-                          <div key={name}>
-                            <div className="flex justify-between items-center mb-1">
-                              <span className="text-xs font-bold text-gray-700">{name}</span>
-                              <span className="text-xs font-black text-gray-900">{formatMoney(amount)} ฿</span>
-                            </div>
-                            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-                              <div className="h-full bg-gradient-to-r from-orange-400 to-rose-500 rounded-full" style={{ width: `${Math.min(100, (amount / expenseMax) * 100)}%` }}></div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Wage snapshot */}
-                  <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-3xl p-5 border border-orange-100 shadow-md">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-widest text-orange-700 font-black">LABOR COST</p>
-                        <h3 className="text-lg font-black text-orange-950 mt-1">👷 ค่าแรงทีมงาน</h3>
-                      </div>
-                      <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="px-3 py-2 bg-white rounded-xl border border-orange-200 text-orange-700 text-[10px] font-black shadow-sm">เปิดสมุดค่าแรง →</button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 mt-4">
-                      <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">จ่ายแล้ว</p><p className="text-2xl font-black text-green-600 mt-1">{formatMoney(paidWage)} ฿</p></div>
-                      <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">รอจ่าย</p><p className="text-2xl font-black text-red-600 mt-1">{formatMoney(unpaidWage)} ฿</p></div>
-                    </div>
-                  </div>
-
-                  {/* Alerts + debtors */}
-                  <div className="grid grid-cols-1 gap-4">
-                    <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
-                      <div className="flex items-center justify-between mb-3">
-                        <div><h3 className="font-black text-gray-900">⚠️ สิ่งที่ต้องจัดการ</h3><p className="text-[11px] text-gray-500 mt-1">รายการสำคัญที่ไม่ควรมองข้าม</p></div>
-                        <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100">{(debtJobs.length + (unpaidWage > 0 ? 1 : 0))} เรื่อง</span>
-                      </div>
-                      <div className="space-y-2">
-                        <button onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center justify-between p-3 rounded-2xl bg-red-50 border border-red-100 text-left hover:bg-red-100 transition">
-                          <span><span className="block text-xs font-black text-red-800">💳 ลูกหนี้ค้างชำระ</span><span className="block text-[10px] text-red-600 mt-0.5">{debtJobs.length} รายการ</span></span><strong className="text-red-600">{formatMoney(debtAmount)} ฿</strong>
-                        </button>
-                        {unpaidWage > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(unpaidWage)} ฿</strong></button>}
-                        {debtJobs.length === 0 && unpaidWage <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
-                      </div>
-                    </div>
-
-                    <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
-                      <div className="flex items-center justify-between mb-4"><div><h3 className="font-black text-gray-900">👥 ลูกหนี้ก้อนใหญ่</h3><p className="text-[11px] text-gray-500 mt-1">3 รายการที่มียอดค้างสูงสุด</p></div><button onClick={() => setFinanceSubTab('debt')} className="text-[10px] font-black text-red-600">ดูทั้งหมด →</button></div>
-                      {topDebtors.length === 0 ? <p className="text-xs text-gray-400 text-center py-5">ไม่มีลูกหนี้ค้างชำระ</p> : <div className="space-y-2">{topDebtors.map((j, idx) => <button key={j.id} onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-red-50 transition text-left"><div className="w-8 h-8 rounded-xl bg-white border border-gray-200 flex items-center justify-center font-black text-gray-500">{idx + 1}</div><div className="flex-1 min-w-0"><p className="font-black text-xs text-gray-800 truncate">{j.customers?.name || 'ไม่ระบุชื่อ'}</p><p className="text-[10px] text-gray-500">{j.area_size || 0} ไร่ • {j.crop_type || 'ไม่ระบุ'}</p></div><strong className="text-sm text-red-600">{formatMoney(j.total_price)} ฿</strong></button>)}</div>}
-                    </div>
-                  </div>
-
-                  {/* Quick actions */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <button onClick={() => setShowExpenseForm(true)} className="bg-red-500 hover:bg-red-600 text-white rounded-2xl p-3 font-black text-[10px] shadow-sm transition">➕<span className="block mt-1">บันทึกรายจ่าย</span></button>
-                    <button onClick={() => setFinanceSubTab('income')} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl p-3 font-black text-[10px] shadow-sm transition">💵<span className="block mt-1">ดูเงินเข้า</span></button>
-                    <button onClick={() => setFinanceSubTab('debt')} className="bg-amber-500 hover:bg-amber-600 text-white rounded-2xl p-3 font-black text-[10px] shadow-sm transition">💳<span className="block mt-1">ตามลูกหนี้</span></button>
-                  </div>
-                </>
-              )}
+              {/* Quick actions */}
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={() => setShowExpenseForm(true)} className="bg-red-500 hover:bg-red-600 text-white rounded-2xl p-3 font-black text-[10px] shadow-sm transition">➕<span className="block mt-1">บันทึกรายจ่าย</span></button>
+                <button onClick={() => setFinanceSubTab('income')} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl p-3 font-black text-[10px] shadow-sm transition">💵<span className="block mt-1">ดูเงินเข้า</span></button>
+                <button onClick={() => setFinanceSubTab('debt')} className="bg-amber-500 hover:bg-amber-600 text-white rounded-2xl p-3 font-black text-[10px] shadow-sm transition">💳<span className="block mt-1">ตามลูกหนี้</span></button>
+              </div>
             </div>
           );
-        })()}
+        })()}ฏ
 
         {/* 💸 หน้าจอจัดการลูกหนี้ */}
         {activeTab === 'finance' && financeSubTab === 'debt' && (
