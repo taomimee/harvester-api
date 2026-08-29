@@ -1879,9 +1879,21 @@ function App() {
           <div className="space-y-4">
             <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
               
-              {/* 👇 วางปุ่มตรงนี้ ด้านบนตัวกรองเดือน/ปี 👇 */}
+              {/* 👇 ปุ่มบันทึกค่าใช้จ่าย (อัปเกรดให้ดึงเวลาปัจจุบันเป๊ะๆ ตอนกด) 👇 */}
               <button 
-                onClick={() => setShowExpenseForm(true)}
+                onClick={() => {
+                  // สร้างเวลาปัจจุบันของไทย ณ วินาทีที่กดปุ่ม
+                  const now = new Date();
+                  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                  
+                  // อัปเดตข้อมูลวันที่ในฟอร์มให้เป็นปัจจุบันทันที
+                  setExpenseData(prev => ({
+                    ...prev,
+                    transaction_date: now.toISOString().slice(0, 16)
+                  }));
+                  
+                  setShowExpenseForm(true);
+                }}
                 className="w-full mb-5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold py-3 rounded-xl shadow-sm transition flex justify-center items-center gap-2"
               >
                 ➕ บันทึกค่าใช้จ่าย (น้ำมัน, ซ่อม, อื่นๆ)
@@ -2158,7 +2170,14 @@ function App() {
                        <div className="pl-2">
                          <h3 className="font-bold text-gray-900 text-lg">{job.customers?.name || 'ไม่ระบุชื่อ'}</h3>
                          <p className="text-[11px] text-gray-500 mt-0.5">
-                           📅 รับเงิน: <span className="font-semibold text-gray-800">{job.paid_at ? new Date(job.paid_at).toLocaleString('th-TH') : 'ไม่มีข้อมูลเวลา'}</span>
+                           📅 รับเงิน: <span className="font-semibold text-gray-800">
+                             {job.paid_at ? (() => {
+                               // 💡 แก้ปัญหาเวลาเพี้ยน (บวก 7 ชม. ซ้ำซ้อน) และปรับฟอร์แมตให้เป็นแบบไทยสวยๆ
+                               const dateStr = job.paid_at.replace('Z', '').replace('+00:00', '');
+                               const d = new Date(dateStr);
+                               return `${d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })} เวลา ${d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.`;
+                             })() : 'ไม่มีข้อมูลเวลา'}
+                           </span>
                          </p>
                        </div>
                        <div className="text-right">
