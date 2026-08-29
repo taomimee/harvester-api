@@ -506,7 +506,9 @@ function App() {
   const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
   const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
   
-  const activeJobNow = jobs.find(j => j.status === 'IN_PROGRESS');
+  // 💡 ค้นหางานที่กำลังเกี่ยวทั้งหมด แล้วเรียงลำดับเวลา เพื่อดึง "งานที่กดเริ่มล่าสุด" มาแสดง
+  const activeJobNow = jobs.filter(j => j.status === 'IN_PROGRESS')
+                           .sort((a, b) => new Date(b.job_date) - new Date(a.job_date))[0];
   const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
   
   let radarLocationName = "(รอพิกัด...)";
