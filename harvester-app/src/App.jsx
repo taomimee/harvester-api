@@ -513,34 +513,12 @@ function App() {
   // ==========================================
 
   const getThaiWeatherText = (code) => {
-  // 0-3: แดดจัด ฟ้าเปิด (ครอบคลุมตั้งแต่ฟ้าใสไปจนถึงมีเมฆประปราย)
-  if (code <= 3) {
-    return { text: "ปลอดโปร่ง ☀️", desc: "แดดดี ท้องฟ้าแจ่มใส", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-  }
-  
-  // 4-48 และ 51-57: หมอกลง หรือ ครึ้ม (รวมรหัส 51-57 ที่ API มักส่งมาหลอกว่าฝนตก ทั้งที่จริงแค่ครึ้ม)
-  if ((code >= 4 && code <= 48) || (code >= 51 && code <= 57)) {
-    return { text: "มีเมฆมาก ☁️", desc: "ฟ้าครึ้ม แดดร่ม ลุยงานสบาย", color: "text-blue-700", bg: "bg-blue-100", border: "border-blue-300" };
-  }
-  
-  // 61, 80: ฝนปรอยๆ / ฝนตกซู่เบาๆ (เริ่มมีเม็ดฝนจริง)
-  if (code === 61 || code === 80) {
-    return { text: "ฝนปรอยๆ 💧", desc: "มีฝนเล็กน้อย ให้ประเมินดินหน้าแปลง", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
-  }
-  
-  // 63-79 และ 81: ฝนตกปานกลางถึงหนัก
-  if ((code >= 63 && code <= 79) || code === 81) {
-    return { text: "ฝนตกหนัก 🌧️", desc: "ฝนตกจริงจัง ดินลื่น ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
-  }
-  
-  // 82-99: พายุ ฟ้าคะนอง
-  if (code >= 82 && code <= 99) {
-    return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุฟ้าคะนอง! หยุดเกี่ยวทันที", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
-  }
-  
-  // กรณีฉุกเฉินรับค่า Error จาก API
-  return { text: "รอข้อมูล ☀️", desc: "กำลังประเมินสภาพอากาศ...", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-};
+    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+    if (code >= 51 && code <= 61) return { text: "มีเมฆมาก ☁️", desc: "ฟ้าครึ้ม แดดร่ม ให้ประเมินดินหน้าแปลง", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุเข้า!", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+    return { text: "รอข้อมูล ☀️", desc: "กำลังประเมินสภาพอากาศ...", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  };
 
   useEffect(() => {
     if (activeTab !== 'home') return;
