@@ -1983,22 +1983,32 @@ function App() {
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
           // 👇 สร้างตัวแปรเก็บยอดรวมกลุ่มตามลูกค้า 
+// 👇 สร้างตัวแปรเก็บยอดรวมกลุ่มตามลูกค้า 
 const groupedDebtorsMap = {};
 
 debtJobs.forEach(j => {
   const name = j.customers?.name || 'ไม่ระบุชื่อ';
+  const crop = j.crop_type || 'ข้าว'; // ดึงประเภทพืชของงานนั้นๆ
+  
   if (!groupedDebtorsMap[name]) {
      groupedDebtorsMap[name] = {
        name: name,
        total_price: 0,
        total_area: 0,
-       job_count: 0
+       job_count: 0,
+       crop_areas: {} // 👈 เพิ่มกล่องใหม่เพื่อเก็บยอดแยกตามพืช
      };
   }
-  // ทบยอดหนี้ พื้นที่ และนับจำนวนคิวงาน
+  // ทบยอดหนี้ พื้นที่รวม และนับจำนวนคิวงาน
   groupedDebtorsMap[name].total_price += Number(j.total_price) || 0;
   groupedDebtorsMap[name].total_area += Number(j.area_size) || 0;
   groupedDebtorsMap[name].job_count += 1;
+  
+  // 👇 ทบยอดพื้นที่ "แยกตามประเภทพืช"
+  if (!groupedDebtorsMap[name].crop_areas[crop]) {
+      groupedDebtorsMap[name].crop_areas[crop] = 0;
+  }
+  groupedDebtorsMap[name].crop_areas[crop] += Number(j.area_size) || 0;
 });
 
 // 👇 นำลูกค้าที่รวมยอดแล้ว มาเรียงลำดับคนที่ติดหนี้เยอะสุด 5 อันดับแรก
