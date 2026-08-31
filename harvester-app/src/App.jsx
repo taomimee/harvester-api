@@ -513,22 +513,33 @@ function App() {
   // ==========================================
 
   const getThaiWeatherText = (code) => {
-  // 0-1: ฟ้าเปิด แดดจัด
-  if (code <= 1) return { text: "ปลอดโปร่ง ☀️", desc: "ฟ้าใส แดดดี ลุยเกี่ยวได้ยาวๆ", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  // 0-3: แดดจัด ฟ้าเปิด (ครอบคลุมตั้งแต่ฟ้าใสไปจนถึงมีเมฆประปราย)
+  if (code <= 3) {
+    return { text: "ปลอดโปร่ง ☀️", desc: "แดดดี ท้องฟ้าแจ่มใส", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  }
   
-  // 2-48: ฟ้าครึ้ม เมฆมาก (รวมสภาพหมอกลง)
-  if (code >= 2 && code <= 48) return { text: "มีเมฆมาก ☁️", desc: "ฟ้าครึ้ม แดดร่ม ลุยงานสบาย", color: "text-blue-700", bg: "bg-blue-100", border: "border-blue-300" };
+  // 4-48 และ 51-57: หมอกลง หรือ ครึ้ม (รวมรหัส 51-57 ที่ API มักส่งมาหลอกว่าฝนตก ทั้งที่จริงแค่ครึ้ม)
+  if ((code >= 4 && code <= 48) || (code >= 51 && code <= 57)) {
+    return { text: "มีเมฆมาก ☁️", desc: "ฟ้าครึ้ม แดดร่ม ลุยงานสบาย", color: "text-blue-700", bg: "bg-blue-100", border: "border-blue-300" };
+  }
   
-  // 51-61: ฝนละออง หรือตกค้างจากพายุ
-  if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ 💧", desc: "อาจแค่ครึ้มจัด หรือละอองฝนหลังพายุ ให้ดูหน้าแปลง", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+  // 61, 80: ฝนปรอยๆ / ฝนตกซู่เบาๆ (เริ่มมีเม็ดฝนจริง)
+  if (code === 61 || code === 80) {
+    return { text: "ฝนปรอยๆ 💧", desc: "มีฝนเล็กน้อย ให้ประเมินดินหน้าแปลง", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+  }
   
-  // 63-81: ฝนตกหนักจริงๆ
-  if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ตกจริงจัง รถลงไม่ได้ ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+  // 63-79 และ 81: ฝนตกปานกลางถึงหนัก
+  if ((code >= 63 && code <= 79) || code === 81) {
+    return { text: "ฝนตกหนัก 🌧️", desc: "ฝนตกจริงจัง ดินลื่น ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+  }
   
   // 82-99: พายุ ฟ้าคะนอง
-  if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุฟ้าคะนอง! หยุดเกี่ยวทันที", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+  if (code >= 82 && code <= 99) {
+    return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุฟ้าคะนอง! หยุดเกี่ยวทันที", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+  }
   
-  return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  // กรณีฉุกเฉินรับค่า Error จาก API
+  return { text: "รอข้อมูล ☀️", desc: "กำลังประเมินสภาพอากาศ...", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
 };
 
   useEffect(() => {
