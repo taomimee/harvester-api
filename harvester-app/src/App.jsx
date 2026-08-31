@@ -3242,6 +3242,9 @@ function App() {
                     const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
                     const totalAmount = Number(tx.total_amount);
                     
+                    // 🧠 หาคนที่ยังไม่ได้รับเงิน เพื่อเอาไปแสดงบนปุ่ม
+                    const remainingWorkers = jobWorkers.filter(w => !paidWorkers.includes(w));
+                    
                     let displayAmount = totalAmount;
                     if (wageFilter.length > 0) {
                       let matchingCount = 0;
@@ -3254,6 +3257,7 @@ function App() {
                       <div key={tx.id} className={`bg-white p-4 rounded-xl border shadow-sm relative ${wageFilter.length > 0 ? 'border-orange-200' : 'border-gray-200'}`}>
                          <div className="flex justify-between items-start mb-3">
                            <div className="flex-1 pr-2">
+                             
                              <div className="flex flex-wrap gap-1.5 mb-2">
                                {jobWorkers.map((w, idx) => {
                                  const isSelected = wageFilter.includes(w);
@@ -3265,6 +3269,15 @@ function App() {
                                  )
                                })}
                              </div>
+                             
+                             {/* 👇 1. เพิ่มหมายเหตุชัดเจนตรงนี้ 👇 */}
+                             {wageTab === 'UNPAID' && paidWorkers.length > 0 && (
+                               <div className="mb-2">
+                                 <span className="text-[10px] font-bold bg-green-50 text-green-700 border border-green-200 px-2 py-1 rounded-md shadow-sm">
+                                   * หมายเหตุ: {paidWorkers.join(', ')} เบิกแล้ว
+                                 </span>
+                               </div>
+                             )}
                              
                              <p className="text-sm text-gray-700 font-semibold mb-1">{detailsStr ? `📐 ${detailsStr}` : ''}</p>
                              <p className="text-[11px] text-gray-500 mt-1">
@@ -3290,7 +3303,10 @@ function App() {
                              </button>
                            ) : wageFilter.length === 0 ? (
                              <button onClick={() => handlePayWage(tx, null)} className="w-full bg-gray-50 hover:bg-green-50 text-gray-600 hover:text-green-700 border border-gray-200 hover:border-green-300 font-bold py-2 rounded-lg text-sm transition">
-                               ✅ จ่ายเงินยอดเต็มบิลนี้ (ทุกคน)
+                               {/* 👇 2. เปลี่ยนข้อความปุ่มให้ฉลาดขึ้น 👇 */}
+                               {paidWorkers.length > 0 
+                                 ? `✅ จ่ายส่วนที่เหลือ (${remainingWorkers.join(', ')})` 
+                                 : `✅ จ่ายเงินยอดเต็มบิลนี้ (ทุกคน)`}
                              </button>
                            ) : null
                          )}
