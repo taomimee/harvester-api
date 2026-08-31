@@ -2131,7 +2131,13 @@ const topDebtors = Object.values(groupedDebtorsMap)
                   <div className="bg-teal-50 rounded-2xl p-3 border border-teal-100"><p className="text-[10px] font-bold text-teal-800">พื้นที่รวม</p><p className="text-xl font-black text-teal-700 mt-1">{formatMoney(areaTotal)} <span className="text-xs">ไร่</span></p></div>
                   <div className="bg-blue-50 rounded-2xl p-3 border border-blue-100"><p className="text-[10px] font-bold text-blue-800">งานเสร็จแล้ว</p><p className="text-xl font-black text-blue-700 mt-1">{completedJobs.length} <span className="text-xs">งาน</span></p></div>
                   <div className="bg-orange-50 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-800">งานค้าง/กำลังทำ</p><p className="text-xl font-black text-orange-700 mt-1">{activeMonthJobs.length} <span className="text-xs">งาน</span></p></div>
-                  <div className="bg-indigo-50 rounded-2xl p-3 border border-indigo-100"><p className="text-[10px] font-bold text-indigo-800">กำไรเฉลี่ยต่อไร่</p><p className="text-xl font-black text-indigo-700 mt-1">{formatMoney(areaTotal > 0 ? calcNetProfit / areaTotal : 0)} <span className="text-xs">฿/ไร่</span></p></div>
+                  <div className="bg-indigo-50 rounded-2xl p-3 border border-indigo-100">
+                  <p className="text-[10px] font-bold text-indigo-800">กำไรเฉลี่ยต่อไร่</p>
+                  <p className="text-xl font-black text-indigo-700 mt-1">
+                    {/* 👇 เปลี่ยนจาก calcNetProfit เป็น (รายได้รวมหนี้ - ต้นทุน) */}
+                    {formatMoney(areaTotal > 0 ? ((calcTotalIncome + calcTotalUnpaid) - calcTotalExpense) / areaTotal : 0)} <span className="text-xs">฿/ไร่</span>
+                    </p>
+                  </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
                   <div className="rounded-xl bg-gray-50 border border-gray-100 p-3"><span className="text-gray-500 font-bold">ต้นทุนเฉลี่ย/ไร่</span><strong className="block text-gray-900 text-lg mt-1">{formatMoney(costPerRai)} ฿</strong></div>
