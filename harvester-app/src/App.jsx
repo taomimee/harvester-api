@@ -1961,8 +1961,14 @@ function App() {
           const calcTotalExpense = periodExpenses.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           const calcNetProfit = calcTotalIncome - calcTotalExpense;
 
+          // 👇 1. เพิ่มตัวแปรดึงเฉพาะรายจ่ายหน้างาน (หักค่างวดรถออก)
+          const operationalExpense = periodExpenses
+            .filter(tx => tx.category !== 'ค่างวดรถ')
+            .reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
+
           // 3. ข้อมูลวิเคราะห์สำหรับกราฟและสัดส่วน
-          const costPerRai = areaTotal > 0 ? calcTotalExpense / areaTotal : 0;
+          // 👇 2. เปลี่ยนจาก calcTotalExpense เป็น operationalExpense
+          const costPerRai = areaTotal > 0 ? operationalExpense / areaTotal : 0;
           const profitMargin = calcTotalIncome > 0 ? (calcNetProfit / calcTotalIncome) * 100 : 0;
           
           // ตัวชี้วัดอัตราการเก็บเงิน (Collection Rate)
@@ -1983,39 +1989,39 @@ function App() {
           
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+          
           // 👇 สร้างตัวแปรเก็บยอดรวมกลุ่มตามลูกค้า 
-// 👇 สร้างตัวแปรเก็บยอดรวมกลุ่มตามลูกค้า 
-const groupedDebtorsMap = {};
+          const groupedDebtorsMap = {};
 
-debtJobs.forEach(j => {
-  const name = j.customers?.name || 'ไม่ระบุชื่อ';
-  const crop = j.crop_type || 'ข้าว'; // ดึงประเภทพืชของงานนั้นๆ
-  
-  if (!groupedDebtorsMap[name]) {
-     groupedDebtorsMap[name] = {
-       name: name,
-       total_price: 0,
-       total_area: 0,
-       job_count: 0,
-       crop_areas: {} // 👈 เพิ่มกล่องใหม่เพื่อเก็บยอดแยกตามพืช
-     };
-  }
-  // ทบยอดหนี้ พื้นที่รวม และนับจำนวนคิวงาน
-  groupedDebtorsMap[name].total_price += Number(j.total_price) || 0;
-  groupedDebtorsMap[name].total_area += Number(j.area_size) || 0;
-  groupedDebtorsMap[name].job_count += 1;
-  
-  // 👇 ทบยอดพื้นที่ "แยกตามประเภทพืช"
-  if (!groupedDebtorsMap[name].crop_areas[crop]) {
-      groupedDebtorsMap[name].crop_areas[crop] = 0;
-  }
-  groupedDebtorsMap[name].crop_areas[crop] += Number(j.area_size) || 0;
-});
+          debtJobs.forEach(j => {
+            const name = j.customers?.name || 'ไม่ระบุชื่อ';
+            const crop = j.crop_type || 'ข้าว'; // ดึงประเภทพืชของงานนั้นๆ
+            
+            if (!groupedDebtorsMap[name]) {
+              groupedDebtorsMap[name] = {
+                name: name,
+                total_price: 0,
+                total_area: 0,
+                job_count: 0,
+                crop_areas: {} // 👈 เพิ่มกล่องใหม่เพื่อเก็บยอดแยกตามพืช
+              };
+            }
+            // ทบยอดหนี้ พื้นที่รวม และนับจำนวนคิวงาน
+            groupedDebtorsMap[name].total_price += Number(j.total_price) || 0;
+            groupedDebtorsMap[name].total_area += Number(j.area_size) || 0;
+            groupedDebtorsMap[name].job_count += 1;
+            
+            // 👇 ทบยอดพื้นที่ "แยกตามประเภทพืช"
+            if (!groupedDebtorsMap[name].crop_areas[crop]) {
+                groupedDebtorsMap[name].crop_areas[crop] = 0;
+            }
+            groupedDebtorsMap[name].crop_areas[crop] += Number(j.area_size) || 0;
+          });
 
-// 👇 นำลูกค้าที่รวมยอดแล้ว มาเรียงลำดับคนที่ติดหนี้เยอะสุด 5 อันดับแรก
-const topDebtors = Object.values(groupedDebtorsMap)
-  .sort((a, b) => b.total_price - a.total_price)
-  .slice(0, 5);
+          // 👇 นำลูกค้าที่รวมยอดแล้ว มาเรียงลำดับคนที่ติดหนี้เยอะสุด 5 อันดับแรก
+          const topDebtors = Object.values(groupedDebtorsMap)
+            .sort((a, b) => b.total_price - a.total_price)
+            .slice(0, 5);
           
           const formatMoney = (value) => Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
           const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
@@ -3182,6 +3188,7 @@ const topDebtors = Object.values(groupedDebtorsMap)
                     <option value="ซ่อมรถ">🔧 ซ่อมรถ</option>
                     <option value="ค่าอาหาร">🍚 ค่าอาหาร</option>                    
                     <option value="ค่าเดินทาง">🚗 ค่าเดินทาง</option>
+                    <option value="ค่างวดรถ">🚜 ค่างวดรถ (รายไตรมาส)</option>
                     <option value="อื่นๆ">📦 อื่นๆ</option>
                   </select>
                 </div>
