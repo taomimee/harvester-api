@@ -513,12 +513,23 @@ function App() {
   // ==========================================
 
   const getThaiWeatherText = (code) => {
-    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-    if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ ☁️", desc: "อาจจะเริ่มเปียกชื้น เตรียมตัวดูสถานการณ์", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
-    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
-    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุเข้า!", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
-    return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-  };
+  // 0-1: ฟ้าเปิด แดดจัด
+  if (code <= 1) return { text: "ปลอดโปร่ง ☀️", desc: "ฟ้าใส แดดดี ลุยเกี่ยวได้ยาวๆ", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+  
+  // 2-48: ฟ้าครึ้ม เมฆมาก (รวมสภาพหมอกลง)
+  if (code >= 2 && code <= 48) return { text: "มีเมฆมาก ☁️", desc: "ฟ้าครึ้ม แดดร่ม ลุยงานสบาย", color: "text-blue-700", bg: "bg-blue-100", border: "border-blue-300" };
+  
+  // 51-61: ฝนละออง หรือตกค้างจากพายุ
+  if (code >= 51 && code <= 61) return { text: "ฝนปรอยๆ 💧", desc: "อาจแค่ครึ้มจัด หรือละอองฝนหลังพายุ ให้ดูหน้าแปลง", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
+  
+  // 63-81: ฝนตกหนักจริงๆ
+  if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ตกจริงจัง รถลงไม่ได้ ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
+  
+  // 82-99: พายุ ฟ้าคะนอง
+  if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุฟ้าคะนอง! หยุดเกี่ยวทันที", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
+  
+  return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
+};
 
   useEffect(() => {
     if (activeTab !== 'home') return;
