@@ -1982,7 +1982,29 @@ function App() {
           
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
-          const topDebtors = [...debtJobs].sort((a, b) => (Number(b.total_price) || 0) - (Number(a.total_price) || 0)).slice(0, 3);
+          // 👇 สร้างตัวแปรเก็บยอดรวมกลุ่มตามลูกค้า 
+const groupedDebtorsMap = {};
+
+debtJobs.forEach(j => {
+  const name = j.customers?.name || 'ไม่ระบุชื่อ';
+  if (!groupedDebtorsMap[name]) {
+     groupedDebtorsMap[name] = {
+       name: name,
+       total_price: 0,
+       total_area: 0,
+       job_count: 0
+     };
+  }
+  // ทบยอดหนี้ พื้นที่ และนับจำนวนคิวงาน
+  groupedDebtorsMap[name].total_price += Number(j.total_price) || 0;
+  groupedDebtorsMap[name].total_area += Number(j.area_size) || 0;
+  groupedDebtorsMap[name].job_count += 1;
+});
+
+// 👇 นำลูกค้าที่รวมยอดแล้ว มาเรียงลำดับคนที่ติดหนี้เยอะสุด 5 อันดับแรก
+const topDebtors = Object.values(groupedDebtorsMap)
+  .sort((a, b) => b.total_price - a.total_price)
+  .slice(0, 5);
           
           const formatMoney = (value) => Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
           const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
@@ -2169,8 +2191,31 @@ function App() {
                 </div>
 
                 <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
-                  <div className="flex items-center justify-between mb-4"><div><h3 className="font-black text-gray-900">👥 ลูกหนี้ก้อนใหญ่</h3><p className="text-[11px] text-gray-500 mt-1">3 รายการที่มียอดค้างสูงสุด</p></div><button onClick={() => setFinanceSubTab('debt')} className="text-[10px] font-black text-red-600">ดูทั้งหมด →</button></div>
-                  {topDebtors.length === 0 ? <p className="text-xs text-gray-400 text-center py-5">ไม่มีลูกหนี้ค้างชำระ</p> : <div className="space-y-2">{topDebtors.map((j, idx) => <button key={j.id} onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-red-50 transition text-left"><div className="w-8 h-8 rounded-xl bg-white border border-gray-200 flex items-center justify-center font-black text-gray-500">{idx + 1}</div><div className="flex-1 min-w-0"><p className="font-black text-xs text-gray-800 truncate">{j.customers?.name || 'ไม่ระบุชื่อ'}</p><p className="text-[10px] text-gray-500">{j.area_size || 0} ไร่ • {j.crop_type || 'ไม่ระบุ'}</p></div><strong className="text-sm text-red-600">{formatMoney(j.total_price)} ฿</strong></button>)}</div>}
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="font-black text-gray-900">👥 ลูกหนี้ก้อนใหญ่</h3>
+                      {/* 👇 แก้ข้อความตรงนี้เป็น 5 ลูกค้า */}
+                      <p className="text-[11px] text-gray-500 mt-1">5 ลูกค้าที่มียอดค้างสูงสุด (รวมทุกแปลง)</p>
+                    </div>
+                    <button onClick={() => setFinanceSubTab('debt')} className="text-[10px] font-black text-red-600">ดูทั้งหมด →</button>
+                  </div>
+                  {topDebtors.length === 0 ? (
+                    <p className="text-xs text-gray-400 text-center py-5">ไม่มีลูกหนี้ค้างชำระ</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {topDebtors.map((debtor, idx) => (
+                        <button key={idx} onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100 hover:bg-red-50 transition text-left">
+                          <div className="w-8 h-8 rounded-xl bg-white border border-gray-200 flex items-center justify-center font-black text-gray-500">{idx + 1}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-black text-xs text-gray-800 truncate">{debtor.name}</p>
+                            {/* 👇 โชว์จำนวนไร่ และคิวงานที่รวมมาแล้ว */}
+                            <p className="text-[10px] text-gray-500">รวม {debtor.total_area} ไร่ • ({debtor.job_count} คิวงาน)</p>
+                          </div>
+                          <strong className="text-sm text-red-600">{formatMoney(debtor.total_price)} ฿</strong>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
