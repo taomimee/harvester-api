@@ -3112,6 +3112,65 @@ function App() {
             }
           };
 
+
+          // 💸 ฟังก์ชันจ่ายเหมาทุกบิลที่ค้างอยู่ของคนนี้
+          const handlePayAllForWorker = async (workerName) => {
+            if (filteredTransactions.length === 0) return alert(`ไม่มีบิลค้างจ่ายสำหรับ ${workerName}`);
+
+            const totalAmountToPay = filteredTransactions.reduce((sum, tx) => {
+                const { jobWorkers } = parseWageNote(tx.note);
+                const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
+                return sum + (Number(tx.total_amount) / divisor);
+            }, 0);
+
+            if (!window.confirm(`ยืนยันการเคลียร์บิลค้างจ่าย "ทั้งหมด" ให้ [ ${workerName} ]\nจำนวน ${filteredTransactions.length} บิล\nรวมเป็นเงิน ${totalAmountToPay.toLocaleString()} บาท ใช่หรือไม่?`)) return;
+
+            try {
+                // วนลูปจ่ายทุกบิลที่ค้างอยู่
+                for (const tx of filteredTransactions) {
+                    const newNote = (tx.note || '') + ` [จ่ายแล้ว:${workerName}]`;
+                    const { jobWorkers, paidWorkers } = parseWageNote(newNote);
+                    const allPaid = jobWorkers.every(w => paidWorkers.includes(w));
+
+                    const formData = new FormData();
+                    formData.append('category', tx.category || 'ค่าแรง');
+                    formData.append('total_amount', tx.total_amount);
+                    if (tx.vehicle_id) formData.append('vehicle_id', tx.vehicle_id);
+                    if (tx.spender_name) formData.append('spender_name', tx.spender_name);
+                    formData.append('note', newNote);
+                    
+                    let dateStr = new Date().toISOString().slice(0, 16);
+                    if (tx.transaction_date || tx.created_at) {
+                        const d = new Date(tx.transaction_date || tx.created_at);
+                        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+                        dateStr = d.toISOString().slice(0, 16);
+                    }
+                    formData.append('transaction_date', dateStr);
+                    if (tx.existing_receipt_url || tx.receipt_url) formData.append('existing_receipt_url', tx.receipt_url || tx.existing_receipt_url);
+
+                    // อัปเดต Note (ประทับตราว่าจ่ายแล้ว)
+                    await fetch(`https://harvester-api-server.onrender.com/api/transactions/expenses/${tx.id}`, {
+                        method: 'PUT', body: formData
+                    });
+
+                    // ถ้าจ่ายครบทุกคนในบิลแล้ว ให้ปิดบิลเป็น PAID ทันที
+                    if (allPaid) {
+                        const now = new Date();
+                        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                        await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
+                            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ status: 'PAID', paid_at: now.toISOString() })
+                        });
+                    }
+                }
+                alert(`✅ จ่ายเงินเหมาให้ ${workerName} จำนวน ${filteredTransactions.length} บิล เรียบร้อยแล้ว!`);
+                fetchWages(); fetchDashboard();
+            } catch(e) {
+                console.error(e);
+                alert('❌ เกิดข้อผิดพลาดในการจ่ายบางรายการ กรุณารีเฟรชหน้าจอแล้วตรวจสอบใหม่');
+            }
+          };
+
           // 🧮 กรองและคำนวณข้อมูลที่จะแสดงผล
           const filteredTransactions = wageTransactions.filter(tx => {
              const { jobWorkers, paidWorkers } = parseWageNote(tx.note);
@@ -3163,6 +3222,19 @@ function App() {
                     )}
                   </div>
                 </div>
+
+                {/* ปุ่มจ่ายเหมา (จะโชว์เมื่อเป็นเถ้าแก่, อยู่แท็บรอเบิก และ ติ๊กเลือกชื่อ 1 คน) */}
+                {userRole === 'BOSS' && wageTab === 'UNPAID' && wageFilter.length === 1 && filteredTransactions.length > 0 && (
+                  <div className="mb-3 shrink-0">
+                    <button 
+                      onClick={() => handlePayAllForWorker(wageFilter[0])}
+                      className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 text-white font-bold py-3 rounded-xl shadow-md transition flex items-center justify-center gap-2"
+                    >
+                      <span className="text-xl">💸</span> 
+                      จ่ายเหมาให้ {wageFilter[0]} ทั้งหมด ({filteredTransactions.length} บิล)
+                    </button>
+                  </div>
+                )}
 
                 <div className="overflow-y-auto flex-1 space-y-3 pr-1">
                   {filteredTransactions.map(tx => {
