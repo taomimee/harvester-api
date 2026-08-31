@@ -2016,11 +2016,7 @@ function App() {
 
           const unpaidWage = periodWages.filter(tx => tx.status === 'UNPAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           const paidWage = periodWages.filter(tx => tx.status === 'PAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
-          // 👇 สูตรใหม่: คำนวณยอดค่าแรงรอจ่าย (รวมหนี้ทั้งหมด - ยอดที่เบิกออกไปแล้ว)
-          const totalEarnedAllTime = wageTransactions.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
-          const oldPaidAllTime = wageTransactions.filter(tx => tx.status === 'PAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
-          const newWithdrawnAllTime = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
-          const totalUnpaidWageAllTime = totalEarnedAllTime - oldPaidAllTime - newWithdrawnAllTime;
+          const totalUnpaidWageAllTime = wageTransactions.filter(tx => tx.status === 'UNPAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
@@ -3001,159 +2997,210 @@ function App() {
         )}
         {/* 👆 จบ Popup ปิดงานและจดค่าแรง 👆 */}
 
-        {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง (ระบบกระเป๋าเงินแยกรายคน) */}
+        {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง (อัปเกรดมีแท็บประวัติ + ระบบติ๊กเลือกคน) */}
         {showWageSummary && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[200]">
             <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl">
               <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-100">
                 <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                  <span>💰</span> กระเป๋าเงินลูกจ้าง
+                  <span>💰</span> สมุดจดค่าแรง
                 </h2>
-                <button onClick={() => setShowWageSummary(false)} className="text-gray-400 hover:text-red-500 bg-gray-100 hover:bg-red-50 rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg transition">✕</button>
+                <button onClick={() => { setShowWageSummary(false); setWageFilter([]); }} className="text-gray-400 hover:text-red-500 bg-gray-100 hover:bg-red-50 rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg transition">✕</button>
               </div>
               
-              {/* ปุ่มสลับแท็บ ยอดคงเหลือ / ประวัติการเบิก */}
+              {/* ปุ่มสลับแท็บ รอเบิก / จ่ายแล้ว */}
               <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-lg shrink-0">
-                <button onClick={() => setWageTab('UNPAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'UNPAID' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>ยอดคงเหลือ (รอเบิก)</button>
-                <button onClick={() => setWageTab('PAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'PAID' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>ประวัติการเบิก</button>
+                <button onClick={() => setWageTab('UNPAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'UNPAID' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>รอเบิก</button>
+                <button onClick={() => setWageTab('PAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'PAID' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>ประวัติที่จ่ายแล้ว</button>
               </div>
 
-              <div className="overflow-y-auto flex-1 space-y-3 pr-1 pb-4">
-                
-                {/* 🟢 แท็บ: กระเป๋าเงินยอดคงเหลือ */}
-                {wageTab === 'UNPAID' && (() => {
-                  // 1. ดึงรายชื่อคนทั้งหมดที่เคยลงแปลง
-                  const uniqueWorkers = new Set();
-                  wageTransactions.forEach(tx => {
-                    let wStr = tx.note || '';
-                    if (wStr.includes('คนทำ:') && wStr.includes('(')) wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
-                    else if (wStr.includes('(')) wStr = wStr.split('(')[0].trim();
-                    wStr.split(',').map(w => w.trim()).filter(w => w).forEach(w => uniqueWorkers.add(w));
-                  });
-                  const workersList = Array.from(uniqueWorkers);
-
-                  if (workersList.length === 0) return <div className="text-center text-gray-400 py-5 font-bold">ยังไม่มีข้อมูลค่าแรง</div>;
-
-                  // 2. คำนวณยอดของแต่ละคน
-                  return workersList.map(worker => {
-                    let earned = 0;
-                    let oldPaid = 0; // ยอดจากระบบเก่าที่เคยกด "จ่ายเต็มบิล"
-                    
-                    // รวมยอดที่ทำได้ทั้งหมด
-                    wageTransactions.forEach(tx => {
-                      let wStr = tx.note || '';
-                      if (wStr.includes('คนทำ:') && wStr.includes('(')) wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
-                      else if (wStr.includes('(')) wStr = wStr.split('(')[0].trim();
-                      const names = wStr.split(',').map(w => w.trim()).filter(w => w);
-                      
-                      if (names.includes(worker)) {
-                        const share = Number(tx.total_amount) / (names.length || 1);
-                        earned += share;
-                        if (tx.status === 'PAID') oldPaid += share;
-                      }
-                    });
-
-                    // รวมยอดที่กดเบิกผ่านระบบใหม่
-                    const newWithdrawn = expenseTransactions
-                      .filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name === worker)
-                      .reduce((sum, tx) => sum + Number(tx.total_amount), 0);
-
-                    const totalWithdrawn = oldPaid + newWithdrawn;
-                    const balance = earned - totalWithdrawn;
-
-                    if (earned === 0) return null;
-
+              {/* 👇 🔍 แถบปุ่มกดติ๊กเลือกชื่อ (Filter อัจฉริยะ) 👇 */}
+              <div className="mb-3 shrink-0">
+                <p className="text-[11px] font-bold text-gray-500 mb-1.5">🔍 กรองดูยอดตามคน (กดเลือกชื่อ):</p>
+                <div className="flex flex-wrap gap-2">
+                  {/* อนาคตมีเด็กใหม่ เพิ่มชื่อในวงเล็บนี้ได้เลยครับ */}
+                  {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
+                    const isSelected = wageFilter.includes(name);
                     return (
-                      <div key={worker} className="bg-white p-4 rounded-xl border border-blue-100 shadow-sm relative">
-                        <div className="flex justify-between items-start mb-3">
-                          <div>
-                            <h3 className="font-bold text-lg text-blue-900 flex items-center gap-2">
-                               🧑‍🌾 {worker}
-                            </h3>
-                            <p className="text-[10px] text-gray-500 mt-1">ยอดรวมที่ทำได้: <span className="font-bold text-gray-700">{earned.toLocaleString()} ฿</span></p>
-                            <p className="text-[10px] text-gray-500">เบิกไปแล้วรวม: <span className="font-bold text-red-500">{totalWithdrawn.toLocaleString()} ฿</span></p>
-                          </div>
-                          <div className="text-right">
-                            <span className="block text-[10px] font-bold text-gray-500 mb-0.5">ยอดรอเบิกสุทธิ</span>
-                            <span className={`block font-black text-2xl leading-none ${balance > 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                               {Math.max(0, balance).toLocaleString()} <span className="text-sm">฿</span>
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* ปุ่มกดเบิกเงิน (เฉพาะเถ้าแก่) */}
-                        {userRole === 'BOSS' && balance > 0 && (
-                          <button 
-                             onClick={async () => {
-                               const amountStr = window.prompt(`ระบุจำนวนเงินที่ [ ${worker} ] ต้องการเบิก\n(ยอดคงเหลือสูงสุด: ${balance.toLocaleString()} บาท):`);
-                               if (!amountStr) return;
-                               const amount = Number(amountStr);
-                               if (isNaN(amount) || amount <= 0) return alert("❌ ระบุตัวเลขให้ถูกต้อง");
-                               if (amount > balance) {
-                                  if(!window.confirm(`⚠️ ยอดเบิก (${amount.toLocaleString()}) มากกว่ายอดคงเหลือ (${balance.toLocaleString()})\nต้องการให้เบิกเกิน (ติดลบ) ใช่หรือไม่?`)) return;
-                               }
-
-                               try {
-                                  const formData = new FormData();
-                                  formData.append('category', 'เบิกค่าแรง');
-                                  formData.append('total_amount', amount);
-                                  formData.append('spender_name', worker);
-                                  formData.append('note', 'หักจากกระเป๋าเงินสะสม');
-                                  
-                                  const d = new Date(); 
-                                  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-                                  formData.append('transaction_date', d.toISOString());
-
-                                  const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/expenses', {
-                                    method: 'POST',
-                                    body: formData
-                                  });
-                                  if(res.ok) {
-                                    alert(`✅ บันทึกการเบิกเงิน ${amount.toLocaleString()} บาท ให้ ${worker} สำเร็จ!`);
-                                    fetchExpenses(); // รีเฟรชประวัติการเบิก
-                                  } else {
-                                    alert("❌ บันทึกไม่สำเร็จ");
-                                  }
-                               } catch(e) { alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"); }
-                             }}
-                             className="w-full bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold py-2 rounded-lg text-sm transition"
-                          >
-                            💸 จ่ายเงินให้ {worker}
-                          </button>
-                        )}
-                      </div>
+                      <button
+                        key={name}
+                        onClick={() => {
+                          if (isSelected) setWageFilter(wageFilter.filter(n => n !== name)); // เอาออก
+                          else setWageFilter([...wageFilter, name]); // เพิ่มเข้าไป
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition shadow-sm ${isSelected ? 'bg-orange-500 text-white border-orange-600' : 'bg-gray-50 text-gray-600 border-gray-300 hover:bg-orange-50'}`}
+                      >
+                        {isSelected ? '✅' : '⬜'} {name}
+                      </button>
                     )
-                  });
-                })()}
+                  })}
+                  {wageFilter.length > 0 && (
+                    <button onClick={() => setWageFilter([])} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-50 text-red-600 border border-red-200">
+                      ❌ ล้าง
+                    </button>
+                  )}
+                </div>
+              </div>
 
-                {/* 🟠 แท็บ: ประวัติการกดเบิกเงิน */}
-                {wageTab === 'PAID' && (() => {
-                  const withdrawHistory = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง');
+              {/* รายการยอดเงิน */}
+              <div className="overflow-y-auto flex-1 space-y-3 pr-1">
+                {wageTransactions
+                  .filter(t => t.status === wageTab)
+                  .filter(t => {
+                    // ถ้าไม่ได้ติ๊กใครเลย ให้โชว์ทั้งหมด
+                    if (wageFilter.length === 0) return true;
+                    
+                    // 🐛 แก้ไข: ทำความสะอาดข้อความ ตัดรายละเอียดพื้นที่ทิ้งก่อนค้นหาชื่อ
+                    let wStr = t.note || '';
+                    if (wStr.includes('คนทำ:') && wStr.includes('(')) {
+                        wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
+                    } else if (wStr.includes('(')) {
+                        wStr = wStr.split('(')[0].trim();
+                    }
+                    const jobWorkers = wStr.split(',').map(w => w.trim());
+                    
+                    // เช็คว่างานนี้มีคนที่ติ๊กเลือกอยู่ไหม
+                    return wageFilter.some(fw => jobWorkers.includes(fw));
+                  })
+                  .map(tx => {
+                  let workersStr = tx.note || '';
+                  let detailsStr = '';
+                  if (workersStr.includes('คนทำ:') && workersStr.includes('(')) {
+                      const parts = workersStr.split('(');
+                      workersStr = parts[0].replace('คนทำ:', '').trim();
+                      detailsStr = parts[1].replace(')', '').trim();
+                  } else if (workersStr.includes('(')) {
+                      const parts = workersStr.split('(');
+                      workersStr = parts[0].trim();
+                      detailsStr = parts[1].replace(')', '').trim();
+                  }
                   
-                  if (withdrawHistory.length === 0) {
-                    return <div className="text-center text-gray-400 py-10 font-bold text-sm">ยังไม่มีประวัติการเบิกเงิน</div>;
+                  // 🧮 สมองกลคำนวณการหารเงินอัตโนมัติ
+                  const workerArray = workersStr.split(',').map(w => w.trim()).filter(w => w);
+                  const divisor = workerArray.length > 0 ? workerArray.length : 1;
+                  const totalAmount = Number(tx.total_amount);
+                  
+                  // คำนวณยอดที่จะแสดงบนจอ
+                  let displayAmount = totalAmount;
+                  if (wageFilter.length > 0) {
+                    // นับว่ามีคนที่ติ๊กเลือกกี่คนในงานนี้ (เช่น ติ๊กพี่ยันต์คนเดียว = 1)
+                    const matchingWorkersCount = wageFilter.filter(fw => workerArray.includes(fw)).length;
+                    // เอา (ยอดเต็ม / จำนวนคนทั้งหมด) * จำนวนคนที่ติ๊ก
+                    displayAmount = (totalAmount / divisor) * matchingWorkersCount;
                   }
 
-                  return withdrawHistory
-                    .sort((a,b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at))
-                    .map(tx => (
-                      <div key={tx.id} className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex justify-between items-center">
-                        <div>
-                          <h4 className="font-bold text-orange-900 text-sm">🧑‍🌾 {tx.spender_name}</h4>
-                          <p className="text-[10px] text-orange-700 mt-0.5">📅 {new Date(tx.transaction_date || tx.created_at).toLocaleString('th-TH')}</p>
-                        </div>
-                        <div className="text-right flex flex-col items-end">
-                           <span className="font-black text-orange-700 text-lg">-{Number(tx.total_amount).toLocaleString()} ฿</span>
-                           {userRole === 'BOSS' && (
-                             <button onClick={() => handleDeleteExpense(tx.id)} className="text-[10px] text-red-500 font-bold mt-1 hover:underline">
-                               ยกเลิก (ดึงเงินกลับ)
-                             </button>
-                           )}
-                        </div>
-                      </div>
-                  ));
-                })()}
+                  return (
+                    <div key={tx.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative">
+                       <div className="flex justify-between items-start mb-3">
+                         <div className="flex-1 pr-2">
+                           <div className="flex flex-wrap gap-1.5 mb-2">
+                             {workerArray.length > 0 ? workerArray.map((w, idx) => {
+                               const isHighlighted = wageFilter.includes(w);
+                               return (
+                                 <span key={idx} className={`text-[11px] font-bold px-2 py-1 rounded-md border shadow-sm ${wageFilter.length === 0 ? 'bg-orange-100 text-orange-800 border-orange-200' : isHighlighted ? 'bg-blue-500 text-white border-blue-600' : 'bg-gray-100 text-gray-400 border-gray-200'}`}>
+                                   🧑‍🌾 {w}
+                                 </span>
+                               )
+                             }) : (
+                               <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded-md border">ไม่ระบุชื่อ</span>
+                             )}
+                           </div>
+                           
+                           <p className="text-sm text-gray-700 font-semibold mb-1">
+                             {detailsStr ? `📐 ${detailsStr}` : ''}
+                           </p>
+                           
+                           <p className="text-[11px] text-gray-500 mt-1">
+                             {wageTab === 'PAID' ? (
+                               <span className="text-green-700 font-bold">✅ จ่ายเมื่อ: {tx.paid_at ? new Date(tx.paid_at).toLocaleString('th-TH') : new Date(tx.created_at).toLocaleString('th-TH')}</span>
+                             ) : (
+                               <span>📅 ลงสมุด: {new Date(tx.created_at).toLocaleString('th-TH')}</span>
+                             )}
+                           </p>
+                         </div>
 
+                         <div className="text-right shrink-0">
+                           <span className={`block font-black text-2xl leading-none mb-1 ${wageTab === 'UNPAID' ? 'text-red-600' : 'text-green-600'}`}>
+                             {displayAmount.toLocaleString()} <span className="text-sm">฿</span>
+                           </span>
+                           
+                           {/* ป้ายกำกับอธิบายว่ายอดนี้คำนวณมายังไง */}
+                           <span className={`inline-block text-[9px] px-1.5 py-0.5 rounded-full font-bold ${wageFilter.length > 0 ? 'bg-blue-50 text-blue-700 border-blue-200 border' : 'bg-gray-100 text-gray-600 border-gray-200 border'}`}>
+                             {wageFilter.length > 0 ? `ส่วนแบ่งของคนที่เลือก` : (divisor > 1 ? `งานหาร ${divisor} คน` : `งานเดี่ยว`)}
+                           </span>
+                         </div>
+                       </div>
+
+                       {/* 👇 กดเพื่อจ่ายเงิน (ซ่อนไม่ให้ลูกจ้างเห็น โชว์เฉพาะเถ้าแก่) 👇 */}
+                       {userRole === 'BOSS' && wageTab === 'UNPAID' && (
+                         wageFilter.length === 0 ? (
+                           <button 
+                             onClick={async () => {
+                               if(!window.confirm('ยืนยันว่าเคลียร์ยอดนี้ให้ลูกจ้าง (ทุกคนในบิล) แล้วใช่ไหม?')) return;
+                               try {
+                                 const now = new Date();
+                                 now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                                 const paid_at = now.toISOString();
+
+                                 await fetch(`https://harvester-api-server.onrender.com/api/transactions/${tx.id}/status`, {
+                                   method: 'PATCH',
+                                   headers: { 'Content-Type': 'application/json' },
+                                   body: JSON.stringify({ status: 'PAID', paid_at })
+                                 });
+                                 fetchWages(); 
+                               } catch(e) { console.error(e); }
+                             }}
+                             className="w-full bg-gray-50 hover:bg-green-50 text-gray-600 hover:text-green-700 border border-gray-200 hover:border-green-300 font-bold py-2 rounded-lg text-sm transition flex items-center justify-center gap-2"
+                           >
+                             ✅ จ่ายเงินยอดเต็มบิลนี้แล้ว
+                           </button>
+                         ) : (
+                           <div className="text-[10px] text-center text-red-400 font-bold bg-red-50 py-1.5 rounded-lg border border-red-100">
+                             *กดยกเลิกตัวกรองชื่อ เพื่อกดปุ่มทำรายการจ่ายเงิน
+                           </div>
+                         )
+                       )}
+                    </div>
+                  )
+                })}
+              </div>
+              
+              {/* ยอดรวมทั้งหมด (อัปเกรดให้ตรงกับตัวกรอง) */}
+              <div className="mt-4 pt-4 border-t border-gray-200 shrink-0">
+                <div className={`p-4 rounded-xl flex justify-between items-center shadow-inner ${wageTab === 'UNPAID' ? 'bg-gradient-to-r from-red-50 to-orange-50 border border-red-200' : 'bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200'}`}>
+                  <div>
+                    <span className={`block font-bold text-sm ${wageTab === 'UNPAID' ? 'text-red-900' : 'text-green-900'}`}>
+                      {wageTab === 'UNPAID' ? 'ยอดที่ต้องเตรียมจ่าย:' : 'ยอดที่จ่ายไปแล้ว:'}
+                    </span>
+                    <span className={`text-[10px] font-bold ${wageTab === 'UNPAID' ? 'text-red-700' : 'text-green-700'}`}>
+                      {wageFilter.length > 0 ? `*ยอดรวมเฉพาะคนที่เลือก` : `*ยอดรวมทุกคน (แบบเต็ม)`}
+                    </span>
+                  </div>
+                  <span className={`font-black text-3xl drop-shadow-sm ${wageTab === 'UNPAID' ? 'text-red-600' : 'text-green-600'}`}>
+                    {wageTransactions
+                      .filter(t => t.status === wageTab)
+                      .reduce((sum, tx) => {
+                        if (wageFilter.length === 0) return sum + Number(tx.total_amount);
+                        
+                        // 🐛 แก้ไข: ทำความสะอาดข้อความก่อนนับจำนวนคน
+                        let wStr = tx.note || '';
+                        if (wStr.includes('คนทำ:') && wStr.includes('(')) {
+                            wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
+                        } else if (wStr.includes('(')) {
+                            wStr = wStr.split('(')[0].trim();
+                        }
+                        
+                        const jobWorkers = wStr.split(',').map(w => w.trim()).filter(w => w);
+                        const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
+                        
+                        // ถ้ารายการนี้ไม่มีคนที่เลือกเลย ให้ข้ามไป
+                        const matchingCount = wageFilter.filter(fw => jobWorkers.includes(fw)).length;
+                        if (matchingCount === 0) return sum;
+                        
+                        return sum + ((Number(tx.total_amount) / divisor) * matchingCount);
+                      }, 0).toLocaleString()} <span className="text-lg">฿</span>
+                  </span>
+                </div>
               </div>
             </div>
           </div>
