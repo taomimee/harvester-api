@@ -307,16 +307,17 @@ function App() {
   // 👇 วางต่อท้าย isFetchingGps 👇
   // 💸 State สำหรับจัดการค่าใช้จ่ายจิปาถะ
   const [showExpenseForm, setShowExpenseForm] = useState(false);
+  // เปลี่ยน expenseData ให้รองรับ id และรูปเดิม
   const [expenseData, setExpenseData] = useState({
+    id: null, // 👈 เพิ่ม id เพื่อให้รู้ว่ากำลังแก้ไข
     category: 'น้ำมัน', total_amount: '', transaction_date: new Date().toISOString().slice(0, 16),
-    vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null
+    vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null,
+    existing_receipt_url: null // 👈 เก็บลิงก์รูปเก่า
   });
 
-  // ฟังก์ชันสำหรับส่งข้อมูลค่าใช้จ่ายไปบันทึก
   const handleExpenseSubmit = async (e) => {
     e.preventDefault();
     
-    // ดักจับกรณีลืมใส่จำนวนเงิน
     if (!expenseData.total_amount || Number(expenseData.total_amount) <= 0) {
       return alert("❌ กรุณาระบุจำนวนเงินให้ถูกต้องครับ");
     }
@@ -325,7 +326,6 @@ function App() {
     formData.append('category', expenseData.category);
     formData.append('total_amount', expenseData.total_amount);
     
-    // แปลงเวลาให้เป็นมาตรฐานก่อนส่ง
     const d = new Date(expenseData.transaction_date);
     formData.append('transaction_date', d.toISOString());
     
@@ -333,31 +333,61 @@ function App() {
     if(expenseData.spender_name) formData.append('spender_name', expenseData.spender_name);
     if(expenseData.note) formData.append('note', expenseData.note);
     if(expenseData.receipt) formData.append('receipt', expenseData.receipt);
+    // ส่งลิงก์รูปเดิมไปด้วย ถ้าไม่ได้แนบรูปใหม่
+    if(expenseData.existing_receipt_url && !expenseData.receipt) formData.append('existing_receipt_url', expenseData.existing_receipt_url);
+
+    // 👇 เช็คว่าเป็นการเพิ่มใหม่ (POST) หรือ แก้ไข (PUT)
+    const isEditing = !!expenseData.id;
+    const url = isEditing 
+      ? `https://harvester-api-server.onrender.com/api/transactions/expenses/${expenseData.id}` 
+      : 'https://harvester-api-server.onrender.com/api/transactions/expenses';
 
     try {
-      const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/expenses', {
-        method: 'POST',
+      const res = await fetch(url, {
+        method: isEditing ? 'PUT' : 'POST',
         body: formData 
       });
       
       if (res.ok) {
-        alert('✅ บันทึกค่าใช้จ่ายเรียบร้อย!');
+        alert(isEditing ? '✅ แก้ไขค่าใช้จ่ายเรียบร้อย!' : '✅ บันทึกค่าใช้จ่ายเรียบร้อย!');
         setShowExpenseForm(false);
         setExpenseData({
-          category: 'น้ำมัน', total_amount: '', transaction_date: new Date().toISOString().slice(0, 16),
-          vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null
+          id: null, category: 'น้ำมัน', total_amount: '', transaction_date: new Date().toISOString().slice(0, 16),
+          vehicle_id: '', job_id: '', spender_name: '', note: '', receipt: null, existing_receipt_url: null
         });
-        fetchDashboard(); // รีเฟรชหน้าสรุปยอด
-        fetchExpenses();  // 👈 เติมบรรทัดนี้ เพื่อให้หน้ารายจ่ายรีเฟรชข้อมูลใหม่ทันที
+        fetchDashboard(); 
+        fetchExpenses();  
       } else {
-        // 💡 ดึงข้อความ Error จากฐานข้อมูลมาโชว์ให้รู้สาเหตุ
         const errData = await res.json();
-        alert(`❌ บันทึกไม่สำเร็จ:\n${errData.error || errData.message || 'API ไม่รองรับข้อมูลแบบ FormData'}`);
+        alert(`❌ บันทึกไม่สำเร็จ:\n${errData.error || errData.message}`);
       }
     } catch (err) { 
       console.error(err); 
       alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     }
+  };
+
+  // 👇 เพิ่มฟังก์ชันสำหรับกดปุ่ม "แก้ไข"
+  const handleEditExpense = (tx) => {
+    let dateStr = new Date().toISOString().slice(0, 16);
+    if (tx.transaction_date || tx.created_at) {
+        const d = new Date(tx.transaction_date || tx.created_at);
+        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+        dateStr = d.toISOString().slice(0, 16);
+    }
+
+    setExpenseData({
+        id: tx.id,
+        category: tx.category || 'น้ำมัน',
+        total_amount: tx.total_amount,
+        transaction_date: dateStr,
+        vehicle_id: tx.vehicle_id || '',
+        spender_name: tx.spender_name || '',
+        note: tx.note || '',
+        receipt: null,
+        existing_receipt_url: tx.receipt_url || null
+    });
+    setShowExpenseForm(true);
   };
   
   // 👇 ฟังก์ชันสำหรับลบรายจ่าย/ค่าแรง 👇
@@ -1980,7 +2010,7 @@ function App() {
             acc[raw] = (acc[raw] || 0) + (Number(tx.total_amount) || 0);
             return acc;
           }, {});
-          
+
           const expenseCategoryEntries = Object.entries(expenseByCategory).sort((a, b) => b[1] - a[1]);
           const expenseMax = expenseCategoryEntries.length > 0 ? expenseCategoryEntries[0][1] : 1;
 
@@ -2564,7 +2594,7 @@ function App() {
                            </span>
 
                            <div className="flex items-center gap-2.5 mt-2.5">
-                             {/* 👇 เปลี่ยนจากข้อความลิงก์ ให้แสดงเป็นรูปภาพใบเสร็จแทน 👇 */}
+                             {/* 👇 1. รูปภาพใบเสร็จขนาดเล็ก 👇 */}
                              {tx.receipt_url && (
                                <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="relative group cursor-pointer" title="คลิกเพื่อดูใบเสร็จขนาดเต็ม">
                                  <img 
@@ -2572,13 +2602,22 @@ function App() {
                                    alt="ใบเสร็จ" 
                                    className="w-10 h-10 object-cover rounded-md border border-gray-300 shadow-sm transition group-hover:opacity-80"
                                  />
-                                 {/* เพิ่มไอคอนแว่นขยายเล็กๆ ไว้ที่มุมรูป */}
                                  <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[8px] font-bold px-1 rounded-full shadow-sm">
                                    🔍
                                  </span>
                                </a>
                              )}
                              
+                             {/* 👇 2. ปุ่มแก้ไข (สำหรับแก้ยอด/เพิ่มรูป) 👇 */}
+                             <button 
+                               onClick={() => handleEditExpense(tx)}
+                               className="text-gray-400 hover:text-blue-500 p-1 bg-gray-50 hover:bg-blue-50 rounded-md transition text-sm"
+                               title="แก้ไขรายการนี้"
+                             >
+                               ✏️
+                             </button>
+
+                             {/* 👇 3. ปุ่มลบทิ้ง 👇 */}
                              <button 
                                onClick={() => handleDeleteExpense(tx.id)}
                                className="text-gray-400 hover:text-red-500 p-1 bg-gray-50 hover:bg-red-50 rounded-md transition"
@@ -3175,7 +3214,8 @@ function App() {
               {/* 👇 1. เพิ่ม Header ที่มีปุ่ม (X) ปิดหน้าต่าง 👇 */}
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-bold text-red-700 flex items-center gap-2">
-                  <span>💸</span> บันทึกค่าใช้จ่าย
+                  {/* 👇 แก้ไขตรงบรรทัดนี้ครับ 👇 */}
+                  <span>💸</span> {expenseData.id ? 'แก้ไขรายจ่าย' : 'บันทึกรายจ่าย'}
                 </h2>
                 <button 
                   onClick={() => setShowExpenseForm(false)} 
@@ -3284,7 +3324,17 @@ function App() {
                        </button>
                      </div>
                    )}
-                </div>
+
+                   {/* 👇 วางโค้ดรูปเก่าตรงนี้ครับ (ต่อจากบล็อกด้านบน) 👇 */}
+                   {!expenseData.receipt && expenseData.existing_receipt_url && (
+                     <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center text-xs text-blue-800 font-bold shadow-inner">
+                       <span className="flex items-center gap-2">
+                         <img src={expenseData.existing_receipt_url} alt="old-receipt" className="w-8 h-8 object-cover rounded" />
+                         มีรูปใบเสร็จเดิมอยู่แล้ว
+                       </span>
+                     </div>
+                   )}
+                </div> 
 
                 {/* 👇 2. เพิ่มกลุ่มปุ่ม ยกเลิก / บันทึกรายจ่าย ไว้ด้านล่างสุด 👇 */}
                 <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">

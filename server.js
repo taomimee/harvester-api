@@ -429,6 +429,60 @@ app.get('/api/dashboard', async (req, res) => {
     }
 });
 
+// 💡 API สำหรับแก้ไขรายจ่าย (PUT)
+app.put('/api/transactions/expenses/:id', upload.single('receipt'), async (req, res) => {
+    const { id } = req.params;
+    let { category, total_amount, vehicle_id, spender_name, transaction_date, note, existing_receipt_url } = req.body;
+    const file = req.file;
+    let receiptUrl = existing_receipt_url || null; // ถ้าไม่ได้แนบรูปใหม่ ให้ใช้รูปเดิมไปก่อน
+
+    try {
+        // 1. ถ้ามีการอัปโหลดรูป "ใหม่" เข้ามา ให้เอาขึ้น Storage
+        if (file) {
+            const fileExt = file.originalname.split('.').pop() || 'jpg';
+            const fileName = `expense_${Date.now()}.${fileExt}`;
+            
+            const { data: storageData, error: storageError } = await supabase.storage
+                .from('job-attachments') 
+                .upload(fileName, file.buffer, { contentType: file.mimetype });
+            
+            if (storageError) throw storageError;
+
+            const { data: publicUrlData } = supabase.storage
+                .from('job-attachments')
+                .getPublicUrl(fileName);
+            receiptUrl = publicUrlData.publicUrl;
+        }
+
+        // 2. จัดเตรียมข้อมูลที่จะอัปเดต
+        const updateData = {
+            category: category || 'ทั่วไป',
+            total_amount: Number(total_amount),
+            paid_amount: Number(total_amount),
+            vehicle_id: vehicle_id ? Number(vehicle_id) : null,
+            spender_name: spender_name,
+            note: note,
+            transaction_date: transaction_date || new Date().toISOString(),
+            receipt_url: receiptUrl
+        };
+
+        // 3. บันทึกการแก้ไขลงตาราง
+        const { data, error } = await supabase
+            .from('transactions')
+            .update(updateData)
+            .eq('id', id)
+            .select();
+
+        if (error) throw error;
+        res.json({ message: 'แก้ไขค่าใช้จ่ายสำเร็จ', data });
+
+    } catch (err) {
+        console.error('Update Expense API Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 // 💰 API สำหรับบันทึกค่าใช้จ่ายทั่วไป (พร้อมแนบใบเสร็จ)
 app.post('/api/transactions/expenses', upload.single('receipt'), async (req, res) => {
     let { category, total_amount, job_id, vehicle_id, spender_name, transaction_date, note } = req.body;
