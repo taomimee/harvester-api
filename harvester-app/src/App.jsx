@@ -2563,14 +2563,24 @@ function App() {
                            </span>
 
                            <div className="flex items-center gap-2.5 mt-2.5">
+                             {/* 👇 เปลี่ยนจากข้อความลิงก์ ให้แสดงเป็นรูปภาพใบเสร็จแทน 👇 */}
                              {tx.receipt_url && (
-                               <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="text-[11px] text-blue-600 font-bold hover:underline">
-                                 📄 ดูใบเสร็จ
+                               <a href={tx.receipt_url} target="_blank" rel="noreferrer" className="relative group cursor-pointer" title="คลิกเพื่อดูใบเสร็จขนาดเต็ม">
+                                 <img 
+                                   src={tx.receipt_url} 
+                                   alt="ใบเสร็จ" 
+                                   className="w-10 h-10 object-cover rounded-md border border-gray-300 shadow-sm transition group-hover:opacity-80"
+                                 />
+                                 {/* เพิ่มไอคอนแว่นขยายเล็กๆ ไว้ที่มุมรูป */}
+                                 <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[8px] font-bold px-1 rounded-full shadow-sm">
+                                   🔍
+                                 </span>
                                </a>
                              )}
+                             
                              <button 
                                onClick={() => handleDeleteExpense(tx.id)}
-                               className="text-gray-400 hover:text-red-500 p-0.5 text-sm transition"
+                               className="text-gray-400 hover:text-red-500 p-1 bg-gray-50 hover:bg-red-50 rounded-md transition"
                                title="ลบรายการนี้"
                              >
                                🗑️
