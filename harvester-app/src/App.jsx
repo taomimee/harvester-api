@@ -1979,6 +1979,7 @@ function App() {
 
           const unpaidWage = periodWages.filter(tx => tx.status === 'UNPAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           const paidWage = periodWages.filter(tx => tx.status === 'PAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
+          const totalUnpaidWageAllTime = wageTransactions.filter(tx => tx.status === 'UNPAID').reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
@@ -2195,14 +2196,19 @@ const topDebtors = Object.values(groupedDebtorsMap)
                 <div className="bg-white rounded-3xl p-5 border border-gray-100 shadow-md">
                   <div className="flex items-center justify-between mb-3">
                     <div><h3 className="font-black text-gray-900">⚠️ สิ่งที่ต้องจัดการ</h3><p className="text-[11px] text-gray-500 mt-1">รายการสำคัญที่ไม่ควรมองข้าม</p></div>
-                    <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100">{(debtJobs.length + (unpaidWage > 0 ? 1 : 0))} เรื่อง</span>
+                    {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime */}
+                    <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100">{(debtJobs.length + (totalUnpaidWageAllTime > 0 ? 1 : 0))} เรื่อง</span>
                   </div>
                   <div className="space-y-2">
                     <button onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center justify-between p-3 rounded-2xl bg-red-50 border border-red-100 text-left hover:bg-red-100 transition">
                       <span><span className="block text-xs font-black text-red-800">💳 ลูกหนี้ค้างชำระ (ทั้งหมด)</span><span className="block text-[10px] text-red-600 mt-0.5">{debtJobs.length} รายการ</span></span><strong className="text-red-600">{formatMoney(debtAmount)} ฿</strong>
                     </button>
-                    {unpaidWage > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย ({monthName})</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(unpaidWage)} ฿</strong></button>}
-                    {debtJobs.length === 0 && unpaidWage <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
+                    
+                    {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime และแก้ข้อความเป็น "ยอดสะสมรวม" */}
+                    {totalUnpaidWageAllTime > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย (ยอดสะสมรวม)</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(totalUnpaidWageAllTime)} ฿</strong></button>}
+                    
+                    {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime */}
+                    {debtJobs.length === 0 && totalUnpaidWageAllTime <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
                   </div>
                 </div>
 
