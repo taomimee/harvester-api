@@ -1961,9 +1961,9 @@ function App() {
           const calcTotalExpense = periodExpenses.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           const calcNetProfit = calcTotalIncome - calcTotalExpense;
 
-          // 👇 1. เพิ่มตัวแปรดึงเฉพาะรายจ่ายหน้างาน (หักค่างวดรถออก)
+          // 👇 1. เพิ่มตัวแปรดึงเฉพาะรายจ่ายหน้างาน (หักรายจ่ายที่มีคำว่า "ค่างวด" ออกทั้งหมด)
           const operationalExpense = periodExpenses
-            .filter(tx => tx.category !== 'ค่างวดรถ')
+            .filter(tx => !(tx.category || '').includes('ค่างวด'))
             .reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
 
           // 3. ข้อมูลวิเคราะห์สำหรับกราฟและสัดส่วน
@@ -1980,6 +1980,7 @@ function App() {
             acc[raw] = (acc[raw] || 0) + (Number(tx.total_amount) || 0);
             return acc;
           }, {});
+          
           const expenseCategoryEntries = Object.entries(expenseByCategory).sort((a, b) => b[1] - a[1]);
           const expenseMax = expenseCategoryEntries.length > 0 ? expenseCategoryEntries[0][1] : 1;
 
@@ -3198,7 +3199,11 @@ function App() {
                     <option value="ซ่อมรถ">🔧 ซ่อมรถ</option>
                     <option value="ค่าอาหาร">🍚 ค่าอาหาร</option>                    
                     <option value="ค่าเดินทาง">🚗 ค่าเดินทาง</option>
-                    <option value="ค่างวดรถ">🚜 ค่างวดรถ (รายไตรมาส)</option>
+                    
+                    {/* 👇 เปลี่ยนเป็นแบบแยกประเภท 👇 */}
+                    <option value="ค่างวดรถเกี่ยว">🚜 ค่างวดรถเกี่ยว</option>
+                    <option value="ค่างวดรถ 10 ล้อ">🚚 ค่างวดรถ 10 ล้อ</option>
+                    
                     <option value="อื่นๆ">📦 อื่นๆ</option>
                   </select>
                 </div>
