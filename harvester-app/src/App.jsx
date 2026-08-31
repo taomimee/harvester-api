@@ -2204,7 +2204,6 @@ const topDebtors = Object.values(groupedDebtorsMap)
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="font-black text-gray-900">👥 ลูกหนี้ก้อนใหญ่</h3>
-                      {/* 👇 แก้ข้อความตรงนี้เป็น 5 ลูกค้า */}
                       <p className="text-[11px] text-gray-500 mt-1">5 ลูกค้าที่มียอดค้างสูงสุด (รวมทุกแปลง)</p>
                     </div>
                     <button onClick={() => setFinanceSubTab('debt')} className="text-[10px] font-black text-red-600">ดูทั้งหมด →</button>
@@ -2218,8 +2217,14 @@ const topDebtors = Object.values(groupedDebtorsMap)
                           <div className="w-8 h-8 rounded-xl bg-white border border-gray-200 flex items-center justify-center font-black text-gray-500">{idx + 1}</div>
                           <div className="flex-1 min-w-0">
                             <p className="font-black text-xs text-gray-800 truncate">{debtor.name}</p>
-                            {/* 👇 โชว์จำนวนไร่ และคิวงานที่รวมมาแล้ว */}
-                            <p className="text-[10px] text-gray-500">รวม {debtor.total_area} ไร่ • ({debtor.job_count} คิวงาน)</p>
+                            
+                            {/* 👇 โชว์จำนวนไร่แยกตามพืชอัตโนมัติ */}
+                            <p className="text-[10px] text-gray-500 mt-0.5">
+                              {Object.entries(debtor.crop_areas)
+                                .map(([cropName, area]) => `${cropName} ${area} ไร่`)
+                                .join(' + ')} • ({debtor.job_count} คิวงาน)
+                            </p>
+                            
                           </div>
                           <strong className="text-sm text-red-600">{formatMoney(debtor.total_price)} ฿</strong>
                         </button>
