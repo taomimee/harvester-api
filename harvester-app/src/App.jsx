@@ -2517,8 +2517,7 @@ function App() {
                                  <div 
                                     key={job.id} 
                                     onClick={() => {
-                                      setFinanceSubTab('history');
-                                      if (typeof setEditingJob === 'function') setEditingJob(job);
+                                      openEditForm(job); // 👈 เปลี่ยนมาใช้คำสั่งนี้ หน้าต่างแก้ไขจะเด้งขึ้นมาตรงๆ ทันที!
                                     }}
                                     className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 relative overflow-hidden flex justify-between items-center cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition active:scale-[0.98]"
                                  >
