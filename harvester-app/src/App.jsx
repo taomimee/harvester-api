@@ -3419,42 +3419,65 @@ function App() {
               </div>
               
               <form onSubmit={handleExpenseSubmit} className="space-y-3">
-                {/* หมวดหมู่ */}
-                <div>
-                  <label className="block text-gray-700 font-semibold mb-1 text-sm">หมวดหมู่ค่าใช้จ่าย</label>
-                  <select 
-                    className="w-full border p-2 rounded-lg bg-gray-50 mb-2"
-                    value={['น้ำมัน', 'อะไหล่', 'ซ่อมรถ', 'ค่าอาหาร', 'ค่าเดินทาง', 'ค่างวดรถเกี่ยว', 'ค่างวดรถ 10 ล้อ'].includes(expenseData.category) ? expenseData.category : 'CUSTOM'}
-                    onChange={(e) => {
-                      if (e.target.value === 'CUSTOM') {
-                        setExpenseData({...expenseData, category: ''});
-                      } else {
-                        setExpenseData({...expenseData, category: e.target.value});
-                      }
-                    }}
-                  >
-                    <option value="น้ำมัน">⛽ น้ำมัน</option>
-                    <option value="อะไหล่">🛞 อะไหล่</option>                    
-                    <option value="ซ่อมรถ">🔧 ซ่อมรถ</option>
-                    <option value="ค่าอาหาร">🍚 ค่าอาหาร</option>                    
-                    <option value="ค่าเดินทาง">🚗 ค่าเดินทาง</option>
-                    <option value="ค่างวดรถเกี่ยว">🚜 ค่างวดรถเกี่ยว</option>
-                    <option value="ค่างวดรถ 10 ล้อ">🚚 ค่างวดรถ 10 ล้อ</option>
-                    <option value="CUSTOM">✨ พิมพ์หมวดหมู่เอง...</option>
-                  </select>
+                {/* หมวดหมู่ (ระบบเรียนรู้คำอัตโนมัติ) */}
+                {(() => {
+                  // 🧠 1. ดึงชื่อหมวดหมู่ที่เคยบันทึกไว้ในประวัติ มาผสมกับหมวดหมู่พื้นฐาน
+                  const defaultCategories = ['น้ำมัน', 'อะไหล่', 'ซ่อมรถ', 'ค่าอาหาร', 'ค่าเดินทาง', 'ค่างวดรถเกี่ยว', 'ค่างวดรถ 10 ล้อ'];
+                  
+                  // ดึงหมวดหมู่จากฐานข้อมูล (กรองเอาพวกค่าแรงออกไป เพราะมีระบบจัดการแยกแล้ว)
+                  const usedCategories = expenseTransactions
+                      .map(tx => tx.category)
+                      .filter(c => c && !['เบิกค่าแรง', 'WAGE', 'ค่าแรง'].includes(c));
+                  
+                  // ลบชื่อที่ซ้ำกันออก
+                  const allCategories = Array.from(new Set([...defaultCategories, ...usedCategories]));
+                  
+                  // เช็คว่าหมวดหมู่ปัจจุบันอยู่ในลิสต์หรือไม่ (ถ้าไม่อยู่แปลว่ากำลังพิมพ์ของใหม่)
+                  const isStandard = allCategories.includes(expenseData.category) && expenseData.category !== '';
 
-                  {/* กล่องพิมพ์ข้อความ จะโผล่มาเมื่อเลือก "พิมพ์หมวดหมู่เอง..." หรือตอนกดแก้ไขบิลที่มีหมวดหมู่แปลกๆ */}
-                  {!['น้ำมัน', 'อะไหล่', 'ซ่อมรถ', 'ค่าอาหาร', 'ค่าเดินทาง', 'ค่างวดรถเกี่ยว', 'ค่างวดรถ 10 ล้อ'].includes(expenseData.category) && (
-                    <input 
-                      type="text" 
-                      placeholder="ระบุชื่อหมวดหมู่ที่ต้องการ (เช่น ค่าทางด่วน, ค่าปรับ)" 
-                      className="w-full border border-blue-400 bg-blue-50 text-blue-900 font-bold p-2 rounded-lg text-sm shadow-inner focus:ring-2 focus:ring-blue-500 outline-none"
-                      value={expenseData.category}
-                      onChange={(e) => setExpenseData({...expenseData, category: e.target.value})}
-                      autoFocus
-                    />
-                  )}
-                </div>
+                  return (
+                    <div>
+                      <label className="block text-gray-700 font-semibold mb-1 text-sm">หมวดหมู่ค่าใช้จ่าย</label>
+                      <select 
+                        className="w-full border p-2 rounded-lg bg-gray-50 mb-2 font-bold text-gray-800"
+                        value={isStandard ? expenseData.category : 'CUSTOM'}
+                        onChange={(e) => {
+                          if (e.target.value === 'CUSTOM') {
+                            setExpenseData({...expenseData, category: ''});
+                          } else {
+                            setExpenseData({...expenseData, category: e.target.value});
+                          }
+                        }}
+                      >
+                        {allCategories.map(cat => (
+                          <option key={cat} value={cat}>
+                             {/* เติมไอคอนให้หมวดหมู่หลัก ถ้าเป็นของใหม่ที่ดึงมาให้ใช้ไอคอน 📌 */}
+                             {cat === 'น้ำมัน' ? '⛽ ' : 
+                              cat === 'อะไหล่' ? '🛞 ' : 
+                              cat === 'ซ่อมรถ' ? '🔧 ' : 
+                              cat === 'ค่าอาหาร' ? '🍚 ' : 
+                              cat === 'ค่าเดินทาง' ? '🚗 ' : 
+                              cat.includes('ค่างวด') ? '🚜 ' : '📌 '}
+                             {cat}
+                          </option>
+                        ))}
+                        <option value="CUSTOM">✨ พิมพ์หมวดหมู่ใหม่...</option>
+                      </select>
+
+                      {/* กล่องพิมพ์จะโผล่มาเฉพาะตอนเลือก "พิมพ์หมวดหมู่ใหม่..." */}
+                      {!isStandard && (
+                        <input 
+                          type="text" 
+                          placeholder="ตั้งชื่อหมวดหมู่ใหม่ (เช่น ค่าทางด่วน, ค่าปรับ)" 
+                          className="w-full border border-blue-400 bg-blue-50 text-blue-900 font-bold p-2 rounded-lg text-sm shadow-inner focus:ring-2 focus:ring-blue-500 outline-none"
+                          value={expenseData.category}
+                          onChange={(e) => setExpenseData({...expenseData, category: e.target.value})}
+                          autoFocus
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* จำนวนเงิน & วันที่ */}
                 <div className="grid grid-cols-2 gap-3">
