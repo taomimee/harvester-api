@@ -3275,31 +3275,101 @@ function App() {
                       </div>
                     )}
 
-                    {/* 💸 แสดงประวัติการเบิกเงินสด (เบิกจากกระเป๋า) */}
+                    {/* 💸 แสดงประวัติการเบิกเงินสด และ ประวัติเคลียร์บิล (แบบรวม) */}
                     {wageTab === 'PAID' && (() => {
-                       const withdrawalsToShow = activeWorker 
+                       // 1. ประวัติเบิกเงินสด (แบบใหม่ - พิมพ์ตัวเลข)
+                       const newWithdrawals = activeWorker 
                            ? getWorkerWallet(activeWorker).newWithdrawals 
                            : expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง');
 
+                       // 2. ประวัติเคลียร์บิล (แบบเก่า - จ่ายรายแปลง)
+                       const oldPaidBills = wageTransactions.filter(tx => {
+                           const { jobWorkers, paidWorkers } = parseWageNote(tx.note);
+                           if (activeWorker) {
+                               return jobWorkers.includes(activeWorker) && (tx.status === 'PAID' || paidWorkers.includes(activeWorker));
+                           } else {
+                               return tx.status === 'PAID' || paidWorkers.length > 0;
+                           }
+                       });
+
+                       const hasAnyRecord = newWithdrawals.length > 0 || oldPaidBills.length > 0;
+
                        return (
-                         <div className="space-y-3">
-                           {withdrawalsToShow.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการเบิกเงิน</p> : null}
-                           {withdrawalsToShow.sort((a,b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at)).map(tx => (
-                             <div key={tx.id} className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex justify-between items-center">
-                               <div>
-                                 <h4 className="font-bold text-orange-900 text-sm">💸 เบิกเงินสด ({tx.spender_name})</h4>
-                                 <p className="text-[10px] text-orange-700 mt-0.5">📅 {new Date(tx.transaction_date || tx.created_at).toLocaleString('th-TH')}</p>
-                               </div>
-                               <div className="text-right">
-                                  <span className="font-black text-orange-700 text-lg">-{Number(tx.total_amount).toLocaleString()} ฿</span>
-                                  {userRole === 'BOSS' && (
-                                    <button onClick={() => handleDeleteExpense(tx.id)} className="block text-[10px] text-red-500 font-bold mt-1 hover:underline text-right w-full">
-                                      ยกเลิก (ดึงเงินกลับ)
-                                    </button>
-                                  )}
-                               </div>
-                             </div>
-                           ))}
+                         <div className="space-y-4">
+                           {!hasAnyRecord ? (
+                             <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการรับเงิน</p>
+                           ) : (
+                             <>
+                               {/* ส่วนที่ 1: เบิกเงินสด */}
+                               {newWithdrawals.length > 0 && (
+                                 <div>
+                                   <h4 className="text-[11px] font-bold text-gray-500 mb-2">💸 ประวัติเบิกเงินสด</h4>
+                                   <div className="space-y-2">
+                                     {newWithdrawals.sort((a,b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at)).map(tx => (
+                                       <div key={tx.id} className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex justify-between items-center shadow-sm">
+                                         <div>
+                                           <h4 className="font-bold text-orange-900 text-sm">เบิกเงินสด ({tx.spender_name})</h4>
+                                           <p className="text-[10px] text-orange-700 mt-0.5">📅 {new Date(tx.transaction_date || tx.created_at).toLocaleString('th-TH')}</p>
+                                         </div>
+                                         <div className="text-right">
+                                            <span className="font-black text-orange-700 text-lg">-{Number(tx.total_amount).toLocaleString()} ฿</span>
+                                            {userRole === 'BOSS' && (
+                                              <button onClick={() => handleDeleteExpense(tx.id)} className="block text-[10px] text-red-500 font-bold mt-1 hover:underline text-right w-full">
+                                                ยกเลิก (ดึงเงินกลับ)
+                                              </button>
+                                            )}
+                                         </div>
+                                       </div>
+                                     ))}
+                                   </div>
+                                 </div>
+                               )}
+
+                               {/* ส่วนที่ 2: เคลียร์บิลรายแปลง */}
+                               {oldPaidBills.length > 0 && (
+                                 <div>
+                                   <h4 className="text-[11px] font-bold text-gray-500 mb-2 mt-4">🚜 ประวัติรับเงินรายแปลง</h4>
+                                   <div className="space-y-2">
+                                     {oldPaidBills.map(tx => {
+                                        const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
+                                        const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
+                                        const totalAmount = Number(tx.total_amount);
+                                        const displayAmount = activeWorker ? (totalAmount / divisor) : totalAmount;
+
+                                        return (
+                                          <div key={tx.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
+                                             <div className="absolute top-0 left-0 w-1.5 h-full bg-green-400"></div>
+                                             <div className="flex justify-between items-start pl-2">
+                                               <div className="flex-1 pr-2">
+                                                 <div className="flex flex-wrap gap-1 mb-1.5">
+                                                   {jobWorkers.map((w, idx) => {
+                                                     const hasPaid = paidWorkers.includes(w) || tx.status === 'PAID';
+                                                     return (
+                                                       <span key={idx} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${hasPaid ? 'bg-green-100 text-green-700 border-green-300' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                                                         {hasPaid ? '✅' : '⏳'} {w}
+                                                       </span>
+                                                     )
+                                                   })}
+                                                 </div>
+                                                 <p className="text-[11px] text-gray-700 font-bold mb-0.5">{detailsStr ? `📐 ${detailsStr}` : 'ไม่มีรายละเอียด'}</p>
+                                               </div>
+                                               <div className="text-right shrink-0">
+                                                 <span className="block font-black text-green-600 text-lg leading-none mb-1">
+                                                   +{displayAmount.toLocaleString()} ฿
+                                                 </span>
+                                                 <span className="inline-block text-[8px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border-gray-200 border">
+                                                   {activeWorker ? (divisor > 1 ? `ส่วนแบ่งหาร ${divisor}` : `งานเดี่ยว`) : `ยอดเต็มบิล`}
+                                                 </span>
+                                               </div>
+                                             </div>
+                                          </div>
+                                        )
+                                     })}
+                                   </div>
+                                 </div>
+                               )}
+                             </>
+                           )}
                          </div>
                        )
                     })()}
