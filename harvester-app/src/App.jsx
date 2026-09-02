@@ -3423,22 +3423,37 @@ function App() {
                 <div>
                   <label className="block text-gray-700 font-semibold mb-1 text-sm">หมวดหมู่ค่าใช้จ่าย</label>
                   <select 
-                    className="w-full border p-2 rounded-lg bg-gray-50"
-                    value={expenseData.category}
-                    onChange={(e) => setExpenseData({...expenseData, category: e.target.value})}
+                    className="w-full border p-2 rounded-lg bg-gray-50 mb-2"
+                    value={['น้ำมัน', 'อะไหล่', 'ซ่อมรถ', 'ค่าอาหาร', 'ค่าเดินทาง', 'ค่างวดรถเกี่ยว', 'ค่างวดรถ 10 ล้อ'].includes(expenseData.category) ? expenseData.category : 'CUSTOM'}
+                    onChange={(e) => {
+                      if (e.target.value === 'CUSTOM') {
+                        setExpenseData({...expenseData, category: ''});
+                      } else {
+                        setExpenseData({...expenseData, category: e.target.value});
+                      }
+                    }}
                   >
                     <option value="น้ำมัน">⛽ น้ำมัน</option>
                     <option value="อะไหล่">🛞 อะไหล่</option>                    
                     <option value="ซ่อมรถ">🔧 ซ่อมรถ</option>
                     <option value="ค่าอาหาร">🍚 ค่าอาหาร</option>                    
                     <option value="ค่าเดินทาง">🚗 ค่าเดินทาง</option>
-                    
-                    {/* 👇 เปลี่ยนเป็นแบบแยกประเภท 👇 */}
                     <option value="ค่างวดรถเกี่ยว">🚜 ค่างวดรถเกี่ยว</option>
                     <option value="ค่างวดรถ 10 ล้อ">🚚 ค่างวดรถ 10 ล้อ</option>
-                    
-                    <option value="อื่นๆ">📦 อื่นๆ</option>
+                    <option value="CUSTOM">✨ พิมพ์หมวดหมู่เอง...</option>
                   </select>
+
+                  {/* กล่องพิมพ์ข้อความ จะโผล่มาเมื่อเลือก "พิมพ์หมวดหมู่เอง..." หรือตอนกดแก้ไขบิลที่มีหมวดหมู่แปลกๆ */}
+                  {!['น้ำมัน', 'อะไหล่', 'ซ่อมรถ', 'ค่าอาหาร', 'ค่าเดินทาง', 'ค่างวดรถเกี่ยว', 'ค่างวดรถ 10 ล้อ'].includes(expenseData.category) && (
+                    <input 
+                      type="text" 
+                      placeholder="ระบุชื่อหมวดหมู่ที่ต้องการ (เช่น ค่าทางด่วน, ค่าปรับ)" 
+                      className="w-full border border-blue-400 bg-blue-50 text-blue-900 font-bold p-2 rounded-lg text-sm shadow-inner focus:ring-2 focus:ring-blue-500 outline-none"
+                      value={expenseData.category}
+                      onChange={(e) => setExpenseData({...expenseData, category: e.target.value})}
+                      autoFocus
+                    />
+                  )}
                 </div>
 
                 {/* จำนวนเงิน & วันที่ */}
