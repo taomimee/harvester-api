@@ -2339,9 +2339,9 @@ function App() {
           
           const totalDebtAll = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
 
-          // 💸 ฟังก์ชันเก็บเงินเหมา (หักส่วนลดอัตโนมัติจากบิลสุดท้าย)
+          // ✅ 1. ฟังก์ชันรับชำระแบบเหมาปิดบิล (หักส่วนลดอัตโนมัติจากบิลสุดท้าย)
           const handleBulkPay = async (customerName, customerJobs, totalDebt) => {
-             const amountStr = window.prompt(`ยอดหนี้รวมของ [ ${customerName} ] (ค้าง ${customerJobs.length} แปลง)\nคือยอด: ${totalDebt.toLocaleString()} บาท\n\n💰 ลูกค้าจ่ายเหมามาเท่าไหร่? (พิมพ์ยอดเงินสดที่รับจริง):`, totalDebt);
+             const amountStr = window.prompt(`ยอดหนี้รวมของ [ ${customerName} ] (ค้าง ${customerJobs.length} แปลง)\nคือยอด: ${totalDebt.toLocaleString()} บาท\n\n💰 ลูกค้าจ่ายมาเท่าไหร่? (พิมพ์ยอดเงินสดที่รับจริง):`, totalDebt);
              if (amountStr === null) return;
              
              const actualPaid = Number(amountStr);
@@ -2350,8 +2350,8 @@ function App() {
 
              const totalDiscount = totalDebt - actualPaid;
              let confirmMsg = actualPaid === totalDebt 
-                 ? `✅ รับเงินเต็มจำนวน ${actualPaid.toLocaleString()} บาท\nปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`
-                 : `✅ รับเงิน: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลดรวม: ${totalDiscount.toLocaleString()} บาท\n\nยืนยันปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`;
+                 ? `✅ รับชำระเต็มจำนวน ${actualPaid.toLocaleString()} บาท\nปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`
+                 : `✅ รับชำระ: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลดรวม: ${totalDiscount.toLocaleString()} บาท\n\nยืนยันปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`;
 
              if (!window.confirm(confirmMsg)) return;
 
@@ -2365,6 +2365,10 @@ function App() {
                      const job = customerJobs[i];
                      const currentJobDebt = Number(job.total_price);
                      
+                     // คำนวณเผื่อบิลนี้เคยมีการจ่ายชำระบางส่วนมาก่อน
+                     const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                     const pastPaid = orig > currentJobDebt ? orig - currentJobDebt : 0;
+                     
                      let discountForThisJob = 0;
                      if (remainingDiscount > 0) {
                          if (remainingDiscount >= currentJobDebt) {
@@ -2376,32 +2380,82 @@ function App() {
                          }
                      }
 
-                     const finalIncome = currentJobDebt - discountForThisJob;
+                     const incomeFromThisPayment = currentJobDebt - discountForThisJob;
+                     const finalTotalIncome = pastPaid + incomeFromThisPayment;
                      
                      // 1. อัปเดตยอดเงิน
                      const updatePayload = {
                          customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
-                         total_price: finalIncome, 
+                         total_price: finalTotalIncome, 
                          payment_status: 'PAID'
                      };
                      
-                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { 
-                         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) 
-                     });
+                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) });
                      
-                     // 2. ประทับเวลา PAID ลงในระบบ
-                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}/status`, {
-                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                         body: JSON.stringify({ payment_status: 'PAID', paid_at: now.toISOString() })
-                     });
+                     // 2. ประทับเวลา PAID
+                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payment_status: 'PAID', paid_at: now.toISOString() }) });
                  }
+                 alert(`✅ รับชำระ ${customerName} เรียบร้อยแล้ว!`);
+                 fetchJobs(); 
+             } catch (err) { alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่"); }
+          };
+
+          // 💳 2. ฟังก์ชันชำระบางส่วนแบบเหมา (ไล่ตัดหนี้จากบิลที่เก่าที่สุดไปหาใหม่สุด)
+          const handleBulkDeposit = async (customerName, customerJobs, totalDebt) => {
+             const amountStr = window.prompt(`ยอดหนี้รวม [ ${customerName} ] คือ ${totalDebt.toLocaleString()} บาท\n\n💳 ลูกค้าชำระบางส่วนมาก่อนเท่าไหร่?:`);
+             if (!amountStr) return;
+             
+             const depositAmt = Number(amountStr);
+             if (isNaN(depositAmt) || depositAmt <= 0) return alert("❌ กรุณาระบุตัวเลขให้ถูกต้องครับ");
+             if (depositAmt >= totalDebt) return alert("❌ ยอดชำระเท่ากับหรือมากกว่าหนี้รวม กรุณาใช้ปุ่ม '✅ รับชำระ' แทนครับ");
+
+             if (!window.confirm(`ยืนยันรับชำระบางส่วน ${depositAmt.toLocaleString()} บาท\n(ระบบจะนำไปตัดยอดค้างชำระของ "บิลแปลงที่เก่าที่สุด" ก่อนตามลำดับ)`)) return;
+
+             try {
+                 let remainingDeposit = depositAmt;
+                 const now = new Date();
+                 now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
                  
-                 alert(`✅ เก็บเงินเหมา ${customerName} เรียบร้อยแล้ว!`);
-                 fetchJobs(); // โหลดข้อมูลใหม่
-             } catch (err) {
-                 console.error(err);
-                 alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่");
-             }
+                 // เรียงบิลจากเก่าไปใหม่ (จ่ายของเก่าก่อน)
+                 const sortedJobs = [...customerJobs].sort((a,b) => new Date(a.job_date) - new Date(b.job_date));
+
+                 for (let i = 0; i < sortedJobs.length; i++) {
+                     const job = sortedJobs[i];
+                     if (remainingDeposit <= 0) break; // เงินชำระบางส่วนหมดแล้ว หยุดลูป
+
+                     const currentJobDebt = Number(job.total_price);
+                     const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                     const pastPaid = orig > currentJobDebt ? orig - currentJobDebt : 0;
+                     
+                     let newStatus = 'UNPAID';
+                     let newPrice = currentJobDebt;
+
+                     if (remainingDeposit >= currentJobDebt) {
+                         // เงินก้อนนี้ พอที่จะจ่ายเต็มบิลนี้
+                         newPrice = pastPaid + currentJobDebt; // คืนค่ายอดรายได้สะสม
+                         newStatus = 'PAID';
+                         remainingDeposit -= currentJobDebt;
+                     } else {
+                         // เงินก้อนนี้จ่ายได้แค่บางส่วนของบิลนี้
+                         newPrice = currentJobDebt - remainingDeposit; // อัปเดตยอดคงเหลือ
+                         newStatus = 'DEPOSIT';
+                         remainingDeposit = 0; 
+                     }
+
+                     // 1. อัปเดตยอดเงิน
+                     const updatePayload = {
+                         customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                         total_price: newPrice, 
+                         payment_status: newStatus
+                     };
+                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) });
+                     
+                     // 2. ประทับเวลา
+                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ payment_status: newStatus, paid_at: now.toISOString() }) });
+                 }
+                 alert(`✅ บันทึกรับชำระบางส่วน ${depositAmt.toLocaleString()} บาท ให้ ${customerName} เรียบร้อยแล้ว!`);
+                 fetchJobs();
+             } catch (err) { alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่"); }
           };
 
           return (
@@ -2429,7 +2483,7 @@ function App() {
                     return (
                       <div key={customerName} className="bg-white border border-red-200 rounded-2xl shadow-sm overflow-hidden mb-4">
                          
-                         {/* หัวกรุ๊ปชื่อลูกค้า (ปุ่มเก็บเงินอยู่ตรงนี้) */}
+                         {/* หัวกรุ๊ปชื่อลูกค้า */}
                          <div className="bg-red-50 p-4 border-b border-red-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                             <div>
                                <h3 className="font-black text-red-900 text-lg flex items-center gap-2">
@@ -2440,14 +2494,19 @@ function App() {
                             <div className="w-full sm:w-auto text-right flex flex-col items-end">
                                <span className="block font-black text-2xl text-red-600 mb-2">{group.total.toLocaleString()} ฿</span>
                                {userRole === 'BOSS' && (
-                                  <button onClick={() => handleBulkPay(customerName, group.jobs, group.total)} className="w-full sm:w-auto bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md transition flex items-center justify-center gap-2">
-                                     💸 เก็บเงินเหมา (ลดได้)
-                                  </button>
+                                  <div className="flex gap-2 w-full sm:w-auto">
+                                      <button onClick={() => handleBulkDeposit(customerName, group.jobs, group.total)} className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold shadow-md transition flex items-center justify-center gap-1">
+                                         💳 ชำระบางส่วน
+                                      </button>
+                                      <button onClick={() => handleBulkPay(customerName, group.jobs, group.total)} className="flex-1 sm:flex-none bg-green-500 hover:bg-green-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold shadow-md transition flex items-center justify-center gap-1">
+                                         ✅ รับชำระ
+                                      </button>
+                                  </div>
                                )}
                             </div>
                          </div>
                          
-                         {/* รายการบิลย่อย (เอาไว้ดูรายละเอียดว่าค้างแปลงไหนบ้าง) */}
+                         {/* รายการบิลย่อย */}
                          <div className="p-3 space-y-2 bg-gray-50/50">
                             {group.jobs.map(job => {
                                const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
@@ -2455,7 +2514,14 @@ function App() {
                                const isDeposit = job.payment_status === 'DEPOSIT';
 
                                return (
-                                 <div key={job.id} className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 relative overflow-hidden flex justify-between items-center">
+                                 <div 
+                                    key={job.id} 
+                                    onClick={() => {
+                                      setFinanceSubTab('history');
+                                      if (typeof setEditingJob === 'function') setEditingJob(job);
+                                    }}
+                                    className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 relative overflow-hidden flex justify-between items-center cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition active:scale-[0.98]"
+                                 >
                                     <div className={`absolute top-0 left-0 w-1.5 h-full ${isDeposit ? 'bg-amber-400' : 'bg-red-400'}`}></div>
                                     <div className="pl-3">
                                       <p className="text-[11px] text-gray-500 font-bold mb-0.5">
@@ -2468,7 +2534,7 @@ function App() {
                                       <span className={`block font-black text-base ${isDeposit ? 'text-amber-600' : 'text-red-600'}`}>
                                         {Number(job.total_price).toLocaleString()} ฿
                                       </span>
-                                      {isDeposit && <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 bg-amber-100 text-amber-700">💳 มัดจำแล้ว</span>}
+                                      {isDeposit && <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 bg-amber-100 text-amber-700">💳 จ่ายบางส่วนแล้ว</span>}
                                     </div>
                                  </div>
                                )
