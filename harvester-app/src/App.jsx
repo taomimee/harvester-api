@@ -3162,7 +3162,7 @@ function App() {
                       </div>
                     </div>
 
-                    {/* 💳 ถ้าเลือกคนแล้ว โชว์กระเป๋าเงิน */}
+                    {/* 💳 ส่วนกระเป๋าเงิน (สลับอัตโนมัติระหว่าง 'บุคคล' กับ 'ภาพรวมทุกคน') */}
                     {activeWorker ? (() => {
                        const wallet = getWorkerWallet(activeWorker);
                        return (
@@ -3187,7 +3187,6 @@ function App() {
                                  <span className={`font-black text-2xl ${wallet.balance > 0 ? 'text-green-400' : 'text-white'}`}>{wallet.balance.toLocaleString()} <span className="text-sm">฿</span></span>
                                </div>
                                
-                               {/* ปุ่มกดเบิกเงินแบบพิมพ์เลข */}
                                {userRole === 'BOSS' && wallet.balance > 0 && (
                                  <button onClick={() => handleWithdraw(activeWorker, wallet.balance)} className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg text-sm shadow-md transition">
                                    💸 เบิกเงิน
@@ -3196,97 +3195,114 @@ function App() {
                             </div>
                          </div>
                        );
-                    })() : (
-                       <div className="mb-4 bg-blue-50 border border-blue-200 p-6 rounded-xl text-center">
-                         <span className="text-4xl mb-3 block animate-bounce">👆</span>
-                         <p className="text-base font-bold text-blue-900">กรุณากดเลือกชื่อลูกน้องด้านบน</p>
-                         <p className="text-xs text-blue-600 mt-2 font-semibold">เพื่อดูสรุปยอดเงินคงเหลือ และ จ่ายเงิน/เบิกเงิน</p>
-                       </div>
-                    )}
+                    })() : (() => {
+                       // 👨‍👩‍👦 คำนวณยอดรวมที่ยังไม่ได้จ่ายทั้งหมด (ทุกคนรวมกัน)
+                       let overallBalance = 0;
+                       workersList.forEach(w => { overallBalance += getWorkerWallet(w).balance; });
+                       
+                       return (
+                         <div className="mb-4 bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-4 text-white shadow-lg relative overflow-hidden">
+                            <div className="absolute -right-4 -bottom-4 text-6xl opacity-10">👥</div>
+                            <h3 className="font-bold text-gray-300 text-sm mb-2">ภาพรวมทีมงาน (ทุกคน)</h3>
+                            <div className="flex items-center justify-between bg-black/30 p-4 rounded-lg border border-white/10">
+                               <div>
+                                 <span className="block text-[10px] text-gray-300 font-bold mb-0.5">ยอดค้างจ่ายรวมทั้งหมด (รอเบิก)</span>
+                                 <span className={`font-black text-3xl ${overallBalance > 0 ? 'text-orange-400' : 'text-white'}`}>{overallBalance.toLocaleString()} <span className="text-sm">฿</span></span>
+                               </div>
+                            </div>
+                            <p className="text-[10px] text-gray-400 mt-2 text-center">* กดเลือกชื่อลูกน้องด้านบน เพื่อดูยอดแยกรายคน และกดจ่ายเงิน</p>
+                         </div>
+                       );
+                    })()}
 
-                    {/* 📑 แท็บสลับดู รายงานลงแปลง / ประวัติเบิกเงิน */}
-                    {activeWorker && (
-                      <>
-                        <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-lg shrink-0">
-                          <button onClick={() => setWageTab('UNPAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'UNPAID' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>🚜 ประวัติลงแปลง</button>
-                          <button onClick={() => setWageTab('PAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'PAID' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ประวัติเบิกเงิน</button>
-                        </div>
+                    {/* 📑 แท็บสลับดู รายงานลงแปลง / ประวัติเบิกเงิน (โชว์เสมอ ไม่ซ่อนแล้ว) */}
+                    <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-lg shrink-0">
+                      <button onClick={() => setWageTab('UNPAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'UNPAID' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>🚜 ประวัติลงแปลง</button>
+                      <button onClick={() => setWageTab('PAID')} className={`flex-1 py-2 text-sm font-bold rounded-md transition ${wageTab === 'PAID' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ประวัติเบิกเงิน</button>
+                    </div>
 
-                        {/* 🚜 แสดงประวัติการลงแปลง (รายงานการทำงานให้ลูกน้องดู) */}
-                        {wageTab === 'UNPAID' && (
-                          <div className="space-y-3">
-                            {displayJobs.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการลงแปลง</p> : null}
-                            {displayJobs.map(tx => {
-                              const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
-                              const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
-                              const totalAmount = Number(tx.total_amount);
-                              const myShare = totalAmount / divisor;
-                              
-                              // ดักว่าในบิลเก่าเคยตัดยอดไปหรือยัง
-                              const isPaidInOldSystem = paidWorkers.includes(activeWorker) || tx.status === 'PAID';
+                    {/* 🚜 แสดงประวัติการลงแปลง (รายงานการทำงาน) */}
+                    {wageTab === 'UNPAID' && (
+                      <div className="space-y-3">
+                        {displayJobs.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการลงแปลง</p> : null}
+                        {displayJobs.map(tx => {
+                          const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
+                          const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
+                          const totalAmount = Number(tx.total_amount);
+                          
+                          // ถ้าระบุตัวคน ให้โชว์แค่ส่วนแบ่งของเขา ถ้าไม่ได้ระบุ (ดูภาพรวม) ให้โชว์ยอดเต็มบิล
+                          const displayAmount = activeWorker ? (totalAmount / divisor) : totalAmount;
+                          
+                          // ดักว่าในบิลเก่าเคยตัดยอดไปหรือยัง (ถ้าดูภาพรวม เช็คว่ามีใครสักคนในบิลนี้รับไปแล้วหรือยัง)
+                          const isPaidInOldSystem = activeWorker 
+                            ? (paidWorkers.includes(activeWorker) || tx.status === 'PAID')
+                            : (paidWorkers.length > 0 || tx.status === 'PAID');
 
-                              return (
-                                <div key={tx.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
-                                   <div className={`absolute top-0 left-0 w-1.5 h-full ${isPaidInOldSystem ? 'bg-orange-400' : 'bg-blue-400'}`}></div>
-                                   <div className="flex justify-between items-start pl-2">
-                                     <div className="flex-1 pr-2">
-                                       <div className="flex flex-wrap gap-1.5 mb-2">
-                                         {jobWorkers.map((w, idx) => {
-                                           const isMe = w === activeWorker;
-                                           return (
-                                             <span key={idx} className={`text-[10px] font-bold px-2 py-1 rounded-md border shadow-sm ${isMe ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                                               {w}
-                                             </span>
-                                           )
-                                         })}
-                                       </div>
-                                       <p className="text-sm text-gray-700 font-bold mb-1">{detailsStr ? `📐 ${detailsStr}` : ''}</p>
-                                       <p className="text-[10px] text-gray-500">📅 ลงสมุด: {new Date(tx.created_at).toLocaleString('th-TH')}</p>
-                                     </div>
-
-                                     <div className="text-right shrink-0">
-                                       <span className={`block font-black text-xl leading-none mb-1 text-gray-800`}>
-                                         +{myShare.toLocaleString()} <span className="text-sm">฿</span>
-                                       </span>
-                                       <span className="inline-block text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-gray-100 text-gray-600 border-gray-200 border">
-                                         {divisor > 1 ? `ส่วนแบ่งหาร ${divisor}` : `งานเดี่ยว`}
-                                       </span>
-                                       {isPaidInOldSystem && <span className="block text-[9px] text-orange-600 font-bold mt-1 bg-orange-50 px-1 py-0.5 rounded">* เคยตัดจ่ายบิลนี้แล้ว</span>}
-                                     </div>
+                          return (
+                            <div key={tx.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
+                               <div className={`absolute top-0 left-0 w-1.5 h-full ${isPaidInOldSystem ? 'bg-orange-400' : 'bg-blue-400'}`}></div>
+                               <div className="flex justify-between items-start pl-2">
+                                 <div className="flex-1 pr-2">
+                                   <div className="flex flex-wrap gap-1.5 mb-2">
+                                     {jobWorkers.map((w, idx) => {
+                                       const isMe = w === activeWorker;
+                                       // โชว์ติ๊กถูกหน้าชื่อ ถ้าคนนั้นรับเงินไปแล้ว
+                                       const hasPaid = paidWorkers.includes(w) || tx.status === 'PAID';
+                                       return (
+                                         <span key={idx} className={`text-[10px] font-bold px-2 py-1 rounded-md border shadow-sm ${hasPaid ? 'bg-green-100 text-green-700 border-green-300' : (isMe ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-50 text-gray-500 border-gray-200')}`}>
+                                           {hasPaid ? '✅' : '🧑‍🌾'} {w}
+                                         </span>
+                                       )
+                                     })}
                                    </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-
-                        {/* 💸 แสดงประวัติการเบิกเงินสด (เบิกจากกระเป๋า) */}
-                        {wageTab === 'PAID' && (() => {
-                           const { newWithdrawals } = getWorkerWallet(activeWorker);
-                           return (
-                             <div className="space-y-3">
-                               {newWithdrawals.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการเบิกเงิน</p> : null}
-                               {newWithdrawals.sort((a,b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at)).map(tx => (
-                                 <div key={tx.id} className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex justify-between items-center">
-                                   <div>
-                                     <h4 className="font-bold text-orange-900 text-sm">💸 เบิกเงินสด</h4>
-                                     <p className="text-[10px] text-orange-700 mt-0.5">📅 {new Date(tx.transaction_date || tx.created_at).toLocaleString('th-TH')}</p>
-                                   </div>
-                                   <div className="text-right">
-                                      <span className="font-black text-orange-700 text-lg">-{Number(tx.total_amount).toLocaleString()} ฿</span>
-                                      {userRole === 'BOSS' && (
-                                        <button onClick={() => handleDeleteExpense(tx.id)} className="block text-[10px] text-red-500 font-bold mt-1 hover:underline text-right w-full">
-                                          ยกเลิก (ดึงเงินกลับ)
-                                        </button>
-                                      )}
-                                   </div>
+                                   <p className="text-sm text-gray-700 font-bold mb-1">{detailsStr ? `📐 ${detailsStr}` : ''}</p>
+                                   <p className="text-[10px] text-gray-500">📅 ลงสมุด: {new Date(tx.created_at).toLocaleString('th-TH')}</p>
                                  </div>
-                               ))}
-                             </div>
-                           )
-                        })()}
-                      </>
+
+                                 <div className="text-right shrink-0">
+                                   <span className={`block font-black text-xl leading-none mb-1 text-gray-800`}>
+                                     +{displayAmount.toLocaleString()} <span className="text-sm">฿</span>
+                                   </span>
+                                   <span className="inline-block text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-gray-100 text-gray-600 border-gray-200 border">
+                                     {activeWorker ? (divisor > 1 ? `ส่วนแบ่งหาร ${divisor}` : `งานเดี่ยว`) : `ยอดเต็มบิล`}
+                                   </span>
+                                   {isPaidInOldSystem && <span className="block text-[9px] text-orange-600 font-bold mt-1 bg-orange-50 px-1 py-0.5 rounded">* มีการตัดยอดแล้ว</span>}
+                                 </div>
+                               </div>
+                            </div>
+                          )
+                        })}
+                      </div>
                     )}
+
+                    {/* 💸 แสดงประวัติการเบิกเงินสด (เบิกจากกระเป๋า) */}
+                    {wageTab === 'PAID' && (() => {
+                       const withdrawalsToShow = activeWorker 
+                           ? getWorkerWallet(activeWorker).newWithdrawals 
+                           : expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง');
+
+                       return (
+                         <div className="space-y-3">
+                           {withdrawalsToShow.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการเบิกเงิน</p> : null}
+                           {withdrawalsToShow.sort((a,b) => new Date(b.transaction_date || b.created_at) - new Date(a.transaction_date || a.created_at)).map(tx => (
+                             <div key={tx.id} className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex justify-between items-center">
+                               <div>
+                                 <h4 className="font-bold text-orange-900 text-sm">💸 เบิกเงินสด ({tx.spender_name})</h4>
+                                 <p className="text-[10px] text-orange-700 mt-0.5">📅 {new Date(tx.transaction_date || tx.created_at).toLocaleString('th-TH')}</p>
+                               </div>
+                               <div className="text-right">
+                                  <span className="font-black text-orange-700 text-lg">-{Number(tx.total_amount).toLocaleString()} ฿</span>
+                                  {userRole === 'BOSS' && (
+                                    <button onClick={() => handleDeleteExpense(tx.id)} className="block text-[10px] text-red-500 font-bold mt-1 hover:underline text-right w-full">
+                                      ยกเลิก (ดึงเงินกลับ)
+                                    </button>
+                                  )}
+                               </div>
+                             </div>
+                           ))}
+                         </div>
+                       )
+                    })()}
                 </div>
               </div>
             </div>
