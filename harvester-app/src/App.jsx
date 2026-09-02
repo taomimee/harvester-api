@@ -1006,7 +1006,7 @@ function App() {
       const payload = { payment_status: newStatus };
       
       // 💡 ถ้ารับเงิน ให้บันทึกเวลาปัจจุบันของเครื่องส่งไปด้วย
-      if (newStatus === 'PAID') {
+      if (newStatus === 'PAID' || newStatus === 'DEPOSIT') {
         const now = new Date();
         now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
         payload.paid_at = now.toISOString();
@@ -2430,40 +2430,29 @@ function App() {
                                 
                                 if (paidAmount >= Number(job.total_price)) {
                                   if(window.confirm("ยอดเงินที่ระบุครอบคลุมหนี้ทั้งหมด ระบบจะบันทึกว่า 'จ่ายเต็มบิล' ยืนยันหรือไม่?")) {
-                                    updatePaymentStatus(job.id, 'PAID');
+                                    // 💡 ถ้ารับเต็มตอนที่เคยมัดจำ ต้องคืนค่ายอดรวมกลับเป็น "ยอดรายได้สุทธิ" ด้วย
+                                    const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                                    const pastPaid = orig > Number(job.total_price) ? orig - Number(job.total_price) : 0;
+                                    const finalIncome = pastPaid + paidAmount;
+                                    
+                                    const updatePayload = {
+                                      customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                                      total_price: finalIncome, 
+                                      payment_status: 'PAID' 
+                                    };
+                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) })
+                                    .then(() => { updatePaymentStatus(job.id, 'PAID'); alert("✅ ปิดบิลเรียบร้อย"); });
                                   }
                                 } else {
                                   const remaining = (Number(job.total_price) - paidAmount).toFixed(2);
                                   if (window.confirm(`รับเงินมาแล้ว: ${paidAmount.toLocaleString()} บาท\nค้างจ่ายส่วนที่เหลือ: ${Number(remaining).toLocaleString()} บาท\n\nยืนยันการหักลบยอดหนี้ใช่หรือไม่?`)) {
-                                    
-                                    // ส่งไปอัปเดตแค่ยอดหนี้ที่เหลือ (ไม่แก้ไขชื่อลูกค้า)
                                     const updatePayload = {
-                                      customer_name: job.customers?.name || '', 
-                                      phone: job.customers?.phone || '',
-                                      address_note: job.address_note || '',
-                                      crop_type: job.crop_type || 'ข้าว',
-                                      area_size: job.area_size,
-                                      job_date: job.job_date,
-                                      latitude: job.latitude,
-                                      longitude: job.longitude,
-                                      vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
-                                      boundaries: job.boundaries || [],
-                                      price_per_rai: job.price_per_rai,
-                                      total_price: remaining, // 👈 ยอดหนี้ที่เหลือ
+                                      customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                                      total_price: remaining, 
                                       payment_status: 'DEPOSIT' 
                                     };
-
-                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
-                                      method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify(updatePayload)
-                                    })
-                                    .then(res => {
-                                      if(res.ok) {
-                                        alert("✅ หักลบยอดหนี้เรียบร้อยแล้ว");
-                                        fetchJobs();
-                                      } else { alert("❌ บันทึกไม่สำเร็จ"); }
-                                    }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
+                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) })
+                                    .then(() => { updatePaymentStatus(job.id, 'DEPOSIT'); alert("✅ บันทึกยอดมัดจำแล้ว"); });
                                   }
                                 }
                               }}
@@ -2484,56 +2473,35 @@ function App() {
                                 
                                 let confirmMsg = "";
                                 if (actualPaid < defaultAmt) {
-                                  const discount = defaultAmt - actualPaid;
-                                  confirmMsg = `รับเงินมา: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลด: ${discount.toLocaleString()} บาท\n\nยืนยันให้ส่วนลดและ "ปิดบิล" ใช่หรือไม่?`;
-                                } else if (actualPaid === defaultAmt) {
-                                  confirmMsg = `รับเงินเต็มจำนวน ${actualPaid.toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?`;
+                                  confirmMsg = `รับเงินมา: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลด: ${(defaultAmt - actualPaid).toLocaleString()} บาท\n\nยืนยันให้ส่วนลดและ "ปิดบิล" ใช่หรือไม่?`;
                                 } else {
-                                  confirmMsg = `รับเงินเกินมาเป็น ${actualPaid.toLocaleString()} บาท ยืนยันปิดบิลใช่หรือไม่?`;
+                                  confirmMsg = `รับเงินจำนวน ${actualPaid.toLocaleString()} บาท ยืนยันปิดบิลใช่หรือไม่?`;
                                 }
 
                                 if (window.confirm(confirmMsg)) {
-                                  // ถ้ามีการลดราคา ให้ยิงอัปเดตยอดเงินใหม่ไปที่เซิร์ฟเวอร์ก่อนปิดบิล
-                                  if (actualPaid !== defaultAmt) {
-                                    const updatePayload = {
-                                      customer_name: job.customers?.name || '', 
-                                      phone: job.customers?.phone || '',
-                                      address_note: job.address_note || '',
-                                      crop_type: job.crop_type || 'ข้าว',
-                                      area_size: job.area_size,
-                                      job_date: job.job_date,
-                                      latitude: job.latitude,
-                                      longitude: job.longitude,
-                                      vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
-                                      boundaries: job.boundaries || [],
-                                      price_per_rai: job.price_per_rai,
-                                      total_price: actualPaid, 
-                                      payment_status: 'PAID' 
-                                    };
+                                  // 💡 คณิตศาสตร์ใหม่: คืนค่ายอดรวมที่แท้จริงเข้าประวัติรับเงิน
+                                  const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                                  const pastPaid = orig > defaultAmt ? orig - defaultAmt : 0;
+                                  const finalIncome = pastPaid + actualPaid;
 
-                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
-                                      method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify(updatePayload)
-                                    })
-                                    .then(res => {
-                                      if(res.ok) {
-                                        // 👇 เพิ่มบรรทัดนี้ เพื่อสั่งให้บันทึก "เวลาปัจจุบัน" ลงไปด้วย
-                                        updatePaymentStatus(job.id, 'PAID');
-                                        
-                                        alert("✅ บันทึกส่วนลดและปิดบิลเรียบร้อยแล้ว");
-                                        fetchJobs();
-                                      } else { alert("❌ บันทึกไม่สำเร็จ"); }
-                                    }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
-                                  } else {
-                                    // ถ้ายอดเท่าเดิมเป๊ะๆ ก็เปลี่ยนแค่สถานะ PAID ปกติ
-                                    updatePaymentStatus(job.id, 'PAID');
-                                  }
+                                  const updatePayload = {
+                                    customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                                    total_price: finalIncome, 
+                                    payment_status: 'PAID' 
+                                  };
+
+                                  fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) })
+                                  .then(res => {
+                                    if(res.ok) {
+                                      updatePaymentStatus(job.id, 'PAID');
+                                      alert("✅ ปิดบิลเรียบร้อยแล้ว");
+                                    } else { alert("❌ บันทึกไม่สำเร็จ"); }
+                                  }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
                                 }
                               }}
                               className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs shadow-md transition flex items-center justify-center"
                             >
-                              ✅ ปิดบิล (ใส่ส่วนลดได้)
+                              ✅ ปิดบิล (ลดได้)
                             </button>
                           </>
                         )}
