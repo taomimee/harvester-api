@@ -2324,194 +2324,163 @@ function App() {
           );
         })()}
 
-        {/* 💸 หน้าจอจัดการลูกหนี้ */}
-        {activeTab === 'finance' && financeSubTab === 'debt' && (
-          <div className="space-y-4">
-            
-            {/* กล่องสรุปยอดหนี้รวม */}
-            <div className="bg-gradient-to-r from-red-50 to-orange-50 p-5 rounded-xl border border-red-200 shadow-sm flex justify-between items-center">
-               <div>
-                 <h2 className="text-lg font-black text-red-800">💸 บัญชีลูกหนี้</h2>
-                 <p className="text-xs text-red-600 font-semibold mt-1">คิวงานที่เสร็จแล้วแต่ค้างจ่าย</p>
-               </div>
-               <div className="text-right">
-                 <span className="block text-xs text-red-700 font-bold mb-1">ยอดหนี้รวมทั้งหมด</span>
-                 <span className="text-3xl font-black text-red-600">
-                   {jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID').reduce((sum, j) => sum + (Number(j.total_price) || 0), 0).toLocaleString()} <span className="text-sm">฿</span>
-                 </span>
-               </div>
-            </div>
+        {/* 💸 หน้าจอลูกหนี้ (รอเก็บเงิน) - ระบบกรุ๊ปบิลและเก็บเงินเหมา */}
+        {activeTab === 'finance' && financeSubTab === 'debt' && (() => {
+          const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
+          
+          // 🧮 จัดกลุ่มบิลตามชื่อลูกค้า
+          const groupedDebts = {};
+          debtJobs.forEach(job => {
+             const cName = job.customers?.name || 'ไม่ระบุชื่อ';
+             if (!groupedDebts[cName]) groupedDebts[cName] = { total: 0, jobs: [] };
+             groupedDebts[cName].jobs.push(job);
+             groupedDebts[cName].total += (Number(job.total_price) || 0);
+          });
+          
+          const totalDebtAll = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
 
-            {/* รายการลูกหนี้ */}
-            {jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID').length === 0 ? (
-              <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
-                 <span className="text-4xl mb-2 block">🎉</span>
-                 <p className="font-bold">ไม่มีลูกหนี้ค้างชำระ!</p>
-                 <p className="text-sm mt-1">เก็บเงินครบทุกงานแล้วครับ เถ้าแก่ยิ้มได้เลย</p>
-              </div>
-            ) : (
-              jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID')
-                .sort((a, b) => new Date(b.job_date) - new Date(a.job_date))
-                .map(job => {
-                  // 👇 คำนวณยอดที่จ่ายมาแล้ว โดยเอา (จำนวนไร่ x ราคาต่อไร่) มาลบด้วย ยอดคงเหลือ
-                  const originalPrice = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
-                  const isDeposit = job.payment_status === 'DEPOSIT';
-                  const paidAmount = (isDeposit && originalPrice > Number(job.total_price)) 
-                                      ? (originalPrice - Number(job.total_price)) 
-                                      : 0;
+          // 💸 ฟังก์ชันเก็บเงินเหมา (หักส่วนลดอัตโนมัติจากบิลสุดท้าย)
+          const handleBulkPay = async (customerName, customerJobs, totalDebt) => {
+             const amountStr = window.prompt(`ยอดหนี้รวมของ [ ${customerName} ] (ค้าง ${customerJobs.length} แปลง)\nคือยอด: ${totalDebt.toLocaleString()} บาท\n\n💰 ลูกค้าจ่ายเหมามาเท่าไหร่? (พิมพ์ยอดเงินสดที่รับจริง):`, totalDebt);
+             if (amountStr === null) return;
+             
+             const actualPaid = Number(amountStr);
+             if (isNaN(actualPaid) || actualPaid < 0) return alert("❌ กรุณาระบุตัวเลขให้ถูกต้องครับ");
+             if (actualPaid > totalDebt) return alert("❌ ยอดรับเงินมากกว่ายอดหนี้รวม ระบบเหมายังไม่รองรับการจ่ายเกินครับ");
 
-                  return (
-                  <div key={job.id} className="bg-white p-5 rounded-xl shadow-md border border-red-100 relative overflow-hidden">
-                     <div className="absolute top-0 left-0 w-1.5 h-full bg-red-400"></div>
-                     <div className="flex justify-between items-start mb-3 pl-2">
-                        <div>
-                          <h3 className="font-bold text-gray-900 text-lg">{job.customers?.name || 'ไม่ระบุชื่อ'}</h3>
-                          <p className="text-sm text-gray-500">
-                            📞 {job.customers?.phone && job.customers.phone !== '-' && !job.customers.phone.startsWith('ไม่มี') ? (
-                              <a 
-                                href={`tel:${job.customers.phone}`} 
-                                onClick={(e) => e.stopPropagation()} 
-                                className="text-blue-600 font-bold hover:underline"
-                              >
-                                {job.customers.phone}
-                              </a>
-                            ) : (
-                              <span>{job.customers?.phone || '-'}</span>
-                            )}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          {isDeposit && <span className="block text-[10px] text-gray-500 font-bold mb-0.5">เหลือค้างจ่าย:</span>}
-                          <span className="block font-black text-red-600 text-2xl leading-none">
-                            {Number(job.total_price).toLocaleString()} <span className="text-sm">฿</span>
-                          </span>
-                          
-                          {/* 👇 เปลี่ยนข้อความในป้าย เป็น "จ่ายบางส่วน (ค้างส่วนต่าง)" 👇 */}
-                          <span className={`inline-block px-2 py-1 rounded text-[10px] font-bold mt-1.5 ${isDeposit ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
-                            {isDeposit ? '💳 จ่ายบางส่วน (ค้างส่วนต่าง)' : '⏳ ยังไม่จ่ายเลย'}
-                          </span>
-                          
-                          {/* 👇 โชว์ยอดที่จ่ายมาแล้ว (สีเขียวตัวเล็กๆ) 👇 */}
-                          {isDeposit && paidAmount > 0 && (
-                            <span className="block text-[10px] text-emerald-600 font-bold mt-1">
-                              (จ่ายมาแล้ว {paidAmount.toLocaleString()} ฿)
-                            </span>
-                          )}
-                        </div>
-                     </div>
+             const totalDiscount = totalDebt - actualPaid;
+             let confirmMsg = actualPaid === totalDebt 
+                 ? `✅ รับเงินเต็มจำนวน ${actualPaid.toLocaleString()} บาท\nปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`
+                 : `✅ รับเงิน: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลดรวม: ${totalDiscount.toLocaleString()} บาท\n\nยืนยันปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`;
+
+             if (!window.confirm(confirmMsg)) return;
+
+             try {
+                 let remainingDiscount = totalDiscount;
+                 const now = new Date();
+                 now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+                 
+                 // วนลูปบิลจากท้ายสุดมาหน้าสุด เพื่อเอาส่วนลดไปหักบิลใบสุดท้ายก่อน
+                 for (let i = customerJobs.length - 1; i >= 0; i--) {
+                     const job = customerJobs[i];
+                     const currentJobDebt = Number(job.total_price);
                      
-                     <div className="pl-2 mb-4 text-sm text-gray-600 bg-gray-50 p-2 rounded-lg border border-gray-100">
-                       <p>📅 <strong>วันที่เกี่ยว:</strong> {new Date(job.job_date).toLocaleDateString('th-TH')}</p>
-                       <p>📐 <strong>รายละเอียด:</strong> {job.area_size || 0} ไร่ ({job.crop_type})</p>
-                       {job.address_note && <p className="text-xs text-gray-500 mt-1">📍 {job.address_note}</p>}
-                     </div>
+                     let discountForThisJob = 0;
+                     if (remainingDiscount > 0) {
+                         if (remainingDiscount >= currentJobDebt) {
+                             discountForThisJob = currentJobDebt;
+                             remainingDiscount -= currentJobDebt;
+                         } else {
+                             discountForThisJob = remainingDiscount;
+                             remainingDiscount = 0;
+                         }
+                     }
 
-                     <div className="flex gap-1.5 pl-2">
-                        <button 
-                          onClick={() => {
-                            const text = `แจ้งยอดค้างชำระค่าเกี่ยวครับ 🌾\n\n👤 ชื่อลูกค้า: ${job.customers?.name}\n📅 วันที่เกี่ยว: ${new Date(job.job_date).toLocaleDateString('th-TH')}\n📐 พื้นที่: ${job.area_size || 0} ไร่ (${job.crop_type})\n\n💰 ยอดที่ต้องชำระ: ${Number(job.total_price).toLocaleString()} บาท\n\nรบกวนโอนชำระและส่งสลิปให้ด้วยนะครับ ขอบคุณครับ 🙏`;
-                            navigator.clipboard.writeText(text);
-                            alert('📋 คัดลอกข้อความทวงหนี้เรียบร้อยแล้ว!\nนำไปกด "วาง" (Paste) ในแชท LINE ลูกค้าได้เลยครับ');
-                          }}
-                          className="flex-1 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 border border-blue-200 font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs transition flex items-center justify-center shadow-sm"
-                        >
-                          💬 ก๊อปปี้ทวง
-                        </button>
-                        
-                        {/* 👇 ปุ่มเก็บเงิน (เถ้าแก่เห็นเท่านั้น แบ่งเป็นจ่ายบางส่วน กับ จ่ายเต็ม) 👇 */}
-                        {userRole === 'BOSS' && (
-                          <>
-                            <button 
-                              onClick={() => {
-                                const amountStr = window.prompt(`ยอดหนี้ปัจจุบัน: ${Number(job.total_price).toLocaleString()} บาท\n\nลูกค้าจ่ายมาก่อนเท่าไหร่? (ระบุเป็นตัวเลข):`);
-                                if (!amountStr) return;
-                                const paidAmount = Number(amountStr);
-                                if (isNaN(paidAmount) || paidAmount <= 0) return alert("❌ กรุณาระบุตัวเลขให้ถูกต้องครับ");
-                                
-                                if (paidAmount >= Number(job.total_price)) {
-                                  if(window.confirm("ยอดเงินที่ระบุครอบคลุมหนี้ทั้งหมด ระบบจะบันทึกว่า 'จ่ายเต็มบิล' ยืนยันหรือไม่?")) {
-                                    // 💡 ถ้ารับเต็มตอนที่เคยมัดจำ ต้องคืนค่ายอดรวมกลับเป็น "ยอดรายได้สุทธิ" ด้วย
-                                    const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
-                                    const pastPaid = orig > Number(job.total_price) ? orig - Number(job.total_price) : 0;
-                                    const finalIncome = pastPaid + paidAmount;
-                                    
-                                    const updatePayload = {
-                                      customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
-                                      total_price: finalIncome, 
-                                      payment_status: 'PAID' 
-                                    };
-                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) })
-                                    .then(() => { updatePaymentStatus(job.id, 'PAID'); alert("✅ ปิดบิลเรียบร้อย"); });
-                                  }
-                                } else {
-                                  const remaining = (Number(job.total_price) - paidAmount).toFixed(2);
-                                  if (window.confirm(`รับเงินมาแล้ว: ${paidAmount.toLocaleString()} บาท\nค้างจ่ายส่วนที่เหลือ: ${Number(remaining).toLocaleString()} บาท\n\nยืนยันการหักลบยอดหนี้ใช่หรือไม่?`)) {
-                                    const updatePayload = {
-                                      customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
-                                      total_price: remaining, 
-                                      payment_status: 'DEPOSIT' 
-                                    };
-                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) })
-                                    .then(() => { updatePaymentStatus(job.id, 'DEPOSIT'); alert("✅ บันทึกยอดมัดจำแล้ว"); });
-                                  }
-                                }
-                              }}
-                              className="flex-1 bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs shadow-md transition flex items-center justify-center"
-                            >
-                              💳 จ่ายบางส่วน
-                            </button>
+                     const finalIncome = currentJobDebt - discountForThisJob;
+                     
+                     // 1. อัปเดตยอดเงิน
+                     const updatePayload = {
+                         customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                         total_price: finalIncome, 
+                         payment_status: 'PAID'
+                     };
+                     
+                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { 
+                         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) 
+                     });
+                     
+                     // 2. ประทับเวลา PAID ลงในระบบ
+                     await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}/status`, {
+                         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ payment_status: 'PAID', paid_at: now.toISOString() })
+                     });
+                 }
+                 
+                 alert(`✅ เก็บเงินเหมา ${customerName} เรียบร้อยแล้ว!`);
+                 fetchJobs(); // โหลดข้อมูลใหม่
+             } catch (err) {
+                 console.error(err);
+                 alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่");
+             }
+          };
 
-                            <button 
-                              onClick={() => {
-                                const defaultAmt = Number(job.total_price);
-                                const amountStr = window.prompt(`ยอดหนี้ปัจจุบัน: ${defaultAmt.toLocaleString()} บาท\n\nลูกค้าจ่ายจริงเท่าไหร่? (แก้ไขตัวเลขเพื่อ "ให้ส่วนลด" ได้เลยครับ):`, defaultAmt);
-                                
-                                if (amountStr === null) return; 
-                                
-                                const actualPaid = Number(amountStr);
-                                if (isNaN(actualPaid) || actualPaid < 0) return alert("❌ กรุณาระบุตัวเลขให้ถูกต้องครับ");
-                                
-                                let confirmMsg = "";
-                                if (actualPaid < defaultAmt) {
-                                  confirmMsg = `รับเงินมา: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลด: ${(defaultAmt - actualPaid).toLocaleString()} บาท\n\nยืนยันให้ส่วนลดและ "ปิดบิล" ใช่หรือไม่?`;
-                                } else {
-                                  confirmMsg = `รับเงินจำนวน ${actualPaid.toLocaleString()} บาท ยืนยันปิดบิลใช่หรือไม่?`;
-                                }
+          return (
+            <div className="space-y-6">
+              {/* ป้ายสรุปรวมทั้งหมด */}
+              <div className="bg-gradient-to-r from-red-50 to-orange-50 p-5 rounded-xl border border-red-200 shadow-sm flex justify-between items-center">
+                 <div>
+                   <h2 className="text-lg font-black text-red-800">💸 ลูกหนี้</h2>
+                   <p className="text-xs text-red-600 font-semibold mt-1">รอเก็บเงิน {debtJobs.length} งาน</p>
+                 </div>
+                 <div className="text-right">
+                   <span className="block text-xs text-red-700 font-bold mb-1">ยอดหนี้รวมทั้งหมด</span>
+                   <span className="text-3xl font-black text-red-600">{totalDebtAll.toLocaleString()} <span className="text-sm">฿</span></span>
+                 </div>
+              </div>
 
-                                if (window.confirm(confirmMsg)) {
-                                  // 💡 คณิตศาสตร์ใหม่: คืนค่ายอดรวมที่แท้จริงเข้าประวัติรับเงิน
-                                  const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
-                                  const pastPaid = orig > defaultAmt ? orig - defaultAmt : 0;
-                                  const finalIncome = pastPaid + actualPaid;
+              {debtJobs.length === 0 ? (
+                 <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
+                   <span className="text-4xl mb-2 block">🎉</span>
+                   <p className="font-bold">ไม่มีลูกหนี้ค้างชำระ ยอดเยี่ยมมาก!</p>
+                </div>
+              ) : (
+                 Object.keys(groupedDebts).map(customerName => {
+                    const group = groupedDebts[customerName];
+                    return (
+                      <div key={customerName} className="bg-white border border-red-200 rounded-2xl shadow-sm overflow-hidden mb-4">
+                         
+                         {/* หัวกรุ๊ปชื่อลูกค้า (ปุ่มเก็บเงินอยู่ตรงนี้) */}
+                         <div className="bg-red-50 p-4 border-b border-red-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                            <div>
+                               <h3 className="font-black text-red-900 text-lg flex items-center gap-2">
+                                  👤 {customerName}
+                               </h3>
+                               <p className="text-xs text-red-600 font-bold mt-1">ค้างชำระ {group.jobs.length} แปลง</p>
+                            </div>
+                            <div className="w-full sm:w-auto text-right flex flex-col items-end">
+                               <span className="block font-black text-2xl text-red-600 mb-2">{group.total.toLocaleString()} ฿</span>
+                               {userRole === 'BOSS' && (
+                                  <button onClick={() => handleBulkPay(customerName, group.jobs, group.total)} className="w-full sm:w-auto bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-md transition flex items-center justify-center gap-2">
+                                     💸 เก็บเงินเหมา (ลดได้)
+                                  </button>
+                               )}
+                            </div>
+                         </div>
+                         
+                         {/* รายการบิลย่อย (เอาไว้ดูรายละเอียดว่าค้างแปลงไหนบ้าง) */}
+                         <div className="p-3 space-y-2 bg-gray-50/50">
+                            {group.jobs.map(job => {
+                               const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                               const hasDiscount = orig > Number(job.total_price);
+                               const isDeposit = job.payment_status === 'DEPOSIT';
 
-                                  const updatePayload = {
-                                    customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
-                                    total_price: finalIncome, 
-                                    payment_status: 'PAID' 
-                                  };
-
-                                  fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) })
-                                  .then(res => {
-                                    if(res.ok) {
-                                      updatePaymentStatus(job.id, 'PAID');
-                                      alert("✅ ปิดบิลเรียบร้อยแล้ว");
-                                    } else { alert("❌ บันทึกไม่สำเร็จ"); }
-                                  }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
-                                }
-                              }}
-                              className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs shadow-md transition flex items-center justify-center"
-                            >
-                              ✅ ปิดบิล (ลดได้)
-                            </button>
-                          </>
-                        )}
-                     </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
+                               return (
+                                 <div key={job.id} className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 relative overflow-hidden flex justify-between items-center">
+                                    <div className={`absolute top-0 left-0 w-1.5 h-full ${isDeposit ? 'bg-amber-400' : 'bg-red-400'}`}></div>
+                                    <div className="pl-3">
+                                      <p className="text-[11px] text-gray-500 font-bold mb-0.5">
+                                        📅 {new Date(job.job_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                      </p>
+                                      <p className="text-xs font-bold text-gray-800">📐 {job.area_size} ไร่ (เรท {job.price_per_rai})</p>
+                                    </div>
+                                    <div className="text-right">
+                                      {hasDiscount && <span className="block text-[10px] text-gray-400 line-through mb-0.5">{orig.toLocaleString()} ฿</span>}
+                                      <span className={`block font-black text-base ${isDeposit ? 'text-amber-600' : 'text-red-600'}`}>
+                                        {Number(job.total_price).toLocaleString()} ฿
+                                      </span>
+                                      {isDeposit && <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold mt-1 bg-amber-100 text-amber-700">💳 มัดจำแล้ว</span>}
+                                    </div>
+                                 </div>
+                               )
+                            })}
+                         </div>
+                      </div>
+                    )
+                 })
+              )}
+            </div>
+          );
+        })()}
 
         {/* 💵 หน้าจอประวัติการรับเงิน (เช็คยอดรายวัน) */}
         {activeTab === 'finance' && financeSubTab === 'income' && (
