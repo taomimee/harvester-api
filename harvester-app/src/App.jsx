@@ -2570,12 +2570,24 @@ function App() {
                            </span>
                          </p>
                        </div>
-                       <div className="text-right">
+                       <div className="text-right shrink-0">
+                         {/* 💡 อัปเกรด: ถ้ายอดเต็มตอนแรก มากกว่า ยอดที่จ่ายจริง (คือมีส่วนลด) ให้โชว์ยอดเดิมแบบขีดทิ้ง */}
+                         {!isDeposit && orig > Number(job.total_price) && (
+                            <span className="block text-[10px] text-gray-400 line-through mb-0.5 font-bold">
+                              {orig.toLocaleString()} ฿
+                            </span>
+                         )}
                          <span className="block font-black text-green-600 text-xl leading-none">
                            {displayIncome.toLocaleString()} <span className="text-sm">฿</span>
                          </span>
-                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold mt-1.5 ${isDeposit ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-green-100 text-green-700 border border-green-200'}`}>
-                           {isDeposit ? '💳 จ่ายบางส่วน' : '✅ จ่ายเต็ม'}
+                         
+                         {/* 💡 อัปเกรดป้ายสถานะ: เช็คว่ามีการลดราคาไหม */}
+                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold mt-1.5 ${isDeposit ? 'bg-amber-100 text-amber-700 border border-amber-200' : (!isDeposit && orig > Number(job.total_price)) ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-green-100 text-green-700 border border-green-200'}`}>
+                           {isDeposit 
+                             ? '💳 จ่ายบางส่วน' 
+                             : (!isDeposit && orig > Number(job.total_price)) 
+                               ? `🎁 ลดให้ ${(orig - Number(job.total_price)).toLocaleString()} ฿` 
+                               : '✅ จ่ายเต็ม'}
                          </span>
                        </div>
                     </div>
