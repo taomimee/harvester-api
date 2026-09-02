@@ -2517,7 +2517,30 @@ function App() {
                                  <div 
                                     key={job.id} 
                                     onClick={() => {
-                                      openEditForm(job); // 👈 เปลี่ยนมาใช้คำสั่งนี้ หน้าต่างแก้ไขจะเด้งขึ้นมาตรงๆ ทันที!
+                                      // 1. หาว่างานนี้อยู่หน้าไหนของแท็บประวัติ
+                                      const jobIndex = historyJobs.findIndex(j => j.id === job.id);
+                                      if (jobIndex !== -1) {
+                                        const targetPage = Math.floor(jobIndex / itemsPerPage) + 1;
+                                        setCurrentPage(targetPage);
+                                      }
+                                      
+                                      // 2. เปลี่ยนหน้าไปที่ประวัติ และสั่งกางการ์ดออก
+                                      setFinanceSubTab('history');
+                                      setExpandedId(job.id);
+                                      
+                                      // 3. เลื่อนจอไปหาการ์ดใบนั้น แล้วทำเอฟเฟกต์กระพริบสีส้มเหมือนหน้าแรก
+                                      setTimeout(() => {
+                                        const targetCard = document.getElementById(`job-card-${job.id}`);
+                                        if (targetCard) {
+                                          targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                          targetCard.classList.add('ring-4', 'ring-orange-500', 'scale-[1.02]', 'transition-all', 'duration-500');
+                                          setTimeout(() => {
+                                            targetCard.classList.remove('ring-4', 'ring-orange-500', 'scale-[1.02]');
+                                          }, 2000);
+                                        } else {
+                                          window.scrollTo({ top: 0, behavior: 'smooth' }); 
+                                        }
+                                      }, 150);
                                     }}
                                     className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 relative overflow-hidden flex justify-between items-center cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition active:scale-[0.98]"
                                  >
