@@ -273,6 +273,9 @@ function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  // 🔍 State สำหรับระบบค้นหาประวัติ
+  const [historySearch, setHistorySearch] = useState('');
+
   const [editingId, setEditingId] = useState(null);
   const [currentCoords, setCurrentCoords] = useState([15.7012, 101.1012]); 
 
@@ -1023,8 +1026,20 @@ function App() {
 
   const historyJobs = jobs.filter(j => j.status === 'DONE').sort((a, b) => new Date(b.job_date) - new Date(a.job_date));
 
-  const totalPages = Math.ceil(historyJobs.length / itemsPerPage);
-  const currentHistoryJobs = historyJobs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  // 🔍 1. กรองประวัติตามคำค้นหา (ชื่อ, เบอร์, ชนิดพืช, หมายเหตุ)
+  const filteredHistoryJobs = historyJobs.filter(j => {
+     if (!historySearch.trim()) return true;
+     const keyword = historySearch.toLowerCase();
+     const name = (j.customers?.name || '').toLowerCase();
+     const phone = (j.customers?.phone || '').toLowerCase();
+     const crop = (j.crop_type || '').toLowerCase();
+     const note = (j.address_note || j.customers?.address_note || '').toLowerCase();
+     return name.includes(keyword) || phone.includes(keyword) || crop.includes(keyword) || note.includes(keyword);
+  });
+
+  // 🔍 2. เอาผลลัพธ์ที่กรองแล้วมาแบ่งหน้า
+  const totalPages = Math.ceil(filteredHistoryJobs.length / itemsPerPage);
+  const currentHistoryJobs = filteredHistoryJobs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   const displayJobs = activeTab === 'active' ? activeJobs : currentHistoryJobs;
 
   const searchKeyword = formData.customer_name.trim().toLowerCase();
@@ -1685,11 +1700,47 @@ function App() {
 
         {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
           <div className="space-y-4">
+            
+            {/* 🔍 กล่องค้นหาอัจฉริยะ (โชว์เฉพาะแท็บประวัติ) */}
+            {activeTab === 'finance' && financeSubTab === 'history' && (
+               <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-200 mb-4 sticky top-2 z-10">
+                 <div className="relative">
+                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                     <span className="text-gray-400">🔍</span>
+                   </div>
+                   <input
+                     type="text"
+                     placeholder="ค้นหา ชื่อ, เบอร์, พืช, หรือหมายเหตุ..."
+                     className="w-full pl-10 pr-10 py-2.5 border border-gray-300 rounded-lg bg-gray-50 text-sm font-bold text-gray-800 focus:ring-2 focus:ring-blue-400 outline-none transition"
+                     value={historySearch}
+                     onChange={(e) => {
+                       setHistorySearch(e.target.value);
+                       setCurrentPage(1); // ค้นหาปุ๊บ กลับไปหน้า 1 ทันที
+                     }}
+                   />
+                   {historySearch && (
+                     <button 
+                       onClick={() => { setHistorySearch(''); setCurrentPage(1); }}
+                       className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-red-500 font-bold"
+                     >
+                       ✕
+                     </button>
+                   )}
+                 </div>
+                 
+                 {/* โชว์สรุปผลลัพธ์ด้านล่างกล่องค้นหา */}
+                 {historySearch && (
+                   <div className="mt-2 px-1 flex justify-between items-center text-[11px] font-bold text-gray-500">
+                     <span>พบ {filteredHistoryJobs.length} รายการ</span>
+                     <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                       ยอดรวม: {filteredHistoryJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0).toLocaleString()} ฿
+                     </span>
+                   </div>
+                 )}
+               </div>
+            )}
+
             {displayJobs.map((job) => {
-              const statusObj = getStatusDisplay(job.status);
-              const isExpanded = expandedId === job.id;
-              const jobDateTime = formatDate(job.job_date);
-              const assignedVehicle = vehicles.find(v => v.id === job.vehicle_id);
 
               return (
                 <div 
