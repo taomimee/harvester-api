@@ -2474,13 +2474,61 @@ function App() {
 
                             <button 
                               onClick={() => {
-                                if(window.confirm(`ยืนยันว่าลูกค้า [ ${job.customers?.name} ] จ่ายเงินยอดเต็ม ${Number(job.total_price).toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?\n\n(ถ้ายืนยัน งานนี้จะหายไปจากหน้าลูกหนี้ทันที)`)) {
-                                  updatePaymentStatus(job.id, 'PAID');
+                                const defaultAmt = Number(job.total_price);
+                                const amountStr = window.prompt(`ยอดหนี้ปัจจุบัน: ${defaultAmt.toLocaleString()} บาท\n\nลูกค้าจ่ายจริงเท่าไหร่? (แก้ไขตัวเลขเพื่อ "ให้ส่วนลด" ได้เลยครับ):`, defaultAmt);
+                                
+                                if (amountStr === null) return; 
+                                
+                                const actualPaid = Number(amountStr);
+                                if (isNaN(actualPaid) || actualPaid < 0) return alert("❌ กรุณาระบุตัวเลขให้ถูกต้องครับ");
+                                
+                                let confirmMsg = "";
+                                if (actualPaid < defaultAmt) {
+                                  const discount = defaultAmt - actualPaid;
+                                  confirmMsg = `รับเงินมา: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลด: ${discount.toLocaleString()} บาท\n\nยืนยันให้ส่วนลดและ "ปิดบิล" ใช่หรือไม่?`;
+                                } else if (actualPaid === defaultAmt) {
+                                  confirmMsg = `รับเงินเต็มจำนวน ${actualPaid.toLocaleString()} บาท เรียบร้อยแล้วใช่ไหมครับ?`;
+                                } else {
+                                  confirmMsg = `รับเงินเกินมาเป็น ${actualPaid.toLocaleString()} บาท ยืนยันปิดบิลใช่หรือไม่?`;
+                                }
+
+                                if (window.confirm(confirmMsg)) {
+                                  if (actualPaid !== defaultAmt) {
+                                    const updatePayload = {
+                                      customer_name: job.customers?.name || '', 
+                                      phone: job.customers?.phone || '',
+                                      address_note: job.address_note || '',
+                                      crop_type: job.crop_type || 'ข้าว',
+                                      area_size: job.area_size,
+                                      job_date: job.job_date,
+                                      latitude: job.latitude,
+                                      longitude: job.longitude,
+                                      vehicle_id: job.vehicles?.id || job.vehicle_id || 0,
+                                      boundaries: job.boundaries || [],
+                                      price_per_rai: job.price_per_rai,
+                                      total_price: actualPaid, 
+                                      payment_status: 'PAID' 
+                                    };
+
+                                    fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify(updatePayload)
+                                    })
+                                    .then(res => {
+                                      if(res.ok) {
+                                        alert("✅ บันทึกส่วนลดและปิดบิลเรียบร้อยแล้ว");
+                                        fetchJobs();
+                                      } else { alert("❌ บันทึกไม่สำเร็จ"); }
+                                    }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
+                                  } else {
+                                    updatePaymentStatus(job.id, 'PAID');
+                                  }
                                 }
                               }}
                               className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2.5 px-1 rounded-xl text-[11px] sm:text-xs shadow-md transition flex items-center justify-center"
                             >
-                              ✅ รับเงินเรียบร้อย
+                              ✅ ปิดบิล (ใส่ส่วนลดได้)
                             </button>
                           </>
                         )}
@@ -2504,11 +2552,11 @@ function App() {
                  <span className="block text-xs text-green-700 font-bold mb-1">ยอดรับรวมทั้งหมด</span>
                  <span className="text-3xl font-black text-green-600">
                    {jobs.filter(j => j.payment_status === 'PAID' || j.payment_status === 'DEPOSIT').reduce((sum, j) => {
-                      // 💡 สมองกลคำนวณยอดจริง (ดึงพื้นที่ x ราคา มาเปรียบเทียบ)
                       const orig = Number(j.area_size || 0) * Number(j.price_per_rai || 0);
                       const trueTotal = orig > Number(j.total_price) ? orig : (Number(j.total_price) || 0);
 
-                      if (j.payment_status === 'PAID') return sum + trueTotal;
+                      // 👇 ถ้ารับเงินเต็มแล้ว (PAID) ให้ดึงยอดที่หักส่วนลดแล้วมาใช้คำนวณเลย
+                      if (j.payment_status === 'PAID') return sum + (Number(j.total_price) || 0);
                       
                       const paidAmount = trueTotal > Number(j.total_price) ? trueTotal - Number(j.total_price) : 0;
                       return sum + paidAmount;
@@ -2528,11 +2576,11 @@ function App() {
                   .slice(0, 50)
                   .map(job => {
                     const isDeposit = job.payment_status === 'DEPOSIT';
-                    // 💡 ดึงยอดจริงมาแสดง
                     const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
                     const trueTotal = orig > Number(job.total_price) ? orig : (Number(job.total_price) || 0);
                     
-                    const displayIncome = isDeposit ? (trueTotal - Number(job.total_price)) : trueTotal;
+                    // 👇 บิลที่ปิดแล้ว จะดึงยอดเงินสดที่ได้รับจริงมาโชว์ตรงๆ
+                    const displayIncome = isDeposit ? (trueTotal - Number(job.total_price)) : Number(job.total_price);
 
                     return (
                     <div key={job.id} className={`bg-white p-4 rounded-xl shadow-md relative overflow-hidden flex justify-between items-center ${isDeposit ? 'border border-amber-100' : 'border border-green-100'}`}>
@@ -2542,7 +2590,6 @@ function App() {
                          <p className="text-[11px] text-gray-500 mt-0.5">
                            📅 รับเงิน: <span className="font-semibold text-gray-800">
                              {job.paid_at ? (() => {
-                               // 💡 แก้ปัญหาเวลาเพี้ยน (บวก 7 ชม. ซ้ำซ้อน) และปรับฟอร์แมตให้เป็นแบบไทยสวยๆ
                                const dateStr = job.paid_at.replace('Z', '').replace('+00:00', '');
                                const d = new Date(dateStr);
                                return `${d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })} เวลา ${d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.`;
