@@ -1741,6 +1741,10 @@ function App() {
             )}
 
             {displayJobs.map((job) => {
+              const statusObj = getStatusDisplay(job.status);
+              const isExpanded = expandedId === job.id;
+              const jobDateTime = formatDate(job.job_date);
+              const assignedVehicle = vehicles.find(v => v.id === job.vehicle_id);
 
               return (
                 <div 
