@@ -2493,6 +2493,7 @@ function App() {
                                 }
 
                                 if (window.confirm(confirmMsg)) {
+                                  // ถ้ามีการลดราคา ให้ยิงอัปเดตยอดเงินใหม่ไปที่เซิร์ฟเวอร์ก่อนปิดบิล
                                   if (actualPaid !== defaultAmt) {
                                     const updatePayload = {
                                       customer_name: job.customers?.name || '', 
@@ -2517,11 +2518,15 @@ function App() {
                                     })
                                     .then(res => {
                                       if(res.ok) {
+                                        // 👇 เพิ่มบรรทัดนี้ เพื่อสั่งให้บันทึก "เวลาปัจจุบัน" ลงไปด้วย
+                                        updatePaymentStatus(job.id, 'PAID');
+                                        
                                         alert("✅ บันทึกส่วนลดและปิดบิลเรียบร้อยแล้ว");
                                         fetchJobs();
                                       } else { alert("❌ บันทึกไม่สำเร็จ"); }
                                     }).catch(() => alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ"));
                                   } else {
+                                    // ถ้ายอดเท่าเดิมเป๊ะๆ ก็เปลี่ยนแค่สถานะ PAID ปกติ
                                     updatePaymentStatus(job.id, 'PAID');
                                   }
                                 }
