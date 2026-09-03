@@ -1927,10 +1927,24 @@ function App() {
                         {job.status !== 'IN_PROGRESS' && (
                           <button 
                             onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
-                            /* 👇 ขยายปุ่มให้ใหญ่ขึ้นถ้าเป็นคนขับ 👇 */
                             className={`flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
                           >
                             ▶️ เริ่มเกี่ยว
+                          </button>
+                        )}
+
+                        {/* 👇 เพิ่มปุ่ม พักคิว สำหรับงานที่กำลังเกี่ยวแต่ไม่จบ 👇 */}
+                        {job.status === 'IN_PROGRESS' && (
+                          <button 
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              if(window.confirm("⏸️ ต้องการพักคิวนี้ชั่วคราวใช่หรือไม่?\n(เช่น ฝนตก หรือลูกค้าให้เกี่ยวต่อวันหลัง)\n\n💡 แนะนำ: ถ้าเลื่อนไปอีกหลายวัน ให้กดปุ่มนี้ แล้วไปกด '✏️ แก้ไขข้อมูล' เพื่อเปลี่ยนวันที่นัดหมายใหม่ให้ถูกต้องครับ")) {
+                                updateStatus(job.id, 'PAUSED');
+                              }
+                            }} 
+                            className={`flex-1 bg-red-400 hover:bg-red-500 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
+                          >
+                            ⏸️ พักคิว / ติดฝน
                           </button>
                         )}
                         
