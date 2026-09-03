@@ -586,7 +586,7 @@ function App() {
   }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
 
   const todayStr = new Date().toDateString();
-  // 💡 ดึงงานของวันนี้ + งานกำลังเกี่ยว + งานที่ค้าง(รอเกี่ยวต่อ) มาโชว์บนหน้าแรกเสมอ
+  // 💡 ดึงงานของวันนี้ "หรือ" งานที่กำลังเกี่ยวอยู่ และงานที่ "รอเกี่ยวต่อ" มาโชว์ด้วย
   const todayJobs = jobs.filter(j => 
     new Date(j.job_date).toDateString() === todayStr || j.status === 'IN_PROGRESS' || j.status === 'PAUSED'
   );
@@ -1370,6 +1370,7 @@ function App() {
                         <div className="shrink-0">
                           {isDone ? <span className="text-green-600 font-bold text-[10px] bg-green-100 px-2.5 py-1.5 rounded-lg">✅ เสร็จ</span> : 
                            job.status === 'IN_PROGRESS' ? <span className="bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">กำลังเกี่ยว</span> : 
+                           job.status === 'PAUSED' ? <span className="bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">⏳ รอเกี่ยวต่อ</span> :
                            <span className="bg-gray-100 text-gray-600 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">รอคิว</span>}
                         </div>
                       </div>
