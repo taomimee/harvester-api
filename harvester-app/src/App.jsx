@@ -586,9 +586,9 @@ function App() {
   }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
 
   const todayStr = new Date().toDateString();
-  // 💡 ดึงงานของวันนี้ "หรือ" งานที่กำลังเกี่ยวอยู่ (ค้างจากวันอื่น) มาโชว์ด้วย
+  // 💡 ดึงงานของวันนี้ + งานกำลังเกี่ยว + งานที่ค้าง(รอเกี่ยวต่อ) มาโชว์บนหน้าแรกเสมอ
   const todayJobs = jobs.filter(j => 
-    new Date(j.job_date).toDateString() === todayStr || j.status === 'IN_PROGRESS'
+    new Date(j.job_date).toDateString() === todayStr || j.status === 'IN_PROGRESS' || j.status === 'PAUSED'
   );
   
   // 👇 แยกคำนวณพื้นที่งานใหม่ของวันนี้ และ งานเก่าที่ค้างมาจากวันอื่น
@@ -984,7 +984,7 @@ function App() {
       case 'PENDING': return { text: 'รอคิว', color: 'bg-yellow-100 text-yellow-800 border-yellow-300' }
       case 'IN_PROGRESS': return { text: 'กำลังเกี่ยว', color: 'bg-blue-100 text-blue-800 border-blue-300' }
       case 'DONE': return { text: 'เสร็จสิ้น', color: 'bg-green-100 text-green-800 border-green-300' }
-      case 'PAUSED': return { text: 'พักคิว/ติดฝน', color: 'bg-red-100 text-red-800 border-red-300' }
+      case 'PAUSED': return { text: 'รอเกี่ยวต่อ', color: 'bg-rose-100 text-rose-800 border-rose-300' }
       default: return { text: status, color: 'bg-gray-100 text-gray-800 border-gray-300' }
     }
   }
@@ -1933,18 +1933,37 @@ function App() {
                           </button>
                         )}
 
-                        {/* 👇 เพิ่มปุ่ม พักคิว สำหรับงานที่กำลังเกี่ยวแต่ไม่จบ 👇 */}
+                        {/* 👇 ปุ่มรอเกี่ยวต่อ (ใส่แทน พักคิว) 👇 */}
                         {job.status === 'IN_PROGRESS' && (
                           <button 
-                            onClick={(e) => { 
+                            onClick={async (e) => { 
                               e.stopPropagation(); 
-                              if(window.confirm("⏸️ ต้องการพักคิวนี้ชั่วคราวใช่หรือไม่?\n(เช่น ฝนตก หรือลูกค้าให้เกี่ยวต่อวันหลัง)\n\n💡 แนะนำ: ถ้าเลื่อนไปอีกหลายวัน ให้กดปุ่มนี้ แล้วไปกด '✏️ แก้ไขข้อมูล' เพื่อเปลี่ยนวันที่นัดหมายใหม่ให้ถูกต้องครับ")) {
-                                updateStatus(job.id, 'PAUSED');
+                              const dayInput = window.prompt("งานนี้ยังไม่จบใช่ไหมครับ?\n\nระบุ 'วันที่' ที่ลูกค้านัดให้ไปเกี่ยวต่อ (เช่น นัดวันที่ 8 ให้พิมพ์เลข 8)\n* ถ้ายังไม่รู้วันนัด ปล่อยว่างไว้แล้วกด OK ได้เลยครับ");
+                              
+                              if (dayInput === null) return; // ถอยกลับถ้ากดยกเลิก
+                              
+                              // ถ้าระบุวันที่มา ให้คำนวณและบันทึกวันนัดใหม่
+                              if (dayInput.trim() !== '' && !isNaN(dayInput)) {
+                                 const d = new Date();
+                                 d.setDate(Number(dayInput));
+                                 d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+                                 const newDateStr = d.toISOString().slice(0, 16);
+                                 
+                                 const updatePayload = {
+                                     customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai, total_price: job.total_price, payment_status: job.payment_status,
+                                     job_date: newDateStr
+                                 };
+                                 await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { 
+                                     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) 
+                                 });
                               }
+                              
+                              // แขวนป้ายสถานะเป็นรอเกี่ยวต่อ (PAUSED)
+                              updateStatus(job.id, 'PAUSED'); 
                             }} 
-                            className={`flex-1 bg-red-400 hover:bg-red-500 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
+                            className={`flex-1 bg-rose-400 hover:bg-rose-500 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
                           >
-                            ⏸️ พักคิว / ติดฝน
+                            ⏳ รอเกี่ยวต่อ
                           </button>
                         )}
                         
