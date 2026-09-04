@@ -235,9 +235,9 @@ function App() {
   const [touchStartX, setTouchStartX] = useState(null); // เก็บพิกัดตอนเริ่มเอานิ้วแตะจอ
   const [touchEndX, setTouchEndX] = useState(null); // เก็บพิกัดตอนลากนิ้ว
 
-  // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
-  const [finishingJob, setFinishingJob] = useState(null);
-  const [wageData, setWageData] = useState({ area: '', wagePerRai: 60, workers: '' });
+  // ⏳ State สำหรับระบบพักคิวและแยกบิล
+  const [pausingJob, setPausingJob] = useState(null);
+  const [pauseWageData, setPauseWageData] = useState({ doneArea: '', wagePerRai: 60, workers: '', nextDateStr: '' });
   // 💰 State สำหรับหน้าสรุปค่าแรง
   const [showWageSummary, setShowWageSummary] = useState(false);
   const [wageTab, setWageTab] = useState('UNPAID'); // 👈 เพิ่มบรรทัดนี้ สำหรับสลับแท็บค่าแรง
@@ -1934,33 +1934,14 @@ function App() {
                           </button>
                         )}
 
-                        {/* 👇 ปุ่มรอเกี่ยวต่อ (ใส่แทน พักคิว) 👇 */}
+                        {/* 👇 ปุ่มรอเกี่ยวต่อ (อัปเกรดให้เปิดหน้าต่างแยกบิล) 👇 */}
                         {job.status === 'IN_PROGRESS' && (
                           <button 
-                            onClick={async (e) => { 
+                            onClick={(e) => { 
                               e.stopPropagation(); 
-                              const dayInput = window.prompt("งานนี้ยังไม่จบใช่ไหมครับ?\n\nระบุ 'วันที่' ที่ลูกค้านัดให้ไปเกี่ยวต่อ (เช่น นัดวันที่ 8 ให้พิมพ์เลข 8)\n* ถ้ายังไม่รู้วันนัด ปล่อยว่างไว้แล้วกด OK ได้เลยครับ");
-                              
-                              if (dayInput === null) return; // ถอยกลับถ้ากดยกเลิก
-                              
-                              // ถ้าระบุวันที่มา ให้คำนวณและบันทึกวันนัดใหม่
-                              if (dayInput.trim() !== '' && !isNaN(dayInput)) {
-                                 const d = new Date();
-                                 d.setDate(Number(dayInput));
-                                 d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-                                 const newDateStr = d.toISOString().slice(0, 16);
-                                 
-                                 const updatePayload = {
-                                     customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai, total_price: job.total_price, payment_status: job.payment_status,
-                                     job_date: newDateStr
-                                 };
-                                 await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { 
-                                     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) 
-                                 });
-                              }
-                              
-                              // แขวนป้ายสถานะเป็นรอเกี่ยวต่อ (PAUSED)
-                              updateStatus(job.id, 'PAUSED'); 
+                              // เซ็ตค่าเริ่มต้นให้หน้าต่าง
+                              setPauseWageData({ doneArea: '', wagePerRai: job.price_per_rai || 60, workers: '', nextDateStr: '' });
+                              setPausingJob(job);
                             }} 
                             className={`flex-1 bg-rose-400 hover:bg-rose-500 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
                           >
@@ -3205,6 +3186,161 @@ function App() {
           </div>
         )}
         {/* 👆 จบ Popup ปิดงานและจดค่าแรง 👆 */}
+
+        {/* ⏳ Popup พักคิว & จดค่าแรงส่วนที่ทำเสร็จแล้ว (แยกร่างบิลอัตโนมัติ) */}
+        {pausingJob && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[300]">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl overflow-y-auto max-h-[90vh]">
+              <h2 className="text-xl font-bold mb-4 text-rose-700 flex items-center gap-2">
+                <span>⏳</span> พักคิว & ตัดยอดวันนี้
+              </h2>
+              
+              <div className="space-y-4">
+                <div className="bg-rose-50 p-3 rounded-lg border border-rose-200">
+                  <p className="text-sm font-bold text-rose-900">💡 ระบบจะทำการ "แยกบิล" ให้อัตโนมัติ</p>
+                  <p className="text-xs text-rose-700 mt-1">ส่วนที่เกี่ยวเสร็จแล้วจะถูกตัดจบเพื่อคิดค่าแรงให้คนทำวันนี้ ส่วนที่เหลือจะถูกสร้างเป็นคิว "รอเกี่ยวต่อ" ตามวันที่นัดใหม่ให้ครับ</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1 text-[11px]">วันนี้ทำได้กี่ไร่?</label>
+                    <input 
+                      type="number" 
+                      placeholder={`จากทั้งหมด ${pausingJob.area_size} ไร่`}
+                      className="w-full border border-rose-300 p-2 rounded-lg bg-white text-rose-900 font-bold focus:ring-2 focus:ring-rose-400 outline-none" 
+                      value={pauseWageData.doneArea} 
+                      onChange={(e) => setPauseWageData({...pauseWageData, doneArea: e.target.value})} 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 font-semibold mb-1 text-[11px]">นัดเกี่ยวต่อวันที่</label>
+                    <input 
+                      type="text" 
+                      placeholder="เช่น 8 (ปล่อยว่างได้)"
+                      className="w-full border border-gray-300 p-2 rounded-lg bg-gray-50 font-bold focus:ring-2 focus:ring-rose-400 outline-none" 
+                      value={pauseWageData.nextDateStr} 
+                      onChange={(e) => setPauseWageData({...pauseWageData, nextDateStr: e.target.value})} 
+                    />
+                  </div>
+                </div>
+
+                {/* 🧑‍🌾 กล่องเลือก/พิมพ์ ชื่อลูกจ้าง */}
+                <div className="bg-orange-50 p-4 rounded-xl border border-orange-200">
+                  <label className="block text-orange-900 font-bold mb-2">🧑‍🌾 วันนี้ใครลงแปลงบ้าง?</label>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
+                      const isSelected = pauseWageData.workers.includes(name);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => {
+                            let currentList = pauseWageData.workers.split(',').map(n => n.trim()).filter(n => n);
+                            if (isSelected) currentList = currentList.filter(n => n !== name);
+                            else currentList.push(name);
+                            setPauseWageData({...pauseWageData, workers: currentList.join(', ')});
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-bold border shadow-sm transition ${
+                            isSelected ? 'bg-orange-500 text-white border-orange-600' : 'bg-white text-orange-700 border-orange-300 hover:bg-orange-100'
+                          }`}
+                        >
+                          {isSelected ? '✅' : '➕'} {name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <input 
+                    type="text" 
+                    placeholder="พิมพ์ชื่อคนอื่นๆ..."
+                    className="w-full border border-orange-300 p-2 rounded-lg text-orange-900 font-semibold focus:ring-2 focus:ring-orange-400 outline-none" 
+                    value={pauseWageData.workers} 
+                    onChange={(e) => setPauseWageData({...pauseWageData, workers: e.target.value})} 
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={() => setPausingJob(null)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2.5 rounded-xl font-bold transition">ยกเลิก</button>
+                <button 
+                  onClick={async () => {
+                    const doneArea = Number(pauseWageData.doneArea);
+                    if (!doneArea || doneArea <= 0) return alert("❌ กรุณาระบุจำนวนไร่ที่ทำได้ในวันนี้ครับ");
+                    if (!pauseWageData.workers.trim()) return alert("❌ กรุณาระบุชื่อคนทำวันนี้ด้วยครับ");
+                    
+                    const origArea = Number(pausingJob.area_size || 0);
+                    if (doneArea >= origArea) return alert("❌ จำนวนไร่ที่ทำวันนี้ เท่ากับหรือมากกว่ายอดรวม แนะนำให้ยกเลิกแล้วกดปุ่ม ✅ เสร็จสิ้น แทนครับ");
+
+                    const remainingArea = origArea - doneArea;
+                    const pricePerRai = Number(pausingJob.price_per_rai || 0);
+                    
+                    try {
+                      // 1. สร้างงานใหม่สำหรับส่วนที่เหลือ (แขวนป้าย PAUSED)
+                      let nextDateISO = pausingJob.job_date; // วันที่เดิมไว้ก่อน
+                      if (pauseWageData.nextDateStr.trim() !== '' && !isNaN(pauseWageData.nextDateStr)) {
+                          const d = new Date();
+                          d.setDate(Number(pauseWageData.nextDateStr));
+                          d.setHours(8, 0, 0, 0); // ตั้งเวลานัดเป็น 8 โมงเช้า
+                          d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+                          nextDateISO = d.toISOString().slice(0, 16);
+                      }
+                      
+                      const newJobPayload = {
+                        customer_name: pausingJob.customers?.name || '', 
+                        phone: pausingJob.customers?.phone || '', 
+                        address_note: (pausingJob.address_note || '') + ' (งานเกี่ยวต่อเนื่อง)', 
+                        crop_type: pausingJob.crop_type || 'ข้าว', 
+                        area_size: remainingArea.toFixed(2), 
+                        job_date: nextDateISO, 
+                        latitude: pausingJob.latitude, 
+                        longitude: pausingJob.longitude, 
+                        vehicle_id: pausingJob.vehicles?.id || pausingJob.vehicle_id || 0, 
+                        boundaries: pausingJob.boundaries || [], 
+                        price_per_rai: pricePerRai, 
+                        total_price: (remainingArea * pricePerRai).toFixed(2), 
+                        payment_status: pausingJob.payment_status === 'PAID' ? 'UNPAID' : pausingJob.payment_status // สืบทอดมัดจำ
+                      };
+                      
+                      // ยิง API สร้างคิวงานใบที่ 2
+                      const resNew = await fetch('https://harvester-api-server.onrender.com/api/jobs', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newJobPayload)
+                      });
+                      const newJobData = await resNew.json();
+                      if(newJobData && newJobData.id) {
+                         // บังคับเปลี่ยนสถานะงานใหม่ให้เป็น "รอเกี่ยวต่อ" ทันที
+                         await fetch(`https://harvester-api-server.onrender.com/api/jobs/${newJobData.id}/status`, {
+                            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'PAUSED' })
+                         });
+                      }
+
+                      // 2. อัปเดตงานปัจจุบันเป็น DONE พร้อมยัดค่าแรง 4 ไร่ลงไป
+                      const updateCurrentPayload = {
+                         customer_name: pausingJob.customers?.name || '', phone: pausingJob.customers?.phone || '', address_note: pausingJob.address_note || '', crop_type: pausingJob.crop_type || 'ข้าว', 
+                         area_size: doneArea.toFixed(2), job_date: pausingJob.job_date, latitude: pausingJob.latitude, longitude: pausingJob.longitude, vehicle_id: pausingJob.vehicles?.id || pausingJob.vehicle_id || 0, boundaries: pausingJob.boundaries || [], price_per_rai: pricePerRai, 
+                         total_price: (doneArea * pricePerRai).toFixed(2), payment_status: pausingJob.payment_status
+                      };
+                      await fetch(`https://harvester-api-server.onrender.com/api/jobs/${pausingJob.id}`, { 
+                         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updateCurrentPayload) 
+                      });
+                      
+                      // เรียกคำสั่งจบงาน
+                      await updateStatus(pausingJob.id, 'DONE', { area: doneArea, wagePerRai: pauseWageData.wagePerRai, workers: pauseWageData.workers });
+
+                      alert("✅ แยกบิลและบันทึกค่าแรงวันนี้เรียบร้อย!\nระบบสร้างคิว 'รอเกี่ยวต่อ' ไว้ให้สำหรับวันนัดครั้งหน้าแล้วครับ");
+                      setPausingJob(null);
+                      fetchJobs();
+                    } catch (err) {
+                      console.error(err);
+                      alert("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ");
+                    }
+                  }} 
+                  className="flex-1 bg-rose-500 hover:bg-rose-600 text-white py-2.5 rounded-xl font-bold shadow-lg transition"
+                >
+                  บันทึกส่วนที่เสร็จ
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง (Hybrid System: กระเป๋าเงิน + รายงานบิล) */}
         {showWageSummary && (() => {
