@@ -740,7 +740,7 @@ const gpsServer = net.createServer((socket) => {
                     try {
                         // 💡 สมมติให้กล่องนี้เป็นของรถ "คันที่ 1" (vehicle_id: 1) ในช่วงทดสอบ
                         const { error } = await supabase.from('gps_logs').insert([{
-                            vehicle_id: 9, 
+                            vehicle_id: 1, 
                             latitude: lat,
                             longitude: lon,
                             is_harvesting: true 
