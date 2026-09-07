@@ -723,7 +723,7 @@ const gpsServer = net.createServer((socket) => {
             const parts = rawData.replace('*HQ,', '').replace('#', '').split(',');
             
             // เช็คว่าเป็นข้อมูลพิกัด (V1)
-            if (parts.length >= 12 && parts[1] === 'V1') {
+            if (parts.length >= 12 && parts[1].startsWith('V')) {
                 const status = parts[3];     // A = จับสัญญาณได้, V = จับไม่ได้
                 const latRaw = parts[4]; 
                 const latDir = parts[5]; 
