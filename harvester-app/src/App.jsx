@@ -174,38 +174,50 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
     return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
   };
 
-  // 💡 ระบบช่วยจำ: บันทึกแปลงลงเครื่อง
-  const savePlotsToLocal = (newPlots) => {
+  // 💡 ระบบช่วยจำ (ออนไลน์): ส่งแปลงไปบันทึกบนเซิร์ฟเวอร์
+  const savePlotsToServer = async (newPlots) => {
     setPlots(newPlots);
     if (pathData.length === 0) return;
+    
     const d = new Date(pathData[0].created_at);
     const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    const key = `plots_${pathData[0].vehicle_id}_${dateStr}`; // แยกจำตามรถและวันที่
-    localStorage.setItem(key, JSON.stringify(newPlots));
+    const vehicle_id = pathData[0].vehicle_id;
+
+    try {
+      await fetch('https://harvester-api-server.onrender.com/api/plots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicle_id: vehicle_id,
+          work_date: dateStr,
+          plots_data: newPlots
+        })
+      });
+      console.log('✅ บันทึกแปลงลงเซิร์ฟเวอร์สำเร็จ');
+    } catch(err) {
+       console.error('❌ บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ:', err);
+       alert('บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ กรุณาลองใหม่ครับ');
+    }
   };
 
-  // 💡 ระบบช่วยจำ: โหลดแปลงเก่ากลับมาตอนเปิดดู และลบทิ้งถ้าเกิน 7 วัน
+  // 💡 ระบบช่วยจำ (ออนไลน์): โหลดแปลงจากเซิร์ฟเวอร์ตอนเปิดดู
   useEffect(() => {
     if (pathData.length > 0) {
       const d = new Date(pathData[0].created_at);
       const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-      const key = `plots_${pathData[0].vehicle_id}_${dateStr}`;
+      const vehicle_id = pathData[0].vehicle_id;
       
-      const saved = localStorage.getItem(key);
-      if (saved) setPlots(JSON.parse(saved));
-      else setPlots([]);
-
-      // 🧹 แอบทำความสะอาดแปลงที่วาดไว้เกิน 7 วัน
-      const sevenDaysAgo = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
-      for (let i = 0; i < localStorage.length; i++) {
-        const lsKey = localStorage.key(i);
-        if (lsKey && lsKey.startsWith('plots_')) {
-          const datePart = lsKey.split('_')[2];
-          if (datePart && new Date(datePart).getTime() < sevenDaysAgo) {
-            localStorage.removeItem(lsKey);
-          }
-        }
-      }
+      // ดึงข้อมูลแปลงจาก API
+      fetch(`https://harvester-api-server.onrender.com/api/plots/${vehicle_id}?date=${dateStr}`)
+        .then(res => res.json())
+        .then(data => {
+            if (Array.isArray(data)) {
+                setPlots(data);
+            } else {
+                setPlots([]);
+            }
+        })
+        .catch(err => console.error('❌ ดึงข้อมูลแปลงไม่สำเร็จ:', err));
     }
   }, [pathData]);
 
@@ -426,8 +438,8 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
             </button>
             <button onClick={() => {
               if (points.length < 3) return alert('ต้องจิ้มจุดอย่างน้อย 3 มุมขึ้นไปครับ');
-              // 💡 ใช้ฟังก์ชัน savePlotsToLocal แทนเพื่อเซฟลงเครื่องทันที
-              savePlotsToLocal([...plots, { points, area: currentArea }]);
+              // เปลี่ยนมาเรียกใช้ระบบบันทึกออนไลน์
+              savePlotsToServer([...plots, { points, area: currentArea }]);
               setPoints([]); 
             }} disabled={points.length < 3} className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}>
               💾 บันทึกแปลง

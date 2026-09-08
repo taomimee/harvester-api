@@ -694,6 +694,83 @@ setInterval(async () => {
     }
 }, 1000 * 60 * 60 * 24); // สั่งให้ระบบทำงานทุกๆ 24 ชั่วโมง (1 วัน)
 
+// ==========================================
+// 1. ระบบจัดการแปลงที่วาด (Harvest Plots API)
+// ==========================================
+
+// 💾 ดึงข้อมูลแปลงที่วาดไว้มาแสดงตามรถและวันที่
+app.get('/api/plots/:vehicle_id', async (req, res) => {
+    const { vehicle_id } = req.params;
+    const { date } = req.query; // รูปแบบ YYYY-MM-DD
+    try {
+        const { data, error } = await supabase
+            .from('harvest_plots')
+            .select('plots_data')
+            .eq('vehicle_id', vehicle_id)
+            .eq('work_date', date)
+            .order('created_at', { ascending: false })
+            .limit(1);
+        
+        if (error) throw error;
+        res.json(data.length > 0 ? data[0].plots_data : []);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 💾 บันทึกแปลงใหม่ลง Database (เซฟทับของเดิมในวันนั้นทันที)
+app.post('/api/plots', express.json(), async (req, res) => {
+    const { vehicle_id, work_date, plots_data } = req.body;
+    try {
+        // ลบแปลงเก่าของวันนั้นออกก่อน เพื่อป้องกันข้อมูลเบิ้ลซ้ำซ้อน
+        await supabase.from('harvest_plots').delete().match({ vehicle_id, work_date });
+        
+        // บันทึกชุดแปลงล่าสุดลงไปใหม่
+        const { error } = await supabase.from('harvest_plots').insert([{
+            vehicle_id, 
+            work_date, 
+            plots_data
+        }]);
+        
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+// ==========================================================
+// 2. ระบบทำความสะอาดอัตโนมัติ (ลบข้อมูล GPS และแปลงที่เก่าเกิน 7 วัน)
+// ==========================================================
+setInterval(async () => {
+    // คำนวณวันย้อนหลังไป 7 วัน
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const isoDateString = sevenDaysAgo.toISOString();
+
+    try {
+        // 1. ลบพิกัด GPS เก่าในตาราง gps_logs
+        const { error: gpsError } = await supabase
+            .from('gps_logs')
+            .delete()
+            .lt('created_at', isoDateString);
+
+        if (gpsError) throw gpsError;
+
+        // 2. ลบแปลงที่วาดไว้เก่าในตาราง harvest_plots (เคลียร์ขยะไม่ให้ฐานข้อมูลบวม)
+        const { error: plotsError } = await supabase
+            .from('harvest_plots')
+            .delete()
+            .lt('created_at', isoDateString);
+
+        if (plotsError) throw plotsError;
+
+        console.log(`🗑️ ทำความสะอาดสำเร็จ: ลบพิกัด GPS และแปลงที่เก่ากว่าวันที่ ${sevenDaysAgo.toLocaleDateString()} ออกจากระบบเรียบร้อย`);
+    } catch (err) {
+        console.error('❌ เกิดข้อผิดพลาดในการรันระบบลบข้อมูลอัตโนมัติ:', err.message);
+    }
+}, 1000 * 60 * 60 * 24); // สั่งให้ระบบทำงานตรวจสอบทุกๆ 24 ชั่วโมง (1 วัน)
 
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {
