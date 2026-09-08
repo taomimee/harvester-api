@@ -675,6 +675,26 @@ app.delete('/api/jobs/attachments/:id', async (req, res) => {
     }
 });
 
+// 🧹 ระบบทำความสะอาด: ลบข้อมูลพิกัด GPS ที่เก่าเกิน 7 วันทิ้งอัตโนมัติ
+setInterval(async () => {
+    // คำนวณหาวันที่ย้อนหลัง 7 วัน
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    try {
+        const { error } = await supabase
+            .from('gps_logs')
+            .delete()
+            .lt('created_at', sevenDaysAgo.toISOString()); // ลบข้อมูลที่เก่ากว่า 7 วัน
+
+        if (error) throw error;
+        console.log(`🗑️ ล้างข้อมูล GPS ที่เก่ากว่าวันที่ ${sevenDaysAgo.toLocaleDateString()} ออกจากระบบเรียบร้อย`);
+    } catch (err) {
+        console.error('❌ เกิดข้อผิดพลาดในการลบข้อมูล GPS เก่า:', err.message);
+    }
+}, 1000 * 60 * 60 * 24); // สั่งให้ระบบทำงานทุกๆ 24 ชั่วโมง (1 วัน)
+
+
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {
     console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
@@ -724,17 +744,25 @@ const gpsServer = net.createServer((socket) => {
             
             // เช็คว่าเป็นข้อมูลพิกัด (V1)
             if (parts.length >= 12 && parts[1].startsWith('V')) {
-                const status = parts[3];     // A = จับสัญญาณได้, V = จับไม่ได้
+                const status = parts[3];     
                 const latRaw = parts[4]; 
                 const latDir = parts[5]; 
                 const lonRaw = parts[6]; 
-                const lonDir = parts[7]; 
+                const lonDir = parts[7];
+
+                // 💡 1. ดึงค่าความเร็วจากกล่อง (หน่วย Knots แล้วแปลงเป็น กม./ชม.)
+                const speedKnots = parseFloat(parts[8]) || 0;
+                const speedKmH = speedKnots * 1.852; 
+
+                // 💡 2. ให้ระบบคิดเองว่าเป็นตอน "กำลังเกี่ยว" หรือไม่ (ความเร็ว 1 ถึง 15 กม./ชม.)
+                // ถ้ารถวิ่งบนถนน (ความเร็วเกิน 15) หรือจอดนิ่ง (ความเร็ว 0) สถานะนี้จะเป็น false
+                const isHarvesting = speedKmH >= 1 && speedKmH <= 15;
 
                 if (status === 'A') {
                     const lat = convertToDecimal(latRaw, latDir);
                     const lon = convertToDecimal(lonRaw, lonDir);
                     
-                    console.log(`📍 ถอดรหัสพิกัดได้: Lat ${lat}, Lon ${lon}`);
+                    console.log(`📍 ถอดรหัสพิกัดได้: Lat ${lat}, Lon ${lon} | 🚀 ความเร็ว: ${speedKmH.toFixed(2)} กม./ชม. | 🌾 กำลังเกี่ยว: ${isHarvesting}`);
 
                     // โยนข้อมูลเข้า Database Supabase ของเรา
                     try {
@@ -743,7 +771,7 @@ const gpsServer = net.createServer((socket) => {
                             vehicle_id: 1, 
                             latitude: lat,
                             longitude: lon,
-                            is_harvesting: true 
+                            is_harvesting: isHarvesting // 👈 บันทึกความฉลาด (true/false) ลงฐานข้อมูล
                         }]);
                         
                         if (error) throw error;

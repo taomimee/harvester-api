@@ -1617,28 +1617,36 @@ function App() {
                     </button>
                  </div>
 
-                 {/* ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ */}
-                 {gpsPathData.length >= 3 && (
-                   <div className="mt-2 pt-2 border-t border-green-100 bg-green-50/50 -mx-3 -mb-3 p-3 flex justify-between items-center">
-                      <p className="text-xs text-green-700 font-bold">📐 พื้นที่วิ่งงานโดยประมาณ:</p>
-                      <p className="font-bold text-green-700 text-sm bg-green-200/50 px-2 py-1 rounded-md">
-                        {(() => {
-                           try {
-                             const turfPoints = turf.featureCollection(gpsPathData.map(p => turf.point([p.longitude, p.latitude])));
-                             const hull = turf.convex(turfPoints);
-                             if (!hull) return 'กำลังรวบรวมข้อมูล...';
-                             const sqM = turf.area(hull);
-                             const rai = Math.floor(sqM / 1600);
-                             const ngan = Math.floor((sqM % 1600) / 400);
-                             const sqWah = ((sqM % 400) / 4).toFixed(1);
-                             return `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`;
-                           } catch (e) {
-                             return 'กำลังคำนวณ...';
-                           }
-                        })()}
-                      </p>
-                   </div>
-                 )}
+                 // ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ
+                    {gpsPathData.length >= 3 && (
+                      <div className="mt-2 pt-2 border-t border-green-100 bg-green-50/50 -mx-3 -mb-3 p-3 flex justify-between items-center">
+                          <p className="text-xs text-green-700 font-bold">📐 พื้นที่วิ่งงานโดยประมาณ:</p>
+                          <p className="font-bold text-green-700 text-sm bg-green-200/50 px-2 py-1 rounded-md">
+                            {(() => {
+                              try {
+                                // 💡 พระเอกอยู่ตรงนี้: กรองเอาเฉพาะพิกัดที่รถ "วิ่งคลาน" ในแปลงมาคิดพื้นที่
+                                const harvestPoints = gpsPathData.filter(p => p.is_harvesting === true);
+
+                                // ถ้าจุดที่วิ่งในแปลงมีน้อยกว่า 3 จุด (เพิ่งลงแปลง) ให้แสดงข้อความรอก่อน
+                                if (harvestPoints.length < 3) return 'กำลังรวบรวมข้อมูลลงแปลง...';
+
+                                // โยนพิกัดที่กรองแล้วเข้า Turf.js เพื่อสร้างพื้นที่
+                                const turfPoints = turf.featureCollection(harvestPoints.map(p => turf.point([p.longitude, p.latitude])));
+                                const hull = turf.convex(turfPoints);
+
+                                if (!hull) return 'กำลังประมวลผล...';
+                                const sqM = turf.area(hull);
+                                const rai = Math.floor(sqM / 1600);
+                                const ngan = Math.floor((sqM % 1600) / 400);
+                                const sqWah = ((sqM % 400) / 4).toFixed(1);
+                                return `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`;
+                              } catch (e) {
+                                return 'กำลังคำนวณ...';
+                              }
+                            })()}
+                          </p>
+                      </div>
+                    )}
 
               </div>
             )}
