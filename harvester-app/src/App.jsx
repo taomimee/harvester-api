@@ -182,13 +182,25 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false); // 📱 แผงเครื่องมือบนมือถือ
 
   const calculateThaiArea = (sqMeters) => {
-    const rai = Math.floor(sqMeters / 1600);
-    let remain = sqMeters % 1600;
-    const ngan = Math.floor(remain / 400);
-    remain = remain % 400;
-    const sqWah = (remain / 4).toFixed(1);
-    const rawRai = (sqMeters / 1600).toFixed(2);
+    const safeSqMeters = Math.max(0, Number(sqMeters) || 0);
+
+    // แปลงเป็นตารางวาก่อนแล้วค่อยแตกหน่วย ป้องกันปัญหาเลขทศนิยมลอย
+    const totalSqWah = Math.round((safeSqMeters / 4) * 10) / 10;
+    const rai = Math.floor(totalSqWah / 400);
+    const remainAfterRai = totalSqWah - (rai * 400);
+    const ngan = Math.floor(remainAfterRai / 100);
+    const sqWahValue = Math.round((remainAfterRai - (ngan * 100)) * 10) / 10;
+    const sqWah = Number.isInteger(sqWahValue) ? String(Math.round(sqWahValue)) : sqWahValue.toFixed(1);
+
+    const rawRai = (safeSqMeters / 1600).toFixed(2);
     return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
+  };
+
+  // ใช้แสดงเลขไร่ทศนิยมจาก Progress/ยอดรวม ให้อยู่ในรูป ไร่-งาน-ตร.ว.
+  // เช่น 23.34 ไร่ => 23 ไร่ 1 งาน 36 ตร.ว.
+  const formatThaiRai = (raiValue) => {
+    const rai = Math.max(0, Number(raiValue) || 0);
+    return calculateThaiArea(rai * 1600).text;
   };
 
 
@@ -819,7 +831,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 
       const details = autoPlots
         .slice(0, 6)
-        .map((plot, i) => `แปลง ${i + 1}: ${plot.area?.rawRai || '0.00'} ไร่`)
+        .map((plot, i) => `แปลง ${i + 1}: ${plot.area?.text || formatThaiRai(plot.area?.rawRai || 0)}`)
         .join('\n');
       const moreText = autoPlots.length > 6 ? `\n...และอีก ${autoPlots.length - 6} แปลง` : '';
 
@@ -1098,7 +1110,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           const centerMarker = L.marker([centerInfo.lat, centerInfo.lng], {
             icon: L.divIcon({
               className: 'bg-transparent border-0',
-              html: `<div class="bg-amber-600/95 text-white px-2 py-1.5 rounded-xl text-[10px] font-black shadow-lg border-2 border-white whitespace-nowrap cursor-pointer" style="transform:translate(-50%,-50%);">📍 แปลง ${index + 1} • ${plot.area?.rawRai || '0.00'} ไร่<br/><span class="font-mono text-[9px]">${centerInfo.text}</span><br/><span class="text-[8px] font-medium opacity-90">แตะเพื่อคัดลอกพิกัด</span></div>`,
+              html: `<div class="bg-amber-600/95 text-white px-2 py-1.5 rounded-xl text-[10px] font-black shadow-lg border-2 border-white whitespace-nowrap cursor-pointer" style="transform:translate(-50%,-50%);">📍 แปลง ${index + 1} • ${plot.area?.text || formatThaiRai(plot.area?.rawRai || 0)}<br/><span class="font-mono text-[9px]">${centerInfo.text}</span><br/><span class="text-[8px] font-medium opacity-90">แตะเพื่อคัดลอกพิกัด</span></div>`,
               iconSize: [0, 0]
             })
           }).addTo(plotsLayer.current);
@@ -1243,7 +1255,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                         <span className="ml-1 text-blue-700 font-black">• {progress.percent.toFixed(0)}%</span>
                       </div>
                       <div className="flex items-center gap-1">
-                        <span className="text-gray-600 font-semibold">{Number(plot.area?.rawRai || progress.totalRai || 0).toFixed(2)} ไร่</span>
+                        <span className="text-gray-600 font-semibold">{plot.area?.text || formatThaiRai(progress.totalRai || 0)}</span>
                         <button disabled={isSavingPlot} onClick={() => openPlotEditor(i)} className="text-blue-600 hover:bg-blue-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40" title="แก้ไขขอบแปลง">✏️</button>
                         <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
                       </div>
@@ -1252,7 +1264,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                       <div className="h-full bg-blue-600 rounded-full transition-all duration-300" style={{ width: `${progress.percent}%` }}></div>
                     </div>
                     <div className="mt-0.5 flex justify-between text-[8px] text-gray-500">
-                      <span>เกี่ยวแล้ว ~{progress.coveredRai.toFixed(2)} ไร่</span>
+                      <span>เกี่ยวแล้ว ~{formatThaiRai(progress.coveredRai)}</span>
                       <span>เหลือ {Math.max(0, 100 - progress.percent).toFixed(0)}%</span>
                     </div>
                     {(() => {
@@ -1274,7 +1286,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               })}
             </div>
             <div className="mt-1 pt-1.5 border-t border-amber-200 text-[11px] font-black text-gray-800 text-right">
-              รวม: {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่
+              รวม: {formatThaiRai(plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0))}
             </div>
             <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-2">
               <div className="flex items-center justify-between text-[10px] font-black">
@@ -1285,8 +1297,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                 <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${overallProgress.percent}%` }}></div>
               </div>
               <div className="mt-1 flex justify-between text-[8px] font-bold text-gray-600">
-                <span>✅ ~{overallProgress.coveredRai.toFixed(2)} / {overallProgress.totalRai.toFixed(2)} ไร่</span>
-                <span>เหลือ ~{overallProgress.remainingRai.toFixed(2)} ไร่</span>
+                <span>✅ ~{formatThaiRai(overallProgress.coveredRai)} / {formatThaiRai(overallProgress.totalRai)}</span>
+                <span>เหลือ ~{formatThaiRai(overallProgress.remainingRai)}</span>
               </div>
             </div>
           </div>
@@ -1321,7 +1333,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 
           {plots.length > 0 && (
             <div className="pointer-events-none ml-auto bg-white/95 backdrop-blur border border-amber-200 rounded-full shadow-lg px-3 h-11 flex items-center text-[10px] font-black text-amber-800 whitespace-nowrap">
-              🌾 {plots.length} แปลง • {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่
+              🌾 {plots.length} แปลง • {formatThaiRai(plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0))}
             </div>
           )}
         </div>
@@ -1400,7 +1412,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-black text-xs text-amber-800">🌾 แปลงที่บันทึก ({plots.length})</p>
-                    <p className="font-black text-xs text-gray-700">รวม {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่</p>
+                    <p className="font-black text-xs text-gray-700">รวม {formatThaiRai(plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0))}</p>
                   </div>
 
                   <div className="space-y-2">
@@ -1413,7 +1425,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                           <div className="flex items-center justify-between gap-2">
                             <div>
                               <p className="font-black text-xs text-amber-800">แปลง {i + 1} <span className="text-blue-700">• {progress.percent.toFixed(0)}%</span></p>
-                              <p className="text-[9px] font-bold text-gray-500">{Number(plot.area?.rawRai || progress.totalRai || 0).toFixed(2)} ไร่ • เกี่ยว ~{progress.coveredRai.toFixed(2)} ไร่</p>
+                              <p className="text-[9px] font-bold text-gray-500">{plot.area?.text || formatThaiRai(progress.totalRai || 0)} • เกี่ยว ~{formatThaiRai(progress.coveredRai)}</p>
                             </div>
                             <div className="flex gap-1">
                               <button
