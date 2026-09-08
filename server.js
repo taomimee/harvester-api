@@ -278,31 +278,39 @@ app.delete('/api/vehicles/:id', async (req, res) => {
 // ใน server.js บรรทัดประมาณ 215
 app.get('/api/gps/:vehicle_id', async (req, res) => {
     const { vehicle_id } = req.params;
-    const { date } = req.query; 
-    
-    // 💡 ถ้าไม่ได้ส่ง date มา (โหมดปัจจุบัน) มันจะดึงข้อมูลเฉพาะ "วันนี้" ตามเวลา UTC 
-    // ซึ่งบางทีเวลา UTC กับเวลาไทยมันเหลื่อมกัน ทำให้ข้อมูลของวันนี้ถูกมองว่าเป็น "เมื่อวาน" ครับ!
-    
-    // ถ้ามี date ให้ใช้วันนั้น ถ้าไม่มีให้ใช้วันนี้ปัจจุบัน
-    const targetDate = date ? new Date(date) : new Date();
-    targetDate.setHours(0, 0, 0, 0);
-    
-    const nextDate = new Date(targetDate);
-    nextDate.setDate(nextDate.getDate() + 1);
-    
+    let { date } = req.query;
+
     try {
+        // ใช้ขอบเขตวันของประเทศไทย (+07:00) ชัดเจน ป้องกันข้อมูลเที่ยงคืนเหลื่อมวันบน Render/UTC
+        if (!date) {
+            const thaiParts = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
+            }).formatToParts(new Date());
+            const y = thaiParts.find(p => p.type === 'year')?.value;
+            const m = thaiParts.find(p => p.type === 'month')?.value;
+            const d = thaiParts.find(p => p.type === 'day')?.value;
+            date = `${y}-${m}-${d}`;
+        }
+
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            return res.status(400).json({ error: 'รูปแบบ date ต้องเป็น YYYY-MM-DD' });
+        }
+
+        const startDate = new Date(`${date}T00:00:00+07:00`);
+        const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
+
         const { data, error } = await supabase
             .from('gps_logs')
             .select('*')
             .eq('vehicle_id', vehicle_id)
-            // .eq('is_harvesting', true) // 💡 ถ้าอยากดูแค่รอยเกี่ยวข้าว ให้เปิดใช้งานบรรทัดนี้
-            .gte('created_at', targetDate.toISOString())
-            .lt('created_at', nextDate.toISOString())
+            .gte('created_at', startDate.toISOString())
+            .lt('created_at', endDate.toISOString())
             .order('created_at', { ascending: true });
 
         if (error) throw error;
-        res.json(data);
+        res.json(data || []);
     } catch (err) {
+        console.error('GPS API Error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -727,82 +735,98 @@ setInterval(async () => {
 }, 1000 * 60 * 60 * 24); // สั่งให้ระบบทำงานทุกๆ 24 ชั่วโมง (1 วัน)
 
 // ==========================================
-// 1. ระบบจัดการแปลงที่วาด (Harvest Plots API)
+// 🌾 ระบบจัดการแปลงที่วาด (เก็บถาวร)
 // ==========================================
 
-// 💾 ดึงข้อมูลแปลงที่วาดไว้มาแสดงตามรถและวันที่
+// 💾 ดึงแปลงตามรถ + วันที่
 app.get('/api/plots/:vehicle_id', async (req, res) => {
     const { vehicle_id } = req.params;
-    const { date } = req.query; // รูปแบบ YYYY-MM-DD
+    const { date } = req.query;
+
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'กรุณาระบุ date รูปแบบ YYYY-MM-DD' });
+    }
+
     try {
         const { data, error } = await supabase
             .from('harvest_plots')
-            .select('plots_data')
+            .select('id, plots_data, created_at')
             .eq('vehicle_id', vehicle_id)
             .eq('work_date', date)
             .order('created_at', { ascending: false })
             .limit(1);
-        
+
         if (error) throw error;
-        res.json(data.length > 0 ? data[0].plots_data : []);
+        res.json(data && data.length > 0 && Array.isArray(data[0].plots_data) ? data[0].plots_data : []);
     } catch (err) {
+        console.error('Load Plots API Error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-// 💾 บันทึกแปลงใหม่ลง Database (เซฟทับของเดิมในวันนั้นทันที)
+// 💾 บันทึกแบบปลอดภัย: ถ้ามีแถวเดิมให้อัปเดต ไม่ลบก่อน insert
 app.post('/api/plots', express.json(), async (req, res) => {
     const { vehicle_id, work_date, plots_data } = req.body;
+    const numericVehicleId = Number(vehicle_id);
+
+    if (!Number.isFinite(numericVehicleId) || numericVehicleId <= 0) {
+        return res.status(400).json({ error: 'vehicle_id ไม่ถูกต้อง' });
+    }
+    if (!work_date || !/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {
+        return res.status(400).json({ error: 'work_date ต้องเป็น YYYY-MM-DD' });
+    }
+    if (!Array.isArray(plots_data)) {
+        return res.status(400).json({ error: 'plots_data ต้องเป็น Array' });
+    }
+
     try {
-        // ลบแปลงเก่าของวันนั้นออกก่อน เพื่อป้องกันข้อมูลเบิ้ลซ้ำซ้อน
-        await supabase.from('harvest_plots').delete().match({ vehicle_id, work_date });
-        
-        // บันทึกชุดแปลงล่าสุดลงไปใหม่
-        const { error } = await supabase.from('harvest_plots').insert([{
-            vehicle_id, 
-            work_date, 
-            plots_data
-        }]);
-        
-        if (error) throw error;
-        res.json({ success: true });
+        const { data: existingRows, error: findError } = await supabase
+            .from('harvest_plots')
+            .select('id')
+            .eq('vehicle_id', numericVehicleId)
+            .eq('work_date', work_date)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+        if (findError) throw findError;
+
+        let savedRow;
+        if (existingRows && existingRows.length > 0) {
+            const { data, error } = await supabase
+                .from('harvest_plots')
+                .update({ plots_data })
+                .eq('id', existingRows[0].id)
+                .select('plots_data')
+                .single();
+            if (error) throw error;
+            savedRow = data;
+        } else {
+            const { data, error } = await supabase
+                .from('harvest_plots')
+                .insert([{
+                    vehicle_id: numericVehicleId,
+                    work_date,
+                    plots_data
+                }])
+                .select('plots_data')
+                .single();
+            if (error) throw error;
+            savedRow = data;
+        }
+
+        res.json({
+            success: true,
+            vehicle_id: numericVehicleId,
+            work_date,
+            plots_data: Array.isArray(savedRow?.plots_data) ? savedRow.plots_data : plots_data
+        });
     } catch (err) {
+        console.error('Save Plots API Error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-
-// ==========================================================
-// 2. ระบบทำความสะอาดอัตโนมัติ (ลบข้อมูล GPS และแปลงที่เก่าเกิน 7 วัน)
-// ==========================================================
-setInterval(async () => {
-    // คำนวณวันย้อนหลังไป 7 วัน
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const isoDateString = sevenDaysAgo.toISOString();
-
-    try {
-        // 1. ลบพิกัด GPS เก่าในตาราง gps_logs
-        const { error: gpsError } = await supabase
-            .from('gps_logs')
-            .delete()
-            .lt('created_at', isoDateString);
-
-        if (gpsError) throw gpsError;
-
-        // 2. ลบแปลงที่วาดไว้เก่าในตาราง harvest_plots (เคลียร์ขยะไม่ให้ฐานข้อมูลบวม)
-        const { error: plotsError } = await supabase
-            .from('harvest_plots')
-            .delete()
-            .lt('created_at', isoDateString);
-
-        if (plotsError) throw plotsError;
-
-        console.log(`🗑️ ทำความสะอาดสำเร็จ: ลบพิกัด GPS และแปลงที่เก่ากว่าวันที่ ${sevenDaysAgo.toLocaleDateString()} ออกจากระบบเรียบร้อย`);
-    } catch (err) {
-        console.error('❌ เกิดข้อผิดพลาดในการรันระบบลบข้อมูลอัตโนมัติ:', err.message);
-    }
-}, 1000 * 60 * 60 * 24); // สั่งให้ระบบทำงานตรวจสอบทุกๆ 24 ชั่วโมง (1 วัน)
+// หมายเหตุ: แปลงที่วาดจะเก็บถาวร ไม่ถูกลบตามระบบล้าง GPS 7 วัน
 
 // ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
 const server = app.listen(3000, () => {

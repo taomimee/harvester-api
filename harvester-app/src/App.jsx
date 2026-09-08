@@ -151,18 +151,22 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
 }
 
 // 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw) + เด้งซูม + จำแปลงได้ 7 วัน
-function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
+function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
   const markerLayer = useRef(null);
   const drawLayer = useRef(null);
   const plotsLayer = useRef(null);
+  const plotLoadSeq = useRef(0);
 
   const [drawMode, setDrawMode] = useState(false);
   const [points, setPoints] = useState([]);
   const [plots, setPlots] = useState([]);
   const [currentArea, setCurrentArea] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
+  const [isSavingPlot, setIsSavingPlot] = useState(false);
+  const [plotSyncStatus, setPlotSyncStatus] = useState('');
+  const [autoFollow, setAutoFollow] = useState(true);
 
   const calculateThaiArea = (sqMeters) => {
     const rai = Math.floor(sqMeters / 1600);
@@ -174,143 +178,323 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
     return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
   };
 
-  // 💡 ระบบช่วยจำ (ออนไลน์): ส่งแปลงไปบันทึกบนเซิร์ฟเวอร์
-  const savePlotsToServer = async (newPlots) => {
-    setPlots(newPlots);
-    if (pathData.length === 0) return;
-    
-    const d = new Date(pathData[0].created_at);
-    const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    const vehicle_id = pathData[0].vehicle_id;
+  const plotStorageKey = vehicleId && workDate ? `harvester_plots_v2_${vehicleId}_${workDate}` : null;
 
+  const readPlotBackup = () => {
+    if (!plotStorageKey) return { plots: [], pending: false };
     try {
-      await fetch('https://harvester-api-server.onrender.com/api/plots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vehicle_id: vehicle_id,
-          work_date: dateStr,
-          plots_data: newPlots
-        })
-      });
-      console.log('✅ บันทึกแปลงลงเซิร์ฟเวอร์สำเร็จ');
-    } catch(err) {
-       console.error('❌ บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ:', err);
-       alert('บันทึกลงเซิร์ฟเวอร์ไม่สำเร็จ กรุณาลองใหม่ครับ');
+      const raw = localStorage.getItem(plotStorageKey);
+      if (!raw) return { plots: [], pending: false };
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return { plots: parsed, pending: false };
+      if (parsed && Array.isArray(parsed.plots)) return parsed;
+    } catch (e) {
+      console.warn('อ่านข้อมูลแปลงสำรองไม่ได้:', e);
+    }
+    return { plots: [], pending: false };
+  };
+
+  const writePlotBackup = (plotList, pending = false) => {
+    if (!plotStorageKey) return;
+    try {
+      localStorage.setItem(plotStorageKey, JSON.stringify({
+        plots: plotList,
+        pending,
+        savedAt: new Date().toISOString()
+      }));
+    } catch (e) {
+      console.warn('สำรองแปลงในเครื่องไม่ได้:', e);
     }
   };
 
-  // 💡 ระบบช่วยจำ (ออนไลน์): โหลดแปลงจากเซิร์ฟเวอร์ตอนเปิดดู
-  useEffect(() => {
-    if (pathData.length > 0) {
-      const d = new Date(pathData[0].created_at);
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-      const vehicle_id = pathData[0].vehicle_id;
-      
-      // ดึงข้อมูลแปลงจาก API
-      fetch(`https://harvester-api-server.onrender.com/api/plots/${vehicle_id}?date=${dateStr}`)
-        .then(res => res.json())
-        .then(data => {
-            if (Array.isArray(data)) {
-                setPlots(data);
-            } else {
-                setPlots([]);
-            }
-        })
-        .catch(err => console.error('❌ ดึงข้อมูลแปลงไม่สำเร็จ:', err));
+  // 💾 บันทึกแปลงโดยใช้รถ/วันที่ที่ผู้ใช้เลือกจริง ไม่อิง pathData
+  const savePlotsToServer = async (newPlots, { silent = false } = {}) => {
+    if (!vehicleId) {
+      alert('กรุณาเลือกรถเกี่ยวก่อนบันทึกแปลงครับ');
+      return false;
     }
-  }, [pathData]);
+    if (!workDate) {
+      alert('ไม่พบวันที่สำหรับบันทึกแปลงครับ');
+      return false;
+    }
+
+    // แสดงผลทันที + สำรองในเครื่องก่อน ป้องกันเน็ตหลุดแล้วแปลงหาย
+    setPlots(newPlots);
+    writePlotBackup(newPlots, true);
+    setIsSavingPlot(true);
+    setPlotSyncStatus('⏳ กำลังบันทึก...');
+
+    try {
+      const res = await fetch('https://harvester-api-server.onrender.com/api/plots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicle_id: Number(vehicleId),
+          work_date: workDate,
+          plots_data: newPlots
+        })
+      });
+
+      let result = {};
+      try { result = await res.json(); } catch (_) {}
+      if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`);
+
+      const confirmedPlots = Array.isArray(result.plots_data) ? result.plots_data : newPlots;
+      setPlots(confirmedPlots);
+      writePlotBackup(confirmedPlots, false);
+      setPlotSyncStatus('✅ บันทึกแล้ว');
+      if (!silent) console.log(`✅ บันทึกแปลง รถ ${vehicleId} วันที่ ${workDate} สำเร็จ`);
+      return true;
+    } catch (err) {
+      console.error('❌ บันทึกแปลงลงเซิร์ฟเวอร์ไม่สำเร็จ:', err);
+      // ไม่ลบแปลงออกจากจอ เพราะมีสำรองใน localStorage แล้ว
+      setPlotSyncStatus('⚠️ เก็บสำรองในเครื่องแล้ว');
+      if (!silent) alert(`เซิร์ฟเวอร์ยังบันทึกแปลงไม่ได้\nแต่ระบบเก็บสำรองไว้ในเครื่องนี้แล้วครับ\n\n${err.message}`);
+      return false;
+    } finally {
+      setIsSavingPlot(false);
+    }
+  };
+
+  // 📥 โหลดแปลงตาม "รถ + วันที่" เท่านั้น เพื่อไม่ให้ GPS auto-refresh มาทับแปลง
+  useEffect(() => {
+    const seq = ++plotLoadSeq.current;
+    const backup = readPlotBackup();
+
+    if (!vehicleId || !workDate) {
+      setPlots([]);
+      setPlotSyncStatus('');
+      return;
+    }
+
+    if (backup.plots.length > 0) {
+      setPlots(backup.plots);
+      setPlotSyncStatus(backup.pending ? '📱 มีข้อมูลสำรองรอซิงก์' : '📱 โหลดสำรองในเครื่อง');
+    } else {
+      setPlots([]);
+      setPlotSyncStatus('⏳ กำลังโหลดแปลง...');
+    }
+
+    const controller = new AbortController();
+
+    const syncPlots = async () => {
+      try {
+        // ถ้ามีรายการค้างซิงก์ ให้ดันขึ้น server ก่อน เพื่อไม่ให้ข้อมูลเก่าบน server ทับ
+        if (backup.pending && backup.plots.length >= 0) {
+          const syncRes = await fetch('https://harvester-api-server.onrender.com/api/plots', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              vehicle_id: Number(vehicleId),
+              work_date: workDate,
+              plots_data: backup.plots
+            }),
+            signal: controller.signal
+          });
+          if (syncRes.ok) {
+            writePlotBackup(backup.plots, false);
+          }
+        }
+
+        const res = await fetch(`https://harvester-api-server.onrender.com/api/plots/${vehicleId}?date=${encodeURIComponent(workDate)}`, {
+          signal: controller.signal
+        });
+        let data = null;
+        try { data = await res.json(); } catch (_) {}
+        if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+        if (seq !== plotLoadSeq.current) return;
+
+        if (Array.isArray(data) && data.length > 0) {
+          setPlots(data);
+          writePlotBackup(data, false);
+          setPlotSyncStatus('✅ แปลงซิงก์แล้ว');
+        } else if (backup.plots.length > 0) {
+          // Server ยังว่าง แต่ในเครื่องมีข้อมูล: รักษาข้อมูลไว้ ไม่ลบทิ้ง
+          setPlots(backup.plots);
+          setPlotSyncStatus('📱 ใช้แปลงสำรองในเครื่อง');
+        } else {
+          setPlots([]);
+          writePlotBackup([], false);
+          setPlotSyncStatus('');
+        }
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.error('❌ ดึงข้อมูลแปลงไม่สำเร็จ:', err);
+        if (seq !== plotLoadSeq.current) return;
+        if (backup.plots.length > 0) {
+          setPlots(backup.plots);
+          setPlotSyncStatus('📱 ใช้แปลงสำรองในเครื่อง');
+        } else {
+          setPlotSyncStatus('⚠️ โหลดแปลงจากเซิร์ฟเวอร์ไม่ได้');
+        }
+      }
+    };
+
+    syncPlots();
+    return () => controller.abort();
+  }, [vehicleId, workDate]);
+
+  // สถิติ GPS จากข้อมูลที่มีอยู่ โดยไม่ต้องเพิ่มคอลัมน์ในฐานข้อมูล
+  const gpsStats = (() => {
+    let totalKm = 0;
+    let harvestKm = 0;
+
+    for (let i = 1; i < pathData.length; i++) {
+      const a = pathData[i - 1];
+      const b = pathData[i];
+      const aLat = Number(a.latitude), aLng = Number(a.longitude);
+      const bLat = Number(b.latitude), bLng = Number(b.longitude);
+      if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
+
+      const km = turf.distance(
+        turf.point([aLng, aLat]),
+        turf.point([bLng, bLat]),
+        { units: 'kilometers' }
+      );
+      if (Number.isFinite(km) && km < 5) { // ตัด GPS กระโดดผิดปกติแบบหยาบ
+        totalKm += km;
+        if (b.is_harvesting === true || String(b.is_harvesting) === 'true') harvestKm += km;
+      }
+    }
+
+    const firstAt = pathData[0]?.created_at ? new Date(pathData[0].created_at) : null;
+    const lastAt = pathData[pathData.length - 1]?.created_at ? new Date(pathData[pathData.length - 1].created_at) : null;
+    const durationMin = firstAt && lastAt && !Number.isNaN(firstAt.getTime()) && !Number.isNaN(lastAt.getTime())
+      ? Math.max(0, Math.round((lastAt - firstAt) / 60000))
+      : 0;
+    const lastAgeSec = lastAt && !Number.isNaN(lastAt.getTime()) ? Math.max(0, Math.round((Date.now() - lastAt.getTime()) / 1000)) : null;
+
+    return {
+      totalKm,
+      harvestKm,
+      durationMin,
+      lastAgeSec,
+      points: pathData.length
+    };
+  })();
+
+  const fitAllRoute = () => {
+    if (!mapInstance.current || pathData.length === 0) return;
+    const latlngs = pathData
+      .map(p => [Number(p.latitude), Number(p.longitude)])
+      .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+    if (latlngs.length === 0) return;
+    mapInstance.current.fitBounds(L.latLngBounds(latlngs), { padding: [30, 30], maxZoom: 18 });
+  };
 
   // 1. สร้างแผนที่
   useEffect(() => {
     if (!mapRef.current) return;
-    const center = pathData.length > 0 ? [pathData[pathData.length-1].latitude, pathData[pathData.length-1].longitude] : [15.7012, 101.1012];
+    const center = pathData.length > 0
+      ? [Number(pathData[pathData.length - 1].latitude), Number(pathData[pathData.length - 1].longitude)]
+      : [15.7012, 101.1012];
     const zoom = pathData.length > 0 ? 17 : 6;
 
     if (!mapInstance.current) {
-      // 💡 ปิดปุ่มซูมซ้ายบน แล้วย้ายไปขวาล่างแทน จะได้ไม่ทับกัน
       mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(center, zoom);
       L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
         attribution: 'Google Maps', maxZoom: 20
       }).addTo(mapInstance.current);
-      
       L.control.zoom({ position: 'bottomright' }).addTo(mapInstance.current);
-      
       drawLayer.current = L.layerGroup().addTo(mapInstance.current);
       plotsLayer.current = L.layerGroup().addTo(mapInstance.current);
-
-      setTimeout(() => {
-        if (mapInstance.current) mapInstance.current.invalidateSize();
-      }, 300);
+      setTimeout(() => mapInstance.current?.invalidateSize(), 300);
     }
+
+    return () => {
+      // TrackingMap ปกติไม่ถูก unmount ตอนสลับข้อมูล แต่ป้องกัน memory leak ไว้
+    };
   }, []);
 
-  // 2. อัปเดตเส้นสีน้ำเงินและรูปรถ
+  // 2. วาดเส้นทาง: เขียว = กำลังเกี่ยว, น้ำเงิน = วิ่งทั่วไป
   useEffect(() => {
     if (!mapInstance.current) return;
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
     if (markerLayer.current) mapInstance.current.removeLayer(markerLayer.current);
-    
-    if (pathData.length > 0) {
-      const latlngs = pathData.map(p => [p.latitude, p.longitude]);
-      polylineLayer.current = L.polyline(latlngs, { color: '#2563EB', weight: 4, opacity: 0.8 }).addTo(mapInstance.current);
-      
-      const lastPoint = pathData[pathData.length - 1];
-      const carIcon = L.divIcon({
-        className: 'bg-transparent border-0',
-        html: `<div class="bg-orange-500 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer transition transform hover:scale-110" style="margin-left: -16px; margin-top: -16px;">🚜</div>`,
-        iconSize: [0, 0]
-      });
-      
-      const marker = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
-      
-      // 💡 กดที่รูปรถแล้วเด้งไป Google Maps นำทาง
-      marker.on('click', () => {
-        window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastPoint.latitude},${lastPoint.longitude}`, '_blank');
-      });
 
-      markerLayer.current = marker;
+    if (pathData.length > 0) {
+      const routeGroup = L.layerGroup().addTo(mapInstance.current);
+      const markerGroup = L.layerGroup().addTo(mapInstance.current);
+
+      for (let i = 1; i < pathData.length; i++) {
+        const a = pathData[i - 1];
+        const b = pathData[i];
+        const aLat = Number(a.latitude), aLng = Number(a.longitude);
+        const bLat = Number(b.latitude), bLng = Number(b.longitude);
+        if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
+        const harvesting = b.is_harvesting === true || String(b.is_harvesting) === 'true';
+        L.polyline([[aLat, aLng], [bLat, bLng]], {
+          color: harvesting ? '#16A34A' : '#2563EB',
+          weight: harvesting ? 5 : 3,
+          opacity: harvesting ? 0.95 : 0.65
+        }).addTo(routeGroup);
+      }
+
+      const firstPoint = pathData[0];
+      const lastPoint = pathData[pathData.length - 1];
+      const firstLat = Number(firstPoint.latitude), firstLng = Number(firstPoint.longitude);
+      const lastLat = Number(lastPoint.latitude), lastLng = Number(lastPoint.longitude);
+
+      if ([firstLat, firstLng].every(Number.isFinite)) {
+        L.circleMarker([firstLat, firstLng], {
+          radius: 6, color: '#FFFFFF', weight: 2, fillColor: '#0EA5E9', fillOpacity: 1
+        }).bindTooltip('จุดเริ่มต้น').addTo(markerGroup);
+      }
+
+      if ([lastLat, lastLng].every(Number.isFinite)) {
+        const carIcon = L.divIcon({
+          className: 'bg-transparent border-0',
+          html: `<div class="bg-orange-500 text-white rounded-full w-9 h-9 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer" style="margin-left:-18px;margin-top:-18px;">🚜</div>`,
+          iconSize: [0, 0]
+        });
+        const marker = L.marker([lastLat, lastLng], { icon: carIcon }).addTo(markerGroup);
+        marker.bindTooltip('ตำแหน่งล่าสุด');
+        marker.on('click', () => {
+          window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastLat},${lastLng}`, '_blank');
+        });
+      }
+
+      polylineLayer.current = routeGroup;
+      markerLayer.current = markerGroup;
     }
   }, [pathData]);
 
-  // 3. ระบบเด้งซูมไปหารถเมื่อกดค้นหา
+  // 3. ติดตามรถอัตโนมัติเมื่อข้อมูลใหม่เข้ามา
   useEffect(() => {
-    if (!isFetchingGps && pathData.length > 0 && mapInstance.current) {
+    if (!isFetchingGps && autoFollow && trackingMode === 'realtime' && pathData.length > 0 && mapInstance.current) {
       const lastPoint = pathData[pathData.length - 1];
-      mapInstance.current.flyTo([lastPoint.latitude, lastPoint.longitude], 17, {
-        animate: true,
-        duration: 1.5
-      });
+      const lat = Number(lastPoint.latitude), lng = Number(lastPoint.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        mapInstance.current.flyTo([lat, lng], Math.max(mapInstance.current.getZoom(), 17), {
+          animate: true,
+          duration: 0.8
+        });
+      }
     }
-  }, [isFetchingGps]); 
+  }, [isFetchingGps, pathData, autoFollow, trackingMode]);
 
   // 4. ระบบจิ้มจอเพื่อเพิ่มจุด
   useEffect(() => {
     if (!mapInstance.current) return;
     const handleMapClick = (e) => {
-      if (drawMode) {
-        setPoints(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng }]);
-      }
+      if (drawMode) setPoints(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng }]);
     };
-    
+
     if (drawMode) {
       mapInstance.current.on('click', handleMapClick);
       mapInstance.current.getContainer().style.cursor = 'crosshair';
     } else {
-      mapInstance.current.off('click', handleMapClick);
       mapInstance.current.getContainer().style.cursor = '';
     }
 
-    return () => {
-      mapInstance.current.off('click', handleMapClick);
-    };
+    return () => mapInstance.current?.off('click', handleMapClick);
   }, [drawMode]);
 
   // 5. วาดเส้นขอบและจุดตามที่จิ้ม
   useEffect(() => {
     if (!drawLayer.current || !mapInstance.current) return;
     drawLayer.current.clearLayers();
-    
+
     if (!drawMode) {
       setPoints([]);
       return;
@@ -334,7 +518,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
         const marker = L.marker([p.lat, p.lng], {
           icon: L.divIcon({
             className: 'bg-transparent border-0',
-            html: `<div class="bg-orange-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold text-[10px] border-2 border-white shadow-md cursor-pointer" style="margin-left: -10px; margin-top: -10px;">${idx + 1}</div>`,
+            html: `<div class="bg-orange-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold text-[10px] border-2 border-white shadow-md cursor-pointer" style="margin-left:-10px;margin-top:-10px;">${idx + 1}</div>`,
             iconSize: [0, 0]
           }),
           draggable: true
@@ -347,9 +531,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
         });
         marker.on('dragend', (e) => {
           const newLatLng = e.target.getLatLng();
-          const newPoints = [...points];
-          newPoints[idx] = { lat: newLatLng.lat, lng: newLatLng.lng };
-          setPoints(newPoints);
+          setPoints(prev => prev.map((pt, i) => i === idx ? { lat: newLatLng.lat, lng: newLatLng.lng } : pt));
         });
       });
     } else {
@@ -361,71 +543,122 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
-    
+
     plots.forEach((plot, index) => {
-      const latlngs = plot.points.map(p => [p.lat, p.lng]);
-      L.polygon(latlngs, { color: '#16A34A', fillColor: '#4ADE80', fillOpacity: 0.4, weight: 3 }).addTo(plotsLayer.current);
-      
-      const turfCoords = plot.points.map(p => [p.lng, p.lat]);
-      turfCoords.push([plot.points[0].lng, plot.points[0].lat]);
-      const center = turf.centerOfMass(turf.polygon([turfCoords])).geometry.coordinates;
-      
-      L.marker([center[1], center[0]], {
-        icon: L.divIcon({
-          className: 'bg-transparent border-0',
-          html: `<div class="bg-green-700/90 text-white px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border border-green-300 whitespace-nowrap transform -translate-x-1/2 -translate-y-1/2">✅ แปลง ${index + 1}<br/>${plot.area.text}</div>`,
-          iconSize: [0, 0]
-        })
-      }).addTo(plotsLayer.current);
+      if (!plot?.points || plot.points.length < 3) return;
+      const latlngs = plot.points.map(p => [Number(p.lat), Number(p.lng)]).filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+      if (latlngs.length < 3) return;
+
+      L.polygon(latlngs, { color: '#16A34A', fillColor: '#4ADE80', fillOpacity: 0.35, weight: 3 }).addTo(plotsLayer.current);
+
+      try {
+        const turfCoords = latlngs.map(([lat, lng]) => [lng, lat]);
+        turfCoords.push(turfCoords[0]);
+        const center = turf.centerOfMass(turf.polygon([turfCoords])).geometry.coordinates;
+        L.marker([center[1], center[0]], {
+          icon: L.divIcon({
+            className: 'bg-transparent border-0',
+            html: `<div class="bg-green-700/90 text-white px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border border-green-300 whitespace-nowrap" style="transform:translate(-50%,-50%);">✅ แปลง ${index + 1}<br/>${plot.area?.text || ''}</div>`,
+            iconSize: [0, 0]
+          })
+        }).addTo(plotsLayer.current);
+      } catch (e) {
+        console.warn('คำนวณจุดกึ่งกลางแปลงไม่ได้:', e);
+      }
     });
   }, [plots]);
+
+  const statusOnline = trackingMode === 'realtime' && gpsStats.lastAgeSec !== null && gpsStats.lastAgeSec <= 30;
+  const durationText = gpsStats.durationMin >= 60
+    ? `${Math.floor(gpsStats.durationMin / 60)}ชม. ${gpsStats.durationMin % 60}น.`
+    : `${gpsStats.durationMin} นาที`;
 
   return (
     <div className="relative w-full h-full flex flex-col">
       <div ref={mapRef} className="flex-1 w-full z-0" />
 
-      {/* ปุ่มขยายเต็มจอ */}
-      <button 
-        onClick={() => {
-          setIsMapFullScreen(!isMapFullScreen);
-          setTimeout(() => { if (mapInstance.current) mapInstance.current.invalidateSize(); }, 300);
-        }}
-        className="absolute top-4 right-4 z-[400] bg-white text-gray-800 px-3 py-2 rounded-lg shadow-lg border border-gray-300 font-bold text-xs hover:bg-gray-100 transition flex items-center gap-1"
-      >
-        {isMapFullScreen ? '↙️ ย่อหน้าจอ' : '🔲 ขยายเต็มจอ'}
-      </button>
+      {/* ปุ่มควบคุมด้านขวา */}
+      <div className="absolute top-4 right-4 z-[400] flex flex-col gap-2 items-end">
+        <button
+          onClick={() => {
+            setIsMapFullScreen(!isMapFullScreen);
+            setTimeout(() => mapInstance.current?.invalidateSize(), 300);
+          }}
+          className="bg-white text-gray-800 px-3 py-2 rounded-lg shadow-lg border border-gray-300 font-bold text-xs hover:bg-gray-100 transition"
+        >
+          {isMapFullScreen ? '↙️ ย่อหน้าจอ' : '🔲 ขยายเต็มจอ'}
+        </button>
 
-      {/* เครื่องมือเปิดโหมดวาด */}
+        {pathData.length > 0 && (
+          <>
+            <button onClick={fitAllRoute} className="bg-white text-blue-700 px-3 py-2 rounded-lg shadow-lg border border-blue-200 font-bold text-xs hover:bg-blue-50 transition">
+              🗺️ ดูเส้นทางทั้งหมด
+            </button>
+            {trackingMode === 'realtime' && (
+              <button onClick={() => setAutoFollow(v => !v)} className={`px-3 py-2 rounded-lg shadow-lg border font-bold text-xs transition ${autoFollow ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300'}`}>
+                {autoFollow ? '🎯 ตามรถ: เปิด' : '🎯 ตามรถ: ปิด'}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* เครื่องมือวาด + รายการแปลง */}
       <div className="absolute top-4 left-4 z-[400] flex flex-col gap-2 pointer-events-none">
-        <button 
-          onClick={() => setDrawMode(!drawMode)} 
+        <button
+          onClick={() => setDrawMode(!drawMode)}
           className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-bold text-xs border transition flex items-center gap-1 w-max ${drawMode ? 'bg-red-500 hover:bg-red-600 text-white border-red-600' : 'bg-white hover:bg-gray-50 text-gray-800 border-gray-300'}`}
         >
-          {drawMode ? '❌ ปิดโหมดวาด' : '📏 วาดแปลงคิดเงิน'}
+          {drawMode ? '❌ ปิดโหมดวาด' : '📏 วาดแปลง'}
         </button>
-        
+
+        {plotSyncStatus && (
+          <div className="pointer-events-auto bg-white/95 px-2 py-1 rounded-lg shadow border border-gray-200 text-[9px] font-bold text-gray-600 w-max max-w-52">
+            {plotSyncStatus}
+          </div>
+        )}
+
         {plots.length > 0 && (
-          <div className="pointer-events-auto bg-white/95 backdrop-blur border border-green-200 p-2 rounded-lg shadow-lg w-48 mt-1">
-            <h4 className="text-[10px] font-black text-green-800 border-b border-green-100 pb-1 mb-1">สรุปแปลงที่วาดได้:</h4>
+          <div className="pointer-events-auto bg-white/95 backdrop-blur border border-green-200 p-2 rounded-lg shadow-lg w-52 mt-1">
+            <h4 className="text-[10px] font-black text-green-800 border-b border-green-100 pb-1 mb-1">🌾 แปลงที่บันทึกไว้ ({workDate || '-'})</h4>
             <div className="max-h-32 overflow-y-auto space-y-1">
               {plots.map((plot, i) => (
                 <div key={i} className="flex justify-between items-center text-[10px] bg-green-50 p-1.5 rounded">
-                  <span className="font-bold text-green-700">แปลง {i+1}</span>
+                  <span className="font-bold text-green-700">แปลง {i + 1}</span>
                   <div className="flex items-center gap-1">
-                    <span className="text-gray-600 font-semibold">{plot.area.rawRai} ไร่</span>
-                    <button onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold">✕</button>
+                    <span className="text-gray-600 font-semibold">{plot.area?.rawRai || 0} ไร่</span>
+                    <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
                   </div>
                 </div>
               ))}
             </div>
             <div className="mt-1 pt-1.5 border-t border-green-200 text-[11px] font-black text-gray-800 text-right">
-              รวม: {plots.reduce((sum, p) => sum + Number(p.area.rawRai), 0).toFixed(2)} ไร่
+              รวม: {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่
             </div>
           </div>
         )}
       </div>
 
-      {/* แผงควบคุมด้านล่าง (แสดงเฉพาะตอนเปิดโหมดวาด) */}
+      {/* GPS mini dashboard */}
+      {pathData.length > 0 && !drawMode && (
+        <div className="absolute bottom-4 left-4 z-[390] bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-200 p-2.5 max-w-[calc(100%-90px)]">
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold text-gray-700">
+            <span className={trackingMode === 'realtime' ? (statusOnline ? 'text-green-600' : 'text-orange-600') : 'text-purple-600'}>
+              {trackingMode === 'realtime' ? (statusOnline ? '● ออนไลน์' : '● สัญญาณเงียบ') : '🕒 ประวัติ'}
+            </span>
+            <span>🛣️ {gpsStats.totalKm.toFixed(2)} กม.</span>
+            <span className="text-green-700">🌾 เกี่ยว {gpsStats.harvestKm.toFixed(2)} กม.</span>
+            <span>⏱️ {durationText}</span>
+            <span>📡 {gpsStats.points.toLocaleString()} จุด</span>
+          </div>
+          <div className="mt-1 flex items-center gap-3 text-[9px] text-gray-500">
+            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-blue-600"></i> วิ่งทั่วไป</span>
+            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-green-600"></i> กำลังเกี่ยว</span>
+          </div>
+        </div>
+      )}
+
+      {/* แผงวาดด้านล่าง */}
       {drawMode && (
         <>
           <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-4 py-1.5 rounded-full shadow-lg border border-orange-300 pointer-events-none">
@@ -436,13 +669,18 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
             <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0} className={`px-4 py-2 rounded-full font-bold text-sm transition ${points.length === 0 ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
               ↩️ ย้อนกลับ
             </button>
-            <button onClick={() => {
-              if (points.length < 3) return alert('ต้องจิ้มจุดอย่างน้อย 3 มุมขึ้นไปครับ');
-              // เปลี่ยนมาเรียกใช้ระบบบันทึกออนไลน์
-              savePlotsToServer([...plots, { points, area: currentArea }]);
-              setPoints([]); 
-            }} disabled={points.length < 3} className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}>
-              💾 บันทึกแปลง
+            <button
+              onClick={async () => {
+                if (points.length < 3) return alert('ต้องจิ้มจุดอย่างน้อย 3 มุมขึ้นไปครับ');
+                const ok = await savePlotsToServer([...plots, { points, area: currentArea }]);
+                // ต่อให้ server ล่ม ระบบมี local backup แล้ว จึงเคลียร์จุดวาดได้
+                setPoints([]);
+                if (ok) setDrawMode(false);
+              }}
+              disabled={points.length < 3 || isSavingPlot || !vehicleId || !workDate}
+              className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 || isSavingPlot || !vehicleId || !workDate ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}
+            >
+              {isSavingPlot ? '⏳ บันทึก...' : '💾 บันทึกแปลง'}
             </button>
           </div>
         </>
@@ -542,6 +780,14 @@ function App() {
   const [trackingDate, setTrackingDate] = useState(new Date().toISOString().slice(0, 10));
   const [gpsPathData, setGpsPathData] = useState([]);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
+
+  // วันที่อ้างอิงของ GPS/แปลง ใช้ค่าเดียวกันทั้งค้นหาเส้นทางและบันทึกแปลง
+  const getLocalDateString = () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    return now.toISOString().slice(0, 10);
+  };
+  const effectiveTrackingDate = trackingMode === 'realtime' ? getLocalDateString() : trackingDate;
   // 👆 จบการวาง State 👆
 
   // 👇 วางต่อท้าย isFetchingGps 👇
@@ -660,9 +906,7 @@ function App() {
       intervalId = setInterval(async () => {
         try {
           // คำนวณวันที่ของวันนี้ส่งไปด้วย (แก้บั๊ก Timezone)
-          const now = new Date();
-          now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-          const dateToSend = now.toISOString().slice(0, 10);
+          const dateToSend = getLocalDateString();
           
           // แอบไปดึงข้อมูลเงียบๆ หลังบ้าน
           const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
@@ -1808,13 +2052,7 @@ function App() {
                   if(!trackingVehicleId) return alert('กรุณาเลือกรถเกี่ยวครับ');
                   setIsFetchingGps(true);
                   try {
-                    let dateToSend = trackingDate;
-                    if (trackingMode === 'realtime') {
-                      const now = new Date();
-                      now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-                      dateToSend = now.toISOString().slice(0, 10);
-                    }
-                    
+                    const dateToSend = effectiveTrackingDate;
                     const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
                     const data = await res.json();
                     
@@ -1848,7 +2086,10 @@ function App() {
             {/* ส่วนแสดงแผนที่อัจฉริยะแบบใหม่ */}
             <div className="flex-1 relative bg-gray-200 min-h-[300px]">
               <TrackingMap 
-                pathData={gpsPathData} 
+                pathData={gpsPathData}
+                vehicleId={trackingVehicleId}
+                workDate={effectiveTrackingDate}
+                trackingMode={trackingMode}
                 isMapFullScreen={isMapFullScreen} 
                 setIsMapFullScreen={setIsMapFullScreen} 
                 isFetchingGps={isFetchingGps} 
