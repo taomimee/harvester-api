@@ -188,9 +188,15 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
       
       drawLayer.current = L.layerGroup().addTo(mapInstance.current);
       plotsLayer.current = L.layerGroup().addTo(mapInstance.current);
+
+      // 👇 เติมโค้ดนี้กลับเข้าไปเพื่อแก้บั๊กโหลดครึ่งจอ 👇
+      setTimeout(() => {
+        if (mapInstance.current) {
+          mapInstance.current.invalidateSize();
+        }
+      }, 300); // หน่วงเวลา 0.3 วินาทีให้กรอบกางเสร็จก่อนแล้วค่อยวาดภาพ
     }
   }, []);
-
   // 2. อัปเดตเส้นสีน้ำเงินและรูปรถ
   useEffect(() => {
     if (!mapInstance.current) return;
