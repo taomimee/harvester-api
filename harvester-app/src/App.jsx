@@ -1,9 +1,130 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
-// 🛰️ GPS V3.3 Auto Multi-Plot + Progress + Editable Boundary + Center Point
+// 🛰️ GPS V3.4 — reviewed exclusions; all areas/progress use the same net geometry.
+// Turf 6/7 compatibility: https://turfjs.org/docs/api/difference
+const plotClip = (operation, a, b) => {
+  if (!a || !b) return operation === 'difference' ? a : null;
+  try { return turf[operation](turf.featureCollection([a, b])); }
+  catch (_) { return turf[operation](a, b); }
+};
+
+const plotThaiArea = (sqMeters) => {
+  const value = Math.max(0, Number(sqMeters) || 0);
+  const tenths = Math.round(value * 2.5);
+  const rai = Math.floor(tenths / 4000);
+  const ngan = Math.floor((tenths % 4000) / 1000);
+  const wah = (tenths % 1000) / 10;
+  return { text: `${rai} ไร่ ${ngan} งาน ${wah} ตร.ว.`, rawRai: value / 1600, sqMeters: value };
+};
+
+const plotRingFeature = (points) => {
+  if (!Array.isArray(points) || points.length < 3) throw new Error('ต้องมีอย่างน้อย 3 จุด');
+  const coords = [];
+  for (const p of points) {
+    if (p?.lng == null || p?.lat == null || p.lng === '' || p.lat === '') throw new Error('พิกัดไม่ถูกต้อง');
+    const xy = [Number(p.lng), Number(p.lat)];
+    if (!xy.every(Number.isFinite) || Math.abs(xy[0]) > 180 || Math.abs(xy[1]) > 90) throw new Error('พิกัดไม่ถูกต้อง');
+    const last = coords[coords.length - 1];
+    if (!last || last[0] !== xy[0] || last[1] !== xy[1]) coords.push(xy);
+  }
+  if (coords.length > 1 && coords[0][0] === coords[coords.length - 1][0] && coords[0][1] === coords[coords.length - 1][1]) coords.pop();
+  if (coords.length < 3) throw new Error('ต้องมีอย่างน้อย 3 มุมที่ไม่ซ้ำกัน');
+  const feature = turf.polygon([[...coords, coords[0]]]);
+  if (turf.kinks(feature).features.length) throw new Error('เส้นตัดกันเอง กรุณาลากจุดแก้ให้เป็นวง');
+  if (turf.area(feature) < 1) throw new Error('พื้นที่ต้องมีอย่างน้อย 1 ตร.ม.');
+  return feature;
+};
+
+// Exclusions are editable rings, not negative area numbers. Sequential clipping
+// counts overlaps once, clips outside edges, and supports split MultiPolygons.
+const plotGeometry = (plot) => {
+  const outer = plotRingFeature(plot.points);
+  let net = outer;
+  for (const hole of (plot.holes || [])) {
+    const cut = plotRingFeature(hole.points);
+    net = plotClip('difference', net, cut);
+    if (!net) break;
+  }
+  const grossSqM = turf.area(outer);
+  const netSqM = net ? Math.min(grossSqM, Math.max(0, turf.area(net))) : 0;
+  return { outer, net, grossSqM, netSqM, excludedSqM: Math.max(0, grossSqM - netSqM) };
+};
+
+const plotCenter = (feature) => {
+  if (!feature) return null;
+  let center = turf.centerOfMass(feature);
+  if (!turf.booleanPointInPolygon(center, feature)) center = turf.pointOnFeature(feature);
+  const [lng, lat] = center.geometry.coordinates;
+  return { lat, lng, text: `${lat.toFixed(6)}, ${lng.toFixed(6)}` };
+};
+
+const refreshPlotMetrics = (plot) => {
+  const geometry = plotGeometry(plot);
+  if (geometry.netSqM < 1) throw new Error('พื้นที่หักครอบคลุมทั้งแปลง กรุณาปรับวงหักให้เล็กลง');
+  return {
+    ...plot, schema_version: 3,
+    holes: plot.holes || [], holeSuggestions: plot.holeSuggestions || [],
+    area: plotThaiArea(geometry.netSqM), grossArea: plotThaiArea(geometry.grossSqM),
+    excludedArea: plotThaiArea(geometry.excludedSqM), center: plotCenter(geometry.net),
+    geometryError: undefined
+  };
+};
+
+const hydratePlots = (items) => (Array.isArray(items) ? items : []).map(plot => {
+  try { return refreshPlotMetrics(plot); }
+  catch (error) { return { ...plot, geometryError: error.message }; }
+});
+
+const plotNewId = () => globalThis.crypto?.randomUUID?.() || `hole-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const plotPolygonParts = (feature) => !feature?.geometry ? []
+  : feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates]
+  : feature.geometry.type === 'MultiPolygon' ? feature.geometry.coordinates : [];
+
+// Suggest only closed gaps in the buffered harvesting tracks. Narrow lane gaps,
+// small GPS noise and gaps touching the field edge do not become suggestions.
+// A closed gap may still be unharvested rice: nothing is deducted until approved.
+const detectPlotHoles = (plot, coverage, headWidth) => {
+  if (!coverage) return plot.holeSuggestions || [];
+  const { outer } = plotGeometry(plot);
+  const suggestions = [...(plot.holeSuggestions || [])];
+  const known = [...(plot.holes || []), ...suggestions].map(h => plotRingFeature(h.points));
+  const width = Math.max(1, Number(headWidth) || 3);
+  const minSqM = Math.max(80, width * width * 6);
+  for (const poly of plotPolygonParts(coverage)) {
+    for (const rawRing of poly.slice(1)) {
+      if (suggestions.length >= 60) break;
+      try {
+        let gap = plotRingFeature(rawRing.slice(0, -1).map(([lng, lat]) => ({ lat, lng })));
+        const sqM = turf.area(gap);
+        if (sqM < minSqM) continue;
+        const core = turf.buffer(gap, -Math.max(2, width), { units: 'meters', steps: 4 });
+        if (!core || turf.area(core) < minSqM * 0.1) continue;
+        const inside = plotClip('intersect', outer, gap);
+        if (!inside || turf.area(inside) < sqM * 0.995 || turf.lineIntersect(gap, outer).features.length) continue;
+        const driven = plotClip('intersect', gap, coverage);
+        if (driven && turf.area(driven) > sqM * 0.03) continue;
+        if (known.some(other => {
+          const overlap = plotClip('intersect', other, gap);
+          return overlap && turf.area(overlap) > Math.min(turf.area(other), sqM) * 0.5;
+        })) continue;
+        const simpler = turf.simplify(gap, { tolerance: 0.000005, highQuality: true });
+        // Simplification must not expand a proposal into the harvesting tracks.
+        const added = plotClip('difference', simpler, gap);
+        if ((!added || turf.area(added) < 0.5) && Math.abs(turf.area(simpler) - sqM) < sqM * 0.03) gap = simpler;
+        const points = gap.geometry.coordinates[0].slice(0, -1).map(([lng, lat]) => ({ lat, lng }));
+        plotRingFeature(points);
+        suggestions.push({ id: plotNewId(), points, status: 'pending', source: 'AUTO_GPS_HOLE', min_area_m2: minSqM });
+        known.push(gap);
+      } catch (_) { /* Skip unreliable candidates, never silently deduct them. */ }
+    }
+  }
+  return suggestions;
+};
+
+// 🛰️ GPS V3.4 Auto Multi-Plot + Reviewed Holes + Net Progress
 // 🗺️ ระบบแผนที่เป้าเล็ง + ค้นหาสถานที่อัจฉริยะ + แผนที่ดาวเทียมมีป้ายชื่อ
 function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const mapRef = useRef(null);
@@ -68,7 +189,7 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
             try {
               const coords = latlngs.map(([lat, lng]) => [lng, lat]);
               coords.push(coords[0]);
-              setCurrentArea(calculateThaiArea(turf.area(turf.polygon([coords]))));
+              setAreaInfo(calculateThaiArea(turf.area(turf.polygon([coords]))));
             } catch (_) {}
           }
         });
@@ -167,6 +288,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const drawLayer = useRef(null);
   const plotsLayer = useRef(null);
   const plotLoadSeq = useRef(0);
+  const plotScopeRef = useRef(null);
+  const savingScopes = useRef(new Set());
 
   const [drawMode, setDrawMode] = useState(false);
   const [points, setPoints] = useState([]);
@@ -180,79 +303,22 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const [draftKind, setDraftKind] = useState('manual'); // manual | auto | edit
   const [isAutoPlotting, setIsAutoPlotting] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false); // 📱 แผงเครื่องมือบนมือถือ
+  const [exclusionPanelIndex, setExclusionPanelIndex] = useState(null);
+  const [holeEditor, setHoleEditor] = useState(null);
+  const [draftHistory, setDraftHistory] = useState([]);
+  const [draftError, setDraftError] = useState('');
+  const isHoleDraft = draftKind.startsWith('hole-');
+  const canAddDraftPoints = draftKind === 'manual' || draftKind === 'hole-new';
 
-  const calculateThaiArea = (sqMeters) => {
-    const safeSqMeters = Math.max(0, Number(sqMeters) || 0);
-
-    // แปลงเป็นตารางวาก่อนแล้วค่อยแตกหน่วย ป้องกันปัญหาเลขทศนิยมลอย
-    const totalSqWah = Math.round((safeSqMeters / 4) * 10) / 10;
-    const rai = Math.floor(totalSqWah / 400);
-    const remainAfterRai = totalSqWah - (rai * 400);
-    const ngan = Math.floor(remainAfterRai / 100);
-    const sqWahValue = Math.round((remainAfterRai - (ngan * 100)) * 10) / 10;
-    const sqWah = Number.isInteger(sqWahValue) ? String(Math.round(sqWahValue)) : sqWahValue.toFixed(1);
-
-    const rawRai = (safeSqMeters / 1600).toFixed(2);
-    return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
-  };
-
-  // ใช้แสดงเลขไร่ทศนิยมจาก Progress/ยอดรวม ให้อยู่ในรูป ไร่-งาน-ตร.ว.
-  // เช่น 23.34 ไร่ => 23 ไร่ 1 งาน 36 ตร.ว.
-  const formatThaiRai = (raiValue) => {
-    const rai = Math.max(0, Number(raiValue) || 0);
-    return calculateThaiArea(rai * 1600).text;
-  };
-
-
+  const calculateThaiArea = plotThaiArea;
+  const formatThaiRai = (value) => plotThaiArea(Number(value || 0) * 1600).text;
   const areaFromPoints = (plotPoints) => {
-    if (!Array.isArray(plotPoints) || plotPoints.length < 3) return { text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 };
-    try {
-      const coords = plotPoints.map(p => [Number(p.lng), Number(p.lat)]).filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
-      if (coords.length < 3) return { text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 };
-      coords.push(coords[0]);
-      return calculateThaiArea(turf.area(turf.polygon([coords])));
-    } catch (_) {
-      return { text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 };
-    }
+    try { return plotThaiArea(turf.area(plotRingFeature(plotPoints))); }
+    catch (_) { return plotThaiArea(0); }
   };
-
-  // 📍 หาพิกัดกลางแปลงจาก Polygon
-  // ใช้ centerOfMass และถ้าจุดหลุดออกนอกแปลงเว้า จะ fallback ไปจุดที่อยู่บน/ใน Polygon
   const centerFromPoints = (plotPoints) => {
-    if (!Array.isArray(plotPoints) || plotPoints.length < 3) return null;
-    try {
-      const coords = plotPoints
-        .map(p => [Number(p.lng), Number(p.lat)])
-        .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
-
-      if (coords.length < 3) return null;
-      coords.push(coords[0]);
-
-      const polygon = turf.polygon([coords]);
-      let centerFeature = turf.centerOfMass(polygon);
-
-      try {
-        if (
-          typeof turf.booleanPointInPolygon === 'function' &&
-          typeof turf.pointOnFeature === 'function' &&
-          !turf.booleanPointInPolygon(centerFeature, polygon)
-        ) {
-          centerFeature = turf.pointOnFeature(polygon);
-        }
-      } catch (_) {}
-
-      const [lng, lat] = centerFeature.geometry.coordinates;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-
-      return {
-        lat,
-        lng,
-        text: `${lat.toFixed(6)}, ${lng.toFixed(6)}`
-      };
-    } catch (err) {
-      console.warn('คำนวณพิกัดกลางแปลงไม่ได้:', err);
-      return null;
-    }
+    try { return plotCenter(plotRingFeature(plotPoints)); }
+    catch (_) { return null; }
   };
 
   const copyPlotCenter = async (center) => {
@@ -272,6 +338,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     setPoints([]);
     setEditingPlotIndex(null);
     setDraftKind('manual');
+    setHoleEditor(null);
+    setDraftHistory([]);
+    setDraftError('');
   };
 
   const openPlotEditor = (plotIndex) => {
@@ -280,18 +349,24 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     setAutoFollow(false);
     setEditingPlotIndex(plotIndex);
     setDraftKind('edit');
+    setHoleEditor(null);
+    setDraftHistory([]);
+    setExclusionPanelIndex(null);
+    setMobileToolsOpen(false);
     setPoints(plot.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })));
-    setCurrentArea(areaFromPoints(plot.points));
+    setCurrentArea(plot.area || areaFromPoints(plot.points));
     setDrawMode(true);
 
     setTimeout(() => {
       if (!mapInstance.current) return;
       const bounds = L.latLngBounds(plot.points.map(p => [Number(p.lat), Number(p.lng)]));
-      if (bounds.isValid()) mapInstance.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 19 });
+      if (bounds.isValid()) mapInstance.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 19, animate: false });
     }, 80);
   };
 
+  // Keep the v2 storage key so existing saved plots migrate without disappearing.
   const plotStorageKey = vehicleId && workDate ? `harvester_plots_v2_${vehicleId}_${workDate}` : null;
+  plotScopeRef.current = plotStorageKey;
 
   const readPlotBackup = () => {
     if (!plotStorageKey) return { plots: [], pending: false };
@@ -308,144 +383,115 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   };
 
   const writePlotBackup = (plotList, pending = false) => {
-    if (!plotStorageKey) return;
+    if (!plotStorageKey) return false;
     try {
       localStorage.setItem(plotStorageKey, JSON.stringify({
         plots: plotList,
         pending,
         savedAt: new Date().toISOString()
       }));
+      return true;
     } catch (e) {
       console.warn('สำรองแปลงในเครื่องไม่ได้:', e);
+      return false;
     }
   };
 
-  // 💾 บันทึกแปลงโดยใช้รถ/วันที่ที่ผู้ใช้เลือกจริง ไม่อิง pathData
+  // Save snapshots for their original vehicle/date. Late GET/POST responses must
+  // never replace a newer edit or the data for a newly selected vehicle/date.
   const savePlotsToServer = async (newPlots, { silent = false } = {}) => {
-    if (!vehicleId) {
-      alert('กรุณาเลือกรถเกี่ยวก่อนบันทึกแปลงครับ');
-      return false;
-    }
-    if (!workDate) {
-      alert('ไม่พบวันที่สำหรับบันทึกแปลงครับ');
-      return false;
-    }
-
-    // แสดงผลทันที + สำรองในเครื่องก่อน ป้องกันเน็ตหลุดแล้วแปลงหาย
-    setPlots(newPlots);
-    writePlotBackup(newPlots, true);
+    if (!vehicleId || !workDate) { alert('กรุณาเลือกรถและวันที่ก่อนบันทึกครับ'); return false; }
+    const scope = plotStorageKey;
+    if (savingScopes.current.has(scope)) return false;
+    let normalized;
+    try { normalized = newPlots.map(refreshPlotMetrics); }
+    catch (error) { alert(error.message); return false; }
+    const seq = ++plotLoadSeq.current;
+    const isCurrent = () => plotScopeRef.current === scope && plotLoadSeq.current === seq;
+    savingScopes.current.add(scope);
+    setPlots(normalized);
+    const backedUp = writePlotBackup(normalized, true);
     setIsSavingPlot(true);
     setPlotSyncStatus('⏳ กำลังบันทึก...');
-
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
     try {
       const res = await fetch('https://harvester-api-server.onrender.com/api/plots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vehicle_id: Number(vehicleId),
-          work_date: workDate,
-          plots_data: newPlots
-        })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicle_id: Number(vehicleId), work_date: workDate, plots_data: normalized }),
+        signal: controller.signal
       });
-
       let result = {};
       try { result = await res.json(); } catch (_) {}
-      if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`);
-
-      const confirmedPlots = Array.isArray(result.plots_data) ? result.plots_data : newPlots;
-      setPlots(confirmedPlots);
-      writePlotBackup(confirmedPlots, false);
-      setPlotSyncStatus('✅ บันทึกแล้ว');
-      if (!silent) console.log(`✅ บันทึกแปลง รถ ${vehicleId} วันที่ ${workDate} สำเร็จ`);
-      return true;
-    } catch (err) {
-      console.warn('⚠️ Server sync ไม่สำเร็จ แต่บันทึกในเครื่องเรียบร้อย:', err);
-      // โหมดใช้งานจริง: localStorage คือแหล่งหลักสำหรับแปลงชั่วคราว 1-2 วัน
-      // Server เป็นเพียงการซิงก์เสริม จึงไม่ถือว่า Save ล้มเหลว
-      setPlotSyncStatus('📱 บันทึกในเครื่องแล้ว');
-      writePlotBackup(newPlots, true);
-      return true;
+      if (!res.ok) throw Object.assign(new Error(result.error || `HTTP ${res.status}`), { status: res.status });
+      const confirmed = hydratePlots(Array.isArray(result.plots_data) ? result.plots_data : normalized);
+      writePlotBackup(confirmed, false);
+      if (isCurrent()) { setPlots(confirmed); setPlotSyncStatus('✅ บันทึกแล้ว'); }
+      return plotScopeRef.current === scope;
+    } catch (error) {
+      if (isCurrent()) setPlotSyncStatus(backedUp ? (error.status >= 400 && error.status < 500 ? `📱 เก็บในเครื่องแล้ว • เซิร์ฟเวอร์ไม่รับข้อมูล: ${error.message}` : '📱 บันทึกในเครื่องแล้ว • รอซิงก์') : '⚠️ ยังบันทึกไม่ได้ กรุณาลองใหม่');
+      if (!backedUp && !silent && isCurrent()) alert('ยังบันทึกไม่ได้ทั้งในเครื่องและเซิร์ฟเวอร์ กรุณาลองใหม่ก่อนปิดหน้านี้');
+      return backedUp && plotScopeRef.current === scope;
     } finally {
-      setIsSavingPlot(false);
+      clearTimeout(timer);
+      savingScopes.current.delete(scope);
+      if (plotScopeRef.current === scope) setIsSavingPlot(false);
     }
   };
 
-  // 📥 โหลดแปลงตาม "รถ + วันที่" เท่านั้น เพื่อไม่ให้ GPS auto-refresh มาทับแปลง
   useEffect(() => {
     const seq = ++plotLoadSeq.current;
-    const backup = readPlotBackup();
-
-    if (!vehicleId || !workDate) {
-      setPlots([]);
-      setPlotSyncStatus('');
-      return;
-    }
-
-    if (backup.plots.length > 0) {
-      setPlots(backup.plots);
-      setPlotSyncStatus(backup.pending ? '📱 มีข้อมูลสำรองรอซิงก์' : '📱 โหลดสำรองในเครื่อง');
-    } else {
-      setPlots([]);
-      setPlotSyncStatus('⏳ กำลังโหลดแปลง...');
-    }
-
+    exitPlotEditor();
+    setExclusionPanelIndex(null);
+    setMobileToolsOpen(false);
+    setIsSavingPlot(savingScopes.current.has(plotStorageKey));
+    const stored = readPlotBackup();
+    const backup = { ...stored, plots: hydratePlots(stored.plots) };
+    if (!vehicleId || !workDate) { setPlots([]); setPlotSyncStatus(''); return; }
+    setPlots(backup.plots);
+    setPlotSyncStatus(backup.pending ? '📱 มีข้อมูลสำรองรอซิงก์' : backup.plots.length ? '📱 โหลดสำรองในเครื่อง' : '⏳ กำลังโหลดแปลง...');
+    // A save for this scope may still be finishing after switching away/back.
+    if (savingScopes.current.has(plotStorageKey)) return;
     const controller = new AbortController();
-
+    const timer = setTimeout(() => controller.abort(), 12000);
+    const current = () => seq === plotLoadSeq.current && !controller.signal.aborted;
     const syncPlots = async () => {
       try {
-        // ถ้ามีรายการค้างซิงก์ ให้ดันขึ้น server ก่อน เพื่อไม่ให้ข้อมูลเก่าบน server ทับ
-        if (backup.pending && backup.plots.length >= 0) {
+        if (backup.pending) {
+          savingScopes.current.add(plotStorageKey);
+          setIsSavingPlot(true);
           const syncRes = await fetch('https://harvester-api-server.onrender.com/api/plots', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              vehicle_id: Number(vehicleId),
-              work_date: workDate,
-              plots_data: backup.plots
-            }),
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vehicle_id: Number(vehicleId), work_date: workDate, plots_data: backup.plots }),
             signal: controller.signal
           });
-          if (syncRes.ok) {
-            writePlotBackup(backup.plots, false);
-          }
-        }
-
-        const res = await fetch(`https://harvester-api-server.onrender.com/api/plots/${vehicleId}?date=${encodeURIComponent(workDate)}`, {
-          signal: controller.signal
-        });
-        let data = null;
-        try { data = await res.json(); } catch (_) {}
-        if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-        if (seq !== plotLoadSeq.current) return;
-
-        if (Array.isArray(data) && data.length > 0) {
-          setPlots(data);
-          writePlotBackup(data, false);
+          if (!syncRes.ok) throw new Error(`HTTP ${syncRes.status}`);
+          if (!current()) return;
+          writePlotBackup(backup.plots, false);
           setPlotSyncStatus('✅ แปลงซิงก์แล้ว');
-        } else if (backup.plots.length > 0) {
-          // Server ยังว่าง แต่ในเครื่องมีข้อมูล: รักษาข้อมูลไว้ ไม่ลบทิ้ง
-          setPlots(backup.plots);
-          setPlotSyncStatus('📱 ใช้แปลงสำรองในเครื่อง');
-        } else {
-          setPlots([]);
-          writePlotBackup([], false);
-          setPlotSyncStatus('');
+          return; // Never overwrite pending local changes with an older server GET.
         }
-      } catch (err) {
-        if (err.name === 'AbortError') return;
-        console.error('❌ ดึงข้อมูลแปลงไม่สำเร็จ:', err);
+        const res = await fetch(`https://harvester-api-server.onrender.com/api/plots/${vehicleId}?date=${encodeURIComponent(workDate)}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!res.ok || !Array.isArray(data)) throw new Error(data?.error || `HTTP ${res.status}`);
+        if (!current()) return;
+        const loaded = data.length ? hydratePlots(data) : backup.plots;
+        setPlots(loaded);
+        writePlotBackup(loaded, false);
+        setPlotSyncStatus(loaded.some(p => p.geometryError) ? '⚠️ มีแปลงที่ต้องแก้เส้นขอบ' : '✅ แปลงซิงก์แล้ว');
+      } catch (_) {
         if (seq !== plotLoadSeq.current) return;
-        if (backup.plots.length > 0) {
-          setPlots(backup.plots);
-          setPlotSyncStatus('📱 ใช้แปลงสำรองในเครื่อง');
-        } else {
-          setPlotSyncStatus('⚠️ โหลดแปลงจากเซิร์ฟเวอร์ไม่ได้');
+        setPlotSyncStatus(backup.pending ? '📱 ใช้ข้อมูลในเครื่อง • ยังรอซิงก์' : backup.plots.length ? '📱 ใช้แปลงสำรองในเครื่อง' : '⚠️ โหลดแปลงจากเซิร์ฟเวอร์ไม่ได้');
+      } finally {
+        clearTimeout(timer);
+        if (backup.pending) {
+          savingScopes.current.delete(plotStorageKey);
+          if (plotScopeRef.current === plotStorageKey) setIsSavingPlot(false);
         }
       }
     };
-
     syncPlots();
-    return () => controller.abort();
+    return () => { clearTimeout(timer); controller.abort(); };
   }, [vehicleId, workDate]);
 
   // 🧠 วิเคราะห์แต่ละช่วงทาง: ใช้ธงจาก server ก่อน และมี fallback คำนวณความเร็วจากระยะ/เวลา
@@ -477,6 +523,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     const aTime = a?.created_at ? new Date(a.created_at).getTime() : NaN;
     const bTime = b?.created_at ? new Date(b.created_at).getTime() : NaN;
     const dtSec = (bTime - aTime) / 1000;
+    if (Number.isFinite(dtSec) && (dtSec <= 0 || dtSec > 180)) {
+      return { km, harvesting: false, inferredSpeedKmh: null };
+    }
 
     if (Number.isFinite(dtSec) && dtSec > 0 && dtSec <= 180) {
       inferredSpeedKmh = km / (dtSec / 3600);
@@ -532,7 +581,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   // 2) ขยายเส้นออกตามครึ่งหนึ่งของความกว้างหัวเกี่ยว
   // 3) ตัดเฉพาะพื้นที่ที่อยู่ภายในขอบแปลงที่บันทึก
   // ผลที่ได้จึงเป็นค่าประมาณพื้นที่ที่หัวเกี่ยวผ่านแล้วจริง
-  const harvestCoverage = (() => {
+  const harvestCoverage = useMemo(() => {
     try {
       const segments = [];
       for (let i = 1; i < pathData.length; i++) {
@@ -557,55 +606,26 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       console.warn('คำนวณพื้นที่เกี่ยวไม่ได้:', err);
       return null;
     }
-  })();
+  }, [pathData, headWidthMeters]);
 
-  const intersectFeatures = (a, b) => {
-    if (!a || !b) return null;
-    // Turf รุ่นใหม่ใช้ FeatureCollection ส่วนรุ่นเก่ารับ 2 feature ตรงๆ
-    try {
-      return turf.intersect(turf.featureCollection([a, b]));
-    } catch (_) {
-      try { return turf.intersect(a, b); } catch (_) { return null; }
-    }
-  };
+  const plotGeometries = useMemo(() => plots.map(plot => {
+    try { return plotGeometry(plot); } catch (_) { return null; }
+  }), [plots]);
 
-  const plotProgressList = plots.map((plot, index) => {
-    let totalSqM = 0;
+  const plotProgressList = useMemo(() => plotGeometries.map((geometry, index) => {
+    const totalSqM = geometry?.netSqM || 0;
     let coveredSqM = 0;
-
     try {
-      if (Array.isArray(plot?.points) && plot.points.length >= 3) {
-        const coords = plot.points
-          .map(p => [Number(p.lng), Number(p.lat)])
-          .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
-
-        if (coords.length >= 3) {
-          coords.push(coords[0]);
-          const plotPolygon = turf.polygon([coords]);
-          totalSqM = Math.max(0, turf.area(plotPolygon));
-
-          if (harvestCoverage && totalSqM > 0) {
-            const clipped = intersectFeatures(plotPolygon, harvestCoverage);
-            if (clipped) coveredSqM = Math.max(0, Math.min(totalSqM, turf.area(clipped)));
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`คำนวณ progress แปลง ${index + 1} ไม่ได้:`, err);
-    }
-
-    const percent = totalSqM > 0 ? Math.min(100, Math.max(0, (coveredSqM / totalSqM) * 100)) : 0;
+      const clipped = plotClip('intersect', geometry?.net, harvestCoverage);
+      if (clipped) coveredSqM = Math.min(totalSqM, Math.max(0, turf.area(clipped)));
+    } catch (_) {}
+    const percent = totalSqM > 0 ? Math.min(100, coveredSqM / totalSqM * 100) : 0;
     return {
-      index,
-      totalSqM,
-      coveredSqM,
-      totalRai: totalSqM / 1600,
-      coveredRai: coveredSqM / 1600,
-      remainingRai: Math.max(0, (totalSqM - coveredSqM) / 1600),
-      percent,
-      remainingPercent: Math.max(0, 100 - percent)
+      index, totalSqM, coveredSqM, percent,
+      totalRai: totalSqM / 1600, coveredRai: coveredSqM / 1600,
+      remainingRai: Math.max(0, totalSqM - coveredSqM) / 1600, remainingPercent: 100 - percent
     };
-  });
+  }), [plotGeometries, harvestCoverage]);
 
   const overallProgress = (() => {
     const totalSqM = plotProgressList.reduce((sum, p) => sum + p.totalSqM, 0);
@@ -620,10 +640,154 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     };
   })();
 
+  const fitPlotForReview = (plotPoints) => {
+    const map = mapInstance.current;
+    if (!map || !plotPoints?.length) return;
+    const bounds = L.latLngBounds(plotPoints.map(p => [Number(p.lat), Number(p.lng)]));
+    if (!bounds.isValid()) return;
+    const size = map.getSize();
+    const mobile = size.x < 640;
+    // Keep the selected field in the visible map above the mobile review sheet.
+    map.fitBounds(bounds, {
+      paddingTopLeft: mobile ? [20, 65] : [350, 40],
+      paddingBottomRight: mobile ? [60, Math.min(size.y * 0.48 + 96, size.y - 165)] : [60, 70],
+      maxZoom: 20, animate: false
+    });
+  };
+
+  const openExclusionPanel = (index) => {
+    if (isSavingPlot || isAutoPlotting) return;
+    exitPlotEditor();
+    setExclusionPanelIndex(index);
+    fitPlotForReview(plots[index]?.points);
+    setMobileToolsOpen(false);
+    setAutoFollow(false);
+  };
+
+  const openHoleEditor = (plotIndex, kind = 'new', id = null) => {
+    if (isSavingPlot || isAutoPlotting) return;
+    const plot = plots[plotIndex];
+    if (!plot) return;
+    const item = kind === 'new' ? null : (kind === 'suggestion' ? plot.holeSuggestions : plot.holes)?.find(h => h.id === id);
+    if (kind !== 'new' && !item) return;
+    setAutoFollow(false);
+    setEditingPlotIndex(plotIndex);
+    setHoleEditor({ kind, id: item?.id || plotNewId() });
+    setDraftKind(`hole-${kind}`);
+    setPoints(item ? item.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })) : []);
+    setDraftHistory([]);
+    setDraftError('');
+    setCurrentArea(plot.area || plotThaiArea(0));
+    setExclusionPanelIndex(null);
+    setMobileToolsOpen(false);
+    setDrawMode(true);
+    const bounds = L.latLngBounds((item?.points || plot.points).map(p => [Number(p.lat), Number(p.lng)]));
+    if (bounds.isValid()) mapInstance.current?.fitBounds(bounds, { padding: [70, 70], maxZoom: 20, animate: false });
+  };
+
+  const changeDraftPoints = (next) => {
+    if (isSavingPlot) return;
+    setDraftHistory(history => [...history.slice(-49), points]);
+    setPoints(next);
+  };
+  const undoDraft = () => {
+    if (!draftHistory.length) return;
+    setPoints(draftHistory[draftHistory.length - 1]);
+    setDraftHistory(history => history.slice(0, -1));
+  };
+  const cancelDraft = () => {
+    const backTo = editingPlotIndex;
+    exitPlotEditor();
+    if (isHoleDraft && backTo !== null) {
+      setExclusionPanelIndex(backTo);
+      fitPlotForReview(plots[backTo]?.points);
+    }
+  };
+
+  const buildDraftPlot = (draftPoints) => {
+    const ring = plotRingFeature(draftPoints);
+    const base = editingPlotIndex === null ? null : plots[editingPlotIndex];
+    if (isHoleDraft) {
+      if (!base || !holeEditor) throw new Error('กรุณาเลือกแปลงสำหรับหักพื้นที่');
+      const inside = plotClip('intersect', plotRingFeature(base.points), ring);
+      if (!inside || turf.area(inside) < 1) throw new Error('วงหักต้องทับพื้นที่ภายในแปลงอย่างน้อย 1 ตร.ม.');
+      const original = (holeEditor.kind === 'suggestion' ? base.holeSuggestions : base.holes)?.find(h => h.id === holeEditor.id);
+      const hole = { ...original, id: holeEditor.id, points: draftPoints, source: original?.source || 'MANUAL_HOLE', status: 'confirmed', updated_at: new Date().toISOString() };
+      return {
+        ...base,
+        holes: [...(base.holes || []).filter(h => h.id !== hole.id), hole],
+        holeSuggestions: (base.holeSuggestions || []).filter(h => h.id !== hole.id),
+        updated_at: new Date().toISOString()
+      };
+    }
+    return {
+      ...(base || { source: 'MANUAL', created_at: new Date().toISOString(), holes: [], holeSuggestions: [] }),
+      points: draftPoints, updated_at: new Date().toISOString()
+    };
+  };
+
+  const saveDraft = async () => {
+    try {
+      const draft = refreshPlotMetrics(buildDraftPlot(points));
+      const backTo = editingPlotIndex;
+      const next = backTo === null ? [...plots, draft] : plots.map((p, i) => i === backTo ? draft : p);
+      const ok = await savePlotsToServer(next);
+      if (ok) {
+        exitPlotEditor();
+        if (backTo !== null) {
+          setExclusionPanelIndex(backTo);
+          fitPlotForReview(draft.points);
+        }
+      }
+    } catch (error) { setDraftError(error.message); }
+  };
+
+  const reviewHoles = async (plotIndex, ids, accept) => {
+    const plot = plots[plotIndex];
+    if (!plot || isSavingPlot) return;
+    const selected = (plot.holeSuggestions || []).filter(h => ids.includes(h.id) && h.status === 'pending');
+    if (!selected.length) return;
+    const updated = {
+      ...plot,
+      holes: accept ? [...(plot.holes || []), ...selected.map(h => ({ ...h, status: 'confirmed', confirmed_at: new Date().toISOString() }))] : plot.holes,
+      holeSuggestions: accept ? plot.holeSuggestions.filter(h => !ids.includes(h.id))
+        : plot.holeSuggestions.map(h => ids.includes(h.id) ? { ...h, status: 'dismissed' } : h),
+      updated_at: new Date().toISOString()
+    };
+    await savePlotsToServer(plots.map((p, i) => i === plotIndex ? updated : p));
+  };
+
+  const restoreHole = async (plotIndex, id) => {
+    const plot = plots[plotIndex];
+    if (!plot || isSavingPlot) return;
+    await savePlotsToServer(plots.map((p, i) => i === plotIndex
+      ? { ...p, holes: (p.holes || []).filter(h => h.id !== id), updated_at: new Date().toISOString() } : p));
+  };
+
+  const scanPlotHoles = async (plotIndex) => {
+    if (isSavingPlot || isAutoPlotting) return;
+    if (!harvestCoverage) { alert('ยังไม่มีแนวเกี่ยวพอสำหรับค้นหาพื้นที่ว่าง ใช้วาดพื้นที่หักเองได้ครับ'); return; }
+    const scope = plotStorageKey;
+    setIsAutoPlotting(true);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (plotScopeRef.current !== scope) return;
+      const plot = plots[plotIndex];
+      const holeSuggestions = detectPlotHoles(plot, harvestCoverage, headWidthMeters);
+      await savePlotsToServer(plots.map((p, i) => i === plotIndex ? { ...p, holeSuggestions } : p));
+      if (plotScopeRef.current === scope && !holeSuggestions.some(h => h.status === 'pending')) {
+        setPlotSyncStatus('ไม่พบวงว่างขนาดชัดเจน • วาดพื้นที่หักเองได้');
+      }
+    } catch (error) { alert(`ค้นหาพื้นที่ว่างไม่ได้: ${error.message}`); }
+    finally { setIsAutoPlotting(false); }
+  };
+
   // ✨ GPS V3.3: Auto Multi-Plot
   // วิเคราะห์รอยเกี่ยวที่หนาแน่น แล้วแยก Polygon ที่ไม่ติดกันเป็นหลายแปลงอัตโนมัติ
   // กรองก้อนเล็ก/สัญญาณรบกวนออก และบันทึกในเครื่องทันที จากนั้นแก้แต่ละแปลงได้ด้วย ✏️
   const generateAutoPlot = async () => {
+    if (isSavingPlot || isAutoPlotting) return;
+    const autoScope = plotStorageKey;
     if (pathData.length < 8) return alert('ข้อมูล GPS ยังน้อยเกินไปสำหรับวาดแปลงอัตโนมัติครับ');
     if (!vehicleId || !workDate) return alert('กรุณาเลือกรถและวันที่ก่อนครับ');
 
@@ -631,6 +795,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     setAutoFollow(false);
 
     try {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (plotScopeRef.current !== autoScope) return;
       // 1) เก็บเฉพาะ segment ที่ระบบประเมินว่า "กำลังเกี่ยว"
       const candidates = [];
       for (let i = 1; i < pathData.length; i++) {
@@ -731,7 +897,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 
             const ring = simplified?.geometry?.coordinates?.[0];
             if (Array.isArray(ring) && ring.length >= 4) {
-              bestCoords = ring.slice(0, -1);
+              const candidateCoords = ring.slice(0, -1);
+              const valid = plotRingFeature(candidateCoords.map(([lng, lat]) => ({ lat, lng })));
+              if (Math.abs(turf.area(valid) - originalSqM) <= originalSqM * 0.05) bestCoords = candidateCoords;
             }
 
             if (bestCoords.length <= 48) break;
@@ -742,6 +910,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         }
 
         if (bestCoords.length < 3) return null;
+        try { plotRingFeature(bestCoords.map(([lng, lat]) => ({ lat, lng }))); }
+        catch (_) { return null; }
         return { coords: bestCoords, sqM: originalSqM };
       };
 
@@ -779,8 +949,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         const area = areaFromPoints(autoPoints);
         const center = centerFromPoints(autoPoints);
 
-        return {
+        const plot = {
           points: autoPoints,
+          holes: [],
           area,
           center,
           source: 'AUTO_GPS_MULTI',
@@ -789,6 +960,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           head_width_m: headWidthMeters,
           created_at: new Date().toISOString()
         };
+        plot.holeSuggestions = detectPlotHoles(plot, harvestCoverage, headWidthMeters);
+        return refreshPlotMetrics(plot);
       });
 
       // ถ้ากด Auto ซ้ำ ให้เลือกแทนเฉพาะแปลง Auto เดิม ไม่แตะแปลงที่วาดมือ
@@ -797,7 +970,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 
       if (oldAutoCount > 0) {
         const replaceOld = window.confirm(
-          `มีแปลงออโต้เดิม ${oldAutoCount} แปลง\n\nกด ตกลง = สร้างใหม่แทนแปลงออโต้เดิม\nกด ยกเลิก = ไม่เปลี่ยนแปลงข้อมูลเดิม\n\n(แปลงที่วาดมือจะไม่ถูกลบ)`
+          `มีแปลงออโต้เดิม ${oldAutoCount} แปลง\n\nกด ตกลง = สร้างใหม่แทนแปลงออโต้เดิม\nกด ยกเลิก = ไม่เปลี่ยนแปลงข้อมูลเดิม\n\n(แปลงที่วาดมือจะไม่ถูกลบ แต่พื้นที่หักของแปลงออโต้เดิมจะถูกแทนด้วยข้อเสนอใหม่ที่ต้องตรวจอีกครั้ง)`
         );
         if (!replaceOld) return;
         basePlots = plots.filter(p => !String(p?.source || '').startsWith('AUTO_GPS'));
@@ -808,50 +981,18 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 
       // บันทึก localStorage ก่อนเสมอ; Server เป็น sync เสริมเท่านั้น
       const ok = await savePlotsToServer(nextPlots, { silent: true });
-      if (!ok) return;
+      if (!ok || plotScopeRef.current !== autoScope) return;
 
       setEditingPlotIndex(null);
       setPoints([]);
       setDraftKind('manual');
       setDrawMode(false);
 
-      // 7) ซูมให้เห็นทุกแปลงที่ Auto สร้าง
-      setTimeout(() => {
-        if (!mapInstance.current) return;
-        const allLatLngs = autoPlots.flatMap(plot =>
-          plot.points.map(p => [Number(p.lat), Number(p.lng)])
-        );
-        if (!allLatLngs.length) return;
-
-        const bounds = L.latLngBounds(allLatLngs);
-        if (bounds.isValid()) {
-          mapInstance.current.fitBounds(bounds, { padding: [55, 55], maxZoom: 19 });
-        }
-      }, 100);
-
-      const details = autoPlots
-        .slice(0, 6)
-        .map((plot, i) => `แปลง ${i + 1}: ${plot.area?.text || formatThaiRai(plot.area?.rawRai || 0)}`)
-        .join('\n');
-      const moreText = autoPlots.length > 6 ? `\n...และอีก ${autoPlots.length - 6} แปลง` : '';
-
-      if (autoPlots.length === 1) {
-        // ถ้ามีแปลงเดียว เปิดจุดให้ลากแก้ทันทีเหมือนเดิม
-        const plot = autoPlots[0];
-        setEditingPlotIndex(startIndex);
-        setDraftKind('edit');
-        setPoints(plot.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })));
-        setCurrentArea(areaFromPoints(plot.points));
-        setDrawMode(true);
-
-        alert(
-          `✨ Auto Plot สำเร็จ\n${details}\n\nระบบบันทึกในเครื่องให้แล้ว\nลากจุดแก้ขอบได้เลย แล้วกด 💾 บันทึกการแก้ไขครับ`
-        );
-      } else {
-        alert(
-          `✨ Auto Multi-Plot สำเร็จ\nพบ ${autoPlots.length} แปลงที่ไม่ติดกัน\n\n${details}${moreText}\n\nระบบบันทึกในเครื่องให้แล้ว\nกด ✏️ ที่แต่ละแปลงเพื่อลากแก้ขอบได้ครับ`
-        );
-      }
+      const pendingIndex = autoPlots.findIndex(p => p.holeSuggestions.some(h => h.status === 'pending'));
+      const selectedIndex = Math.max(0, pendingIndex);
+      setExclusionPanelIndex(startIndex + selectedIndex);
+      fitPlotForReview(autoPlots[selectedIndex].points);
+      setMobileToolsOpen(false);
     } catch (err) {
       console.error('Auto Multi-Plot Error:', err);
       alert(`สร้างแปลงอัตโนมัติไม่สำเร็จครับ\n${err.message || err}`);
@@ -1003,125 +1144,129 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     }
   }, [isFetchingGps, pathData, autoFollow, trackingMode]);
 
-  // 4. ระบบจิ้มจอเพื่อเพิ่มจุด
+  // Click/tap adds vertices only in new drawings; edit mode uses vertex handles.
   useEffect(() => {
-    if (!mapInstance.current) return;
-    const handleMapClick = (e) => {
-      // วาดมือเท่านั้นที่คลิกเพื่อเพิ่มจุด; Auto/Edit ใช้ลากจุดเดิมเพื่อกันรูปเสีย
-      if (drawMode && draftKind === 'manual') setPoints(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng }]);
+    const map = mapInstance.current;
+    if (!map) return;
+    const handleClick = (e) => {
+      if (drawMode && canAddDraftPoints && !isSavingPlot) changeDraftPoints([...points, { lat: e.latlng.lat, lng: e.latlng.lng }]);
     };
+    map.getContainer().style.cursor = drawMode && canAddDraftPoints ? 'crosshair' : '';
+    if (drawMode) map.on('click', handleClick);
+    return () => map.off('click', handleClick);
+  }, [drawMode, canAddDraftPoints, points, isSavingPlot]);
 
-    if (drawMode) {
-      mapInstance.current.on('click', handleMapClick);
-      mapInstance.current.getContainer().style.cursor = 'crosshair';
-    } else {
-      mapInstance.current.getContainer().style.cursor = '';
-    }
-
-    return () => mapInstance.current?.off('click', handleMapClick);
-  }, [drawMode, draftKind]);
-
-  // 5. วาดเส้นขอบและจุดตามที่จิ้ม
+  // Update net fill and area while dragging without replacing the active marker.
   useEffect(() => {
     if (!drawLayer.current || !mapInstance.current) return;
     drawLayer.current.clearLayers();
-
-    if (!drawMode) {
-      drawLayer.current.clearLayers();
-      return;
-    }
-
-    if (points.length > 0) {
-      const latlngs = points.map(p => [p.lat, p.lng]);
-      let shape;
-      if (points.length >= 3) {
-        shape = L.polygon(latlngs, { color: '#F97316', fillColor: '#FB923C', fillOpacity: 0.5, weight: 3, dashArray: '5, 5' }).addTo(drawLayer.current);
-        const turfCoords = points.map(p => [p.lng, p.lat]);
-        turfCoords.push([points[0].lng, points[0].lat]);
-        const sqM = turf.area(turf.polygon([turfCoords]));
-        setCurrentArea(calculateThaiArea(sqM));
-
-        // 📍 แสดงจุดกลางแปลงทันที ทั้ง Auto Plot / วาดมือ / ตอนแก้ไข
-        const draftCenter = centerFromPoints(points);
-        if (draftCenter) {
-          const centerMarker = L.marker([draftCenter.lat, draftCenter.lng], {
-            icon: L.divIcon({
-              className: 'bg-transparent border-0',
-              html: `<div class="bg-sky-700/95 text-white px-2 py-1.5 rounded-xl text-[10px] font-black shadow-lg border-2 border-white whitespace-nowrap cursor-pointer" style="transform:translate(-50%,-50%);">📍 กลางแปลง<br/><span class="font-mono text-[9px]">${draftCenter.text}</span><br/><span class="text-[8px] font-medium opacity-90">แตะเพื่อคัดลอก</span></div>`,
-              iconSize: [0, 0]
-            })
-          }).addTo(drawLayer.current);
-
-          centerMarker.on('click', () => copyPlotCenter(draftCenter));
+    if (!drawMode) return;
+    const previewLayer = L.layerGroup().addTo(drawLayer.current);
+    let frame = null;
+    const drawPreview = (draftPoints) => {
+      previewLayer.clearLayers();
+      try {
+        if (draftPoints.length < 3) {
+          const base = isHoleDraft ? plotGeometries[editingPlotIndex] : null;
+          if (base?.net) L.geoJSON(base.net, { style: { color: '#F59E0B', fillColor: '#FDE047', fillOpacity: 0.2, interactive: false } }).addTo(previewLayer);
+          setCurrentArea({ ...plotThaiArea(base?.netSqM || 0), text: draftPoints.length ? 'วาดอย่างน้อย 3 จุดรอบพื้นที่' : 'แตะรอบพื้นที่ หรือเลื่อนเป้าแล้วกด + จุด' });
+          setDraftError('');
+        } else {
+          const geometry = plotGeometry(buildDraftPlot(draftPoints));
+          if (geometry.netSqM < 1) throw new Error('วงหักครอบคลุมทั้งแปลง กรุณาปรับให้เล็กลง');
+          L.geoJSON(geometry.net, { style: { color: '#F59E0B', fillColor: '#FDE047', fillOpacity: 0.2, weight: 3, interactive: false } }).addTo(previewLayer);
+          setCurrentArea({ ...plotThaiArea(geometry.netSqM), excludedText: plotThaiArea(geometry.excludedSqM).text });
+          setDraftError('');
+          if (isHoleDraft) {
+            const cut = plotClip('intersect', geometry.outer, plotRingFeature(draftPoints));
+            if (cut) L.geoJSON(cut, { style: { color: '#EF4444', fillColor: '#EF4444', fillOpacity: 0.13, weight: 2, dashArray: '6 5', interactive: false } }).addTo(previewLayer);
+          }
         }
-      } else {
-        shape = L.polyline(latlngs, { color: '#F97316', weight: 3, dashArray: '5, 5' }).addTo(drawLayer.current);
-        setCurrentArea({ text: 'ต้องมีอย่างน้อย 3 จุด', rawRai: 0 });
+      } catch (error) {
+        setDraftError(error.message);
+        setCurrentArea({ ...plotThaiArea(0), text: 'ปรับวงให้ถูกต้องก่อนบันทึก' });
       }
-
-      points.forEach((p, idx) => {
-        const marker = L.marker([p.lat, p.lng], {
-          icon: L.divIcon({
-            className: 'bg-transparent border-0',
-            html: `<div class="bg-orange-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold text-[10px] border-2 border-white shadow-md cursor-pointer" style="margin-left:-10px;margin-top:-10px;">${idx + 1}</div>`,
-            iconSize: [0, 0]
-          }),
-          draggable: true
-        }).addTo(drawLayer.current);
-
-        marker.on('drag', (e) => {
-          const newLatLng = e.target.getLatLng();
-          latlngs[idx] = [newLatLng.lat, newLatLng.lng];
-          shape.setLatLngs(latlngs);
-        });
-        marker.on('dragend', (e) => {
-          const newLatLng = e.target.getLatLng();
-          setPoints(prev => prev.map((pt, i) => i === idx ? { lat: newLatLng.lat, lng: newLatLng.lng } : pt));
-        });
+      if (draftPoints.length) {
+        const line = draftPoints.map(p => [p.lat, p.lng]);
+        if (line.length >= 3) line.push(line[0]);
+        L.polyline(line, { color: isHoleDraft ? '#DC2626' : '#F97316', weight: 2, dashArray: '5 5', interactive: false }).addTo(previewLayer);
+      }
+    };
+    drawPreview(points);
+    points.forEach((p, idx) => {
+      const marker = L.marker([p.lat, p.lng], {
+        icon: L.divIcon({
+          className: 'bg-transparent border-0',
+          html: `<div style="width:26px;height:26px;border-radius:50%;background:${isHoleDraft ? '#DC2626' : '#EA580C'};color:white;border:2px solid white;box-shadow:0 2px 5px #0006;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;cursor:move">${idx + 1}</div>`,
+          iconSize: [26, 26], iconAnchor: [13, 13]
+        }), draggable: !isSavingPlot, bubblingMouseEvents: false
+      }).addTo(drawLayer.current);
+      marker.bindTooltip('ลากเพื่อแก้จุด • คลิกขวาเพื่อลบจุด');
+      marker.on('drag', e => {
+        const ll = e.target.getLatLng();
+        const live = points.map((pt, i) => i === idx ? { lat: ll.lat, lng: ll.lng } : pt);
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => drawPreview(live));
       });
-    } else {
-      setCurrentArea({ text: '👆 จิ้มบนแผนที่เพื่อเริ่มปักหมุด', rawRai: 0 });
-    }
-  }, [points, drawMode]);
+      marker.on('dragend', e => {
+        if (frame !== null) cancelAnimationFrame(frame);
+        const ll = e.target.getLatLng();
+        changeDraftPoints(points.map((pt, i) => i === idx ? { lat: ll.lat, lng: ll.lng } : pt));
+      });
+      marker.on('contextmenu', e => {
+        L.DomEvent.stopPropagation(e);
+        if (points.length > 3) changeDraftPoints(points.filter((_, i) => i !== idx));
+      });
+      if (points.length >= 3) {
+        const next = points[(idx + 1) % points.length];
+        const mid = { lat: (p.lat + next.lat) / 2, lng: (p.lng + next.lng) / 2 };
+        L.marker([mid.lat, mid.lng], {
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: '<div style="width:20px;height:20px;border-radius:50%;background:white;border:1px solid #EA580C;color:#C2410C;text-align:center;line-height:18px;font-size:15px;font-weight:bold">+</div>', iconSize: [20, 20], iconAnchor: [10, 10] }),
+          bubblingMouseEvents: false
+        }).bindTooltip('เพิ่มจุดตรงกลางเส้น').on('click', () => changeDraftPoints([...points.slice(0, idx + 1), mid, ...points.slice(idx + 1)])).addTo(drawLayer.current);
+      }
+    });
+    return () => { if (frame !== null) cancelAnimationFrame(frame); };
+  }, [points, drawMode, draftKind, editingPlotIndex, holeEditor, plotGeometries, isSavingPlot]);
 
-  // 6. วาดแปลงที่บันทึกไว้
+  // GeoJSON preserves inner rings and split polygons (Leaflet renders real holes).
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
-
     plots.forEach((plot, index) => {
-      if (drawMode && editingPlotIndex === index) return; // ตอนแก้ไข แสดง draft layer แทนเพื่อไม่ซ้อนกัน
-      if (!plot?.points || plot.points.length < 3) return;
-      const latlngs = plot.points.map(p => [Number(p.lat), Number(p.lng)]).filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
-      if (latlngs.length < 3) return;
-
-      L.polygon(latlngs, { color: '#F59E0B', fillColor: '#FDE047', fillOpacity: 0.20, weight: 3 }).addTo(plotsLayer.current);
-
-      try {
-        const centerInfo = plot.center?.lat && plot.center?.lng
-          ? {
-              lat: Number(plot.center.lat),
-              lng: Number(plot.center.lng),
-              text: plot.center.text || `${Number(plot.center.lat).toFixed(6)}, ${Number(plot.center.lng).toFixed(6)}`
-            }
-          : centerFromPoints(plot.points);
-
-        if (centerInfo) {
-          const centerMarker = L.marker([centerInfo.lat, centerInfo.lng], {
-            icon: L.divIcon({
-              className: 'bg-transparent border-0',
-              html: `<div class="bg-amber-600/95 text-white px-2 py-1.5 rounded-xl text-[10px] font-black shadow-lg border-2 border-white whitespace-nowrap cursor-pointer" style="transform:translate(-50%,-50%);">📍 แปลง ${index + 1} • ${plot.area?.text || formatThaiRai(plot.area?.rawRai || 0)}<br/><span class="font-mono text-[9px]">${centerInfo.text}</span><br/><span class="text-[8px] font-medium opacity-90">แตะเพื่อคัดลอกพิกัด</span></div>`,
-              iconSize: [0, 0]
-            })
-          }).addTo(plotsLayer.current);
-
-          centerMarker.on('click', () => copyPlotCenter(centerInfo));
-        }
-      } catch (e) {
-        console.warn('คำนวณจุดกึ่งกลางแปลงไม่ได้:', e);
+      if (drawMode && editingPlotIndex === index) return;
+      const geometry = plotGeometries[index];
+      if (!geometry?.net) return;
+      L.geoJSON(geometry.net, { style: { color: '#F59E0B', fillColor: '#FDE047', fillOpacity: 0.20, weight: 3, interactive: false } }).addTo(plotsLayer.current);
+      for (const hole of (plot.holes || [])) {
+        try {
+          const inside = plotClip('intersect', geometry.outer, plotRingFeature(hole.points));
+          if (inside) L.geoJSON(inside, { style: { color: '#DC2626', weight: 2, fill: false, dashArray: '6 5', bubblingMouseEvents: false, interactive: !drawMode } })
+            .bindTooltip('พื้นที่หักแล้ว • แตะเพื่อลากแก้')
+            .on('click', () => openHoleEditor(index, 'existing', hole.id)).addTo(plotsLayer.current);
+        } catch (_) {}
+      }
+      for (const hole of (plot.holeSuggestions || []).filter(h => h.status === 'pending')) {
+        try {
+          const inside = plotClip('intersect', geometry.outer, plotRingFeature(hole.points));
+          if (inside) L.geoJSON(inside, { style: { color: '#EF4444', fillColor: '#FB7185', fillOpacity: 0.27, weight: 2, dashArray: '4 6', bubblingMouseEvents: false, interactive: !drawMode } })
+            .bindTooltip('เสนอให้หัก • ยังไม่หักพื้นที่ • แตะเพื่อตรวจแก้')
+            .on('click', () => openHoleEditor(index, 'suggestion', hole.id)).addTo(plotsLayer.current);
+        } catch (_) {}
+      }
+      const center = plot.center || plotCenter(geometry.net);
+      if (center && !drawMode) {
+        L.marker([center.lat, center.lng], {
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="bg-amber-600/95 text-white px-2 py-1 rounded-lg text-[10px] font-black shadow-lg border border-white whitespace-nowrap" style="width:max-content;transform:translate(-50%,-50%)">📍 แปลง ${index + 1} • ${plotThaiArea(geometry.netSqM).text}</div>`, iconSize: [0, 0] }),
+          bubblingMouseEvents: false
+        }).bindTooltip(`สุทธิ • ${center.text} • แตะเพื่อคัดลอกพิกัด`).on('click', () => copyPlotCenter(center)).addTo(plotsLayer.current);
       }
     });
-  }, [plots, drawMode, editingPlotIndex]);
+  }, [plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting]);
+
+  const totalPendingHoles = plots.reduce((sum, p) => sum + (p.holeSuggestions || []).filter(h => h.status === 'pending').length, 0);
+  const panelPlot = exclusionPanelIndex === null ? null : plots[exclusionPanelIndex];
+  const panelPendingHoles = (panelPlot?.holeSuggestions || []).filter(h => h.status === 'pending');
 
   const statusOnline = trackingMode === 'realtime' && gpsStats.lastAgeSec !== null && gpsStats.lastAgeSec <= 30;
   const durationText = gpsStats.durationMin >= 60
@@ -1131,6 +1276,64 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   return (
     <div className="relative w-full h-full flex flex-col">
       <div ref={mapRef} className="flex-1 w-full z-0" />
+      {!drawMode && !mobileToolsOpen && exclusionPanelIndex === null && plots.length > 0 && (
+        <button
+          onClick={() => openExclusionPanel(Math.max(0, plots.findIndex(p => (p.holeSuggestions || []).some(h => h.status === 'pending'))))}
+          className="sm:hidden absolute top-3 left-3 z-[430] max-w-[calc(100%-5rem)] px-3 py-2.5 rounded-xl bg-white/95 border border-red-200 text-red-700 shadow-lg text-xs font-black"
+        >{totalPendingHoles ? `🕳️ พบพื้นที่ว่าง ${totalPendingHoles} จุด` : '✂️ จัดการพื้นที่หัก'}</button>
+      )}
+
+      {!drawMode && panelPlot && (
+        <div className="absolute left-3 right-3 sm:right-auto sm:w-80 bottom-20 sm:bottom-auto sm:top-4 z-[450] bg-white/95 backdrop-blur rounded-2xl border border-red-200 shadow-xl flex flex-col overflow-hidden max-h-[48%] sm:max-h-[82%]">
+          <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-red-100 shrink-0">
+            <label className="text-xs font-black text-red-800 flex items-center gap-1">🕳️ พื้นที่หัก
+              <select aria-label="เลือกแปลงสำหรับหักพื้นที่" value={exclusionPanelIndex} disabled={isSavingPlot || isAutoPlotting} onChange={e => openExclusionPanel(Number(e.target.value))} className="bg-red-50 rounded-lg px-2 py-1 max-w-36 text-gray-800">
+                {plots.map((p, i) => <option key={i} value={i}>แปลง {i + 1} {(p.holeSuggestions || []).filter(h => h.status === 'pending').length ? '• มีข้อเสนอ' : ''}</option>)}
+              </select>
+            </label>
+            <button aria-label="ปิดพื้นที่หัก" onClick={() => setExclusionPanelIndex(null)} className="w-8 h-8 rounded-full bg-gray-100 text-gray-600">✕</button>
+          </div>
+          <div className="overflow-y-auto p-3 space-y-2 min-h-0">
+            <div className="grid grid-cols-3 gap-1 text-[10px]">
+              <div className="bg-amber-50 rounded-lg p-1.5"><p className="text-gray-500">ขอบแปลง</p><p className="font-bold text-amber-800">{panelPlot.grossArea?.text}</p></div>
+              <div className="bg-red-50 rounded-lg p-1.5"><p className="text-gray-500">หักแล้ว</p><p className="font-bold text-red-700">{panelPlot.excludedArea?.text}</p></div>
+              <div className="bg-green-50 rounded-lg p-1.5"><p className="text-gray-500">พื้นที่สุทธิ</p><p className="font-black text-green-800">{panelPlot.area?.text}</p></div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openHoleEditor(exclusionPanelIndex)} className="col-span-2 py-2 rounded-lg bg-red-600 text-white text-xs font-black disabled:opacity-40">✂️ วาดพื้นที่หักเอง</button>
+              <button disabled={isSavingPlot || isAutoPlotting} onClick={() => scanPlotHoles(exclusionPanelIndex)} className="py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold disabled:opacity-40">{isAutoPlotting ? '⏳ กำลังค้นหา...' : '🔎 ค้นหาพื้นที่ว่าง'}</button>
+              <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openPlotEditor(exclusionPanelIndex)} className="py-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-700 text-[10px] font-bold disabled:opacity-40">✏️ แก้ขอบแปลง</button>
+            </div>
+            {panelPendingHoles.length > 0 ? (
+              <>
+                <p className="font-black text-xs text-red-800">🕳️ พบพื้นที่ว่าง {panelPendingHoles.length} จุดในแปลงนี้</p>
+                <p className="text-[10px] text-gray-600">สีชมพูยังไม่หักออก อาจเป็นข้าวที่ยังไม่ได้เกี่ยว กรุณาตรวจภาพก่อนยืนยัน</p>
+                <button disabled={isSavingPlot || isAutoPlotting} onClick={() => reviewHoles(exclusionPanelIndex, panelPendingHoles.map(h => h.id), true)} className="w-full py-2 rounded-lg bg-green-600 text-white text-xs font-black disabled:opacity-40">✅ หักออกทั้งหมด</button>
+                {panelPendingHoles.map((hole, i) => (
+                  <div key={hole.id} className="bg-red-50 border border-red-100 rounded-lg p-2">
+                    <p className="text-[10px] text-red-800 font-bold">เสนอจุด {i + 1} • {areaFromPoints(hole.points).text}</p>
+                    <div className="flex gap-1 mt-1">
+                      <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openHoleEditor(exclusionPanelIndex, 'suggestion', hole.id)} className="flex-1 py-2 rounded bg-white border border-red-200 text-[10px] font-bold text-red-800 disabled:opacity-40">✏️ ตรวจแก้</button>
+                      <button disabled={isSavingPlot || isAutoPlotting} onClick={() => reviewHoles(exclusionPanelIndex, [hole.id], true)} className="px-2 py-2 rounded bg-green-100 text-green-800 text-[10px] font-bold disabled:opacity-40">✅ หัก</button>
+                      <button disabled={isSavingPlot || isAutoPlotting} onClick={() => reviewHoles(exclusionPanelIndex, [hole.id], false)} className="px-2 py-2 rounded bg-white text-gray-500 text-[10px] font-bold disabled:opacity-40">ไม่หัก</button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : <p className="text-[10px] text-gray-500">ไม่มีพื้นที่รอยืนยัน • วาดวงหักเองได้ แม้ไม่มีข้อมูล GPS</p>}
+            {(panelPlot.holes || []).length > 0 && <p className="text-xs font-black text-gray-700">หักแล้ว {panelPlot.holes.length} วง • เส้นประแดง</p>}
+            {(panelPlot.holes || []).map((hole, i) => (
+              <div key={hole.id} className="flex items-center gap-1 rounded-lg border border-gray-200 p-2 text-[10px]">
+                <span className="font-bold text-gray-700 mr-auto">วงหัก {i + 1}</span>
+                <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openHoleEditor(exclusionPanelIndex, 'existing', hole.id)} className="px-2 py-2 bg-blue-50 rounded text-blue-700 font-bold disabled:opacity-40">✏️ แก้วง</button>
+                <button disabled={isSavingPlot || isAutoPlotting} onClick={() => restoreHole(exclusionPanelIndex, hole.id)} className="px-2 py-2 bg-gray-100 rounded text-gray-600 font-bold disabled:opacity-40">↩ คืนพื้นที่</button>
+              </div>
+            ))}
+            {plotSyncStatus && <p role="status" className="text-[10px] text-gray-500">{plotSyncStatus}</p>}
+          </div>
+        </div>
+      )}
+
 
       {/* ปุ่มควบคุมด้านขวา */}
       <div className="absolute top-4 right-4 z-[400] hidden sm:flex flex-col gap-2 items-end">
@@ -1193,7 +1396,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       </div>
 
       {/* เครื่องมือวาด + รายการแปลง */}
-      <div className="absolute top-4 left-4 z-[400] hidden sm:flex flex-col gap-2 pointer-events-none">
+      <div className={`absolute top-4 left-4 z-[400] ${drawMode || exclusionPanelIndex !== null ? 'hidden' : 'hidden sm:flex'} flex-col gap-2 pointer-events-none`}>
         <button
           onClick={() => {
             setAutoFollow(false);
@@ -1202,6 +1405,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
             } else {
               setEditingPlotIndex(null);
               setDraftKind('manual');
+              setHoleEditor(null);
+              setDraftHistory([]);
+              setExclusionPanelIndex(null);
               setPoints([]);
               setDrawMode(true);
             }
@@ -1215,10 +1421,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           <>
             <button
               onClick={generateAutoPlot}
-              disabled={isAutoPlotting}
+              disabled={isAutoPlotting || isSavingPlot}
               className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-black text-xs border transition w-max ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'}`}
             >
-              {isAutoPlotting ? '⏳ กำลังแยกแปลง...' : '✨ วาดหลายแปลงออโต้'}
+              {isAutoPlotting ? '⏳ กำลังแยกแปลง...' : '✨ วาดแปลงออโต้'}
             </button>
             <button
               onClick={() => {
@@ -1260,6 +1466,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                         <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
                       </div>
                     </div>
+                    <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openExclusionPanel(i)} className="mt-1 w-full py-1.5 rounded border border-red-200 bg-white text-red-700 text-[10px] font-bold disabled:opacity-40">🕳️ พื้นที่หัก {(plot.holes || []).length} วง{(plot.holeSuggestions || []).some(h => h.status === 'pending') ? ' • รอยืนยัน' : ''}</button>
                     <div className="mt-1 h-1.5 bg-white rounded-full overflow-hidden border border-blue-100">
                       <div className="h-full bg-blue-600 rounded-full transition-all duration-300" style={{ width: `${progress.percent}%` }}></div>
                     </div>
@@ -1286,7 +1493,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               })}
             </div>
             <div className="mt-1 pt-1.5 border-t border-amber-200 text-[11px] font-black text-gray-800 text-right">
-              รวม: {formatThaiRai(plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0))}
+              รวม: {formatThaiRai(overallProgress.totalRai)}
             </div>
             <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-2">
               <div className="flex items-center justify-between text-[10px] font-black">
@@ -1312,7 +1519,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
         >
           <button
-            onClick={() => setMobileToolsOpen(v => !v)}
+            onClick={() => { setExclusionPanelIndex(null); setMobileToolsOpen(v => !v); }}
             className={`pointer-events-auto h-11 px-4 rounded-full shadow-xl border font-black text-xs flex items-center gap-1.5 active:scale-95 ${mobileToolsOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/95 text-gray-800 border-gray-200'}`}
           >
             ☰ เครื่องมือ
@@ -1324,7 +1531,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                 setMobileToolsOpen(false);
                 generateAutoPlot();
               }}
-              disabled={isAutoPlotting}
+              disabled={isAutoPlotting || isSavingPlot}
               className={`pointer-events-auto h-11 px-4 rounded-full shadow-xl border font-black text-xs active:scale-95 ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 text-white border-indigo-700'}`}
             >
               {isAutoPlotting ? '⏳...' : '✨ Auto'}
@@ -1332,8 +1539,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           )}
 
           {plots.length > 0 && (
-            <div className="pointer-events-none ml-auto bg-white/95 backdrop-blur border border-amber-200 rounded-full shadow-lg px-3 h-11 flex items-center text-[10px] font-black text-amber-800 whitespace-nowrap">
-              🌾 {plots.length} แปลง • {formatThaiRai(plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0))}
+            <div className="min-w-0 overflow-hidden text-ellipsis pointer-events-none ml-auto bg-white/95 backdrop-blur border border-amber-200 rounded-full shadow-lg px-3 h-11 flex items-center text-[10px] font-black text-amber-800 whitespace-nowrap">
+              🌾 {plots.length} แปลง • {formatThaiRai(overallProgress.totalRai)}
             </div>
           )}
         </div>
@@ -1366,6 +1573,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                     setAutoFollow(false);
                     setEditingPlotIndex(null);
                     setDraftKind('manual');
+                    setHoleEditor(null);
+                    setDraftHistory([]);
+                    setExclusionPanelIndex(null);
                     setPoints([]);
                     setDrawMode(true);
                     setMobileToolsOpen(false);
@@ -1394,10 +1604,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                       setMobileToolsOpen(false);
                       generateAutoPlot();
                     }}
-                    disabled={isAutoPlotting}
+                    disabled={isAutoPlotting || isSavingPlot}
                     className={`col-span-2 rounded-xl py-2.5 px-3 font-black text-xs shadow-sm border ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 text-white border-indigo-700'}`}
                   >
-                    {isAutoPlotting ? '⏳ กำลังแยกหลายแปลง...' : '✨ วาดหลายแปลงออโต้'}
+                    {isAutoPlotting ? '⏳ กำลังแยกหลายแปลง...' : '✨ วาดแปลงออโต้'}
                   </button>
                 )}
               </div>
@@ -1412,7 +1622,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
                     <p className="font-black text-xs text-amber-800">🌾 แปลงที่บันทึก ({plots.length})</p>
-                    <p className="font-black text-xs text-gray-700">รวม {formatThaiRai(plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0))}</p>
+                    <p className="font-black text-xs text-gray-700">รวม {formatThaiRai(overallProgress.totalRai)}</p>
                   </div>
 
                   <div className="space-y-2">
@@ -1445,6 +1655,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                               >✕</button>
                             </div>
                           </div>
+                    <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openExclusionPanel(i)} className="mt-1 w-full py-1.5 rounded border border-red-200 bg-white text-red-700 text-[10px] font-bold disabled:opacity-40">🕳️ พื้นที่หัก {(plot.holes || []).length} วง{(plot.holeSuggestions || []).some(h => h.status === 'pending') ? ' • รอยืนยัน' : ''}</button>
                           <div className="mt-2 h-1.5 bg-white rounded-full overflow-hidden border border-blue-100">
                             <div className="h-full bg-blue-600 rounded-full" style={{ width: `${progress.percent}%` }} />
                           </div>
@@ -1498,7 +1709,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       )}
 
       {/* 📱 สถานะย่อบนมือถือ ไม่บังแผนที่ */}
-      {pathData.length > 0 && !drawMode && !mobileToolsOpen && (
+      {pathData.length > 0 && !drawMode && !mobileToolsOpen && exclusionPanelIndex === null && (
         <div
           className="sm:hidden absolute left-3 z-[410] bg-white/90 backdrop-blur rounded-full shadow-lg border border-gray-200 px-3 py-1.5 max-w-[calc(100%-5.5rem)]"
           style={{ bottom: 'calc(4.25rem + env(safe-area-inset-bottom))' }}
@@ -1514,53 +1725,26 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         </div>
       )}
 
-      {/* แผงวาดด้านล่าง */}
+      {/* Compact editor: real-time net area, movable vertices, undo and cancel. */}
       {drawMode && (
         <>
-          <div className="absolute top-16 sm:top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-3 sm:px-4 py-1.5 rounded-full shadow-lg border border-orange-300 pointer-events-none max-w-[92%]">
-            <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text} {draftKind !== 'manual' ? '• ลากจุดเพื่อแก้ขอบ' : ''}</span>
+          <div className="absolute top-3 left-3 right-16 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-[430] bg-white/95 backdrop-blur px-3 py-2 rounded-xl shadow-lg border border-orange-300 pointer-events-none sm:min-w-72 sm:max-w-[75%]">
+            <p className="font-black text-xs text-orange-800">{isHoleDraft ? '✂️ พื้นที่หัก' : '📏 ขอบแปลง'}{editingPlotIndex !== null ? ` • แปลง ${editingPlotIndex + 1}` : ''}</p>
+            <p aria-live="polite" className="text-xs font-bold text-green-800">สุทธิ: {currentArea.text}</p>
+            {currentArea.excludedText && <p className="text-[10px] text-red-700">หักรวม: {currentArea.excludedText}</p>}
+            <p className="text-[10px] text-gray-500">{canAddDraftPoints ? 'แตะรอบพื้นที่ • ลากจุดเพื่อปรับวง' : 'ลากจุดเพื่อปรับวง • แตะ + บนเส้นเพื่อเพิ่มมุม'}</p>
+            {draftError && <p role="alert" className="text-[10px] font-bold text-red-700">{draftError}</p>}
           </div>
-
-          <div className="absolute left-1/2 transform -translate-x-1/2 z-[460] flex items-center bg-white/95 backdrop-blur p-1.5 sm:p-2 rounded-full shadow-xl border border-gray-200 gap-1.5 sm:gap-2 pointer-events-auto max-w-[96%]" style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
-            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0 || draftKind !== 'manual'} className={`px-3 sm:px-4 py-2 rounded-full font-bold text-xs sm:text-sm transition ${points.length === 0 || draftKind !== 'manual' ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
-              ↩️ ย้อนกลับ
-            </button>
-            <button
-              onClick={async () => {
-                if (points.length < 3) return alert('ต้องมีอย่างน้อย 3 จุดขึ้นไปครับ');
-                const freshArea = areaFromPoints(points);
-                const freshCenter = centerFromPoints(points);
-                let nextPlots;
-
-                if (editingPlotIndex !== null) {
-                  nextPlots = plots.map((plot, idx) => idx === editingPlotIndex
-                    ? {
-                        ...plot,
-                        points,
-                        area: freshArea,
-                        center: freshCenter,
-                        updated_at: new Date().toISOString()
-                      }
-                    : plot
-                  );
-                } else {
-                  nextPlots = [...plots, {
-                    points,
-                    area: freshArea,
-                    center: freshCenter,
-                    source: draftKind === 'auto' ? 'AUTO_GPS' : 'MANUAL',
-                    head_width_m: draftKind === 'auto' ? headWidthMeters : undefined,
-                    created_at: new Date().toISOString()
-                  }];
-                }
-
-                const ok = await savePlotsToServer(nextPlots);
-                if (ok) exitPlotEditor();
-              }}
-              disabled={points.length < 3 || isSavingPlot || !vehicleId || !workDate}
-              className={`px-4 sm:px-6 py-2 rounded-full font-bold text-xs sm:text-sm transition shadow-md whitespace-nowrap ${points.length < 3 || isSavingPlot || !vehicleId || !workDate ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}
-            >
-              {isSavingPlot ? '⏳ บันทึก...' : (editingPlotIndex !== null ? '💾 บันทึกการแก้ไข' : '💾 บันทึกแปลง')}
+          {canAddDraftPoints && <div className="sm:hidden absolute inset-0 flex items-center justify-center pointer-events-none z-[410]"><span className="text-3xl text-red-600 font-light drop-shadow">＋</span></div>}
+          <div className="absolute left-2 right-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-[460] flex flex-wrap sm:flex-nowrap justify-center items-center bg-white/95 backdrop-blur p-2 rounded-2xl shadow-xl border border-gray-200 gap-1.5" style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+            <button onClick={cancelDraft} disabled={isSavingPlot} className="px-3 py-2.5 rounded-xl bg-red-50 text-red-700 font-bold text-xs disabled:opacity-40">ยกเลิก</button>
+            <button onClick={undoDraft} disabled={!draftHistory.length || isSavingPlot} className="px-3 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs disabled:opacity-40">↩ ย้อน</button>
+            {canAddDraftPoints && <button onClick={() => {
+              const center = mapInstance.current?.getCenter();
+              if (center) changeDraftPoints([...points, { lat: center.lat, lng: center.lng }]);
+            }} disabled={isSavingPlot} className="sm:hidden px-3 py-2.5 rounded-xl bg-blue-100 text-blue-800 font-bold text-xs disabled:opacity-40">+ จุด</button>}
+            <button onClick={saveDraft} disabled={points.length < 3 || !!draftError || isSavingPlot || !vehicleId || !workDate} className="px-3 sm:px-5 py-2.5 rounded-xl bg-green-600 text-white font-black text-xs whitespace-nowrap disabled:bg-gray-200 disabled:text-gray-400">
+              {isSavingPlot ? '⏳ บันทึก...' : isHoleDraft ? '✅ บันทึกหักพื้นที่' : '💾 บันทึกแปลง'}
             </button>
           </div>
         </>

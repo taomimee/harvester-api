@@ -7,6 +7,8 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors());
+// Editable GPS boundaries and reviewed exclusion rings share the existing JSON column.
+app.use('/api/plots', express.json({ limit: '2mb' }));
 app.use(express.json());
 
 // เชื่อมต่อฐานข้อมูล Supabase
@@ -757,6 +759,35 @@ setInterval(async () => {
 // 🌾 ระบบจัดการแปลงที่วาด (เก็บถาวร)
 // ==========================================
 
+// Validate ring structure without dropping hole metadata or changing legacy plots.
+// Geometry clipping/area use Turf in App.jsx; no extra backend package or SQL migration.
+const validatePlotsData = (plots) => {
+    if (!Array.isArray(plots) || plots.length > 200) return 'plots_data ต้องเป็น Array ไม่เกิน 200 แปลง';
+    const validRing = (points) => Array.isArray(points) && points.length >= 3 && points.length <= 2000 && points.every(p =>
+        p && p.lat != null && p.lng != null && p.lat !== '' && p.lng !== '' &&
+        ['number', 'string'].includes(typeof p.lat) && ['number', 'string'].includes(typeof p.lng) &&
+        Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)) &&
+        Math.abs(Number(p.lat)) <= 90 && Math.abs(Number(p.lng)) <= 180
+    );
+    for (let i = 0; i < plots.length; i++) {
+        const plot = plots[i];
+        if (!plot || !validRing(plot.points)) return `ขอบแปลง ${i + 1} ไม่ถูกต้อง (3–2000 จุด)`;
+        for (const field of ['holes', 'holeSuggestions']) {
+            if (plot[field] === undefined) continue; // Old saved plots have no holes.
+            if (!Array.isArray(plot[field]) || plot[field].length > 100) return `${field} ของแปลง ${i + 1} ต้องเป็น Array ไม่เกิน 100 วง`;
+            const ids = new Set();
+            for (const hole of plot[field]) {
+                if (!hole || typeof hole.id !== 'string' || !hole.id || hole.id.length > 120 || ids.has(hole.id) || !validRing(hole.points)) {
+                    return `วงพื้นที่หักของแปลง ${i + 1} ไม่ถูกต้อง`;
+                }
+                if (field === 'holeSuggestions' && !['pending', 'dismissed'].includes(hole.status)) return 'สถานะข้อเสนอพื้นที่หักไม่ถูกต้อง';
+                ids.add(hole.id);
+            }
+        }
+    }
+    return null;
+};
+
 // 💾 ดึงแปลงตามรถ + วันที่
 app.get('/api/plots/:vehicle_id', async (req, res) => {
     const { vehicle_id } = req.params;
@@ -784,7 +815,7 @@ app.get('/api/plots/:vehicle_id', async (req, res) => {
 });
 
 // 💾 บันทึกแบบปลอดภัย: ถ้ามีแถวเดิมให้อัปเดต ไม่ลบก่อน insert
-app.post('/api/plots', express.json(), async (req, res) => {
+app.post('/api/plots', async (req, res) => {
     const { vehicle_id, work_date, plots_data } = req.body;
     const numericVehicleId = Number(vehicle_id);
 
@@ -794,9 +825,8 @@ app.post('/api/plots', express.json(), async (req, res) => {
     if (!work_date || !/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {
         return res.status(400).json({ error: 'work_date ต้องเป็น YYYY-MM-DD' });
     }
-    if (!Array.isArray(plots_data)) {
-        return res.status(400).json({ error: 'plots_data ต้องเป็น Array' });
-    }
+    const validationError = validatePlotsData(plots_data);
+    if (validationError) return res.status(400).json({ error: validationError });
 
     try {
         const { data: existingRows, error: findError } = await supabase
