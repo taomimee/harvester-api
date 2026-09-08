@@ -227,7 +227,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
         duration: 1.5
       });
     }
-  }, [isFetchingGps, pathData]); 
+  }, [isFetchingGps]); // 👈 ลบ pathData ออกไปแล้ว
 
   // 4. ระบบจิ้มจอเพื่อเพิ่มจุด
   useEffect(() => {
