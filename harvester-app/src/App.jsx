@@ -151,7 +151,7 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
 }
 
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
-function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
+function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
@@ -469,7 +469,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
     };
   }, []);
 
-  // 2. วาดเส้นทาง: เขียว = กำลังเกี่ยว, น้ำเงิน = วิ่งทั่วไป
+  // 2. วาดเส้นทาง: ม่วงชมพู = กำลังเกี่ยว, น้ำเงิน = วิ่งทั่วไป
   useEffect(() => {
     if (!mapInstance.current) return;
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
@@ -488,7 +488,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
         const segment = getSegmentInfo(a, b);
         const harvesting = segment.harvesting;
         L.polyline([[aLat, aLng], [bLat, bLng]], {
-          color: harvesting ? '#16A34A' : '#2563EB',
+          color: harvesting ? '#D946EF' : '#2563EB',
           weight: harvesting ? 5 : 3,
           opacity: harvesting ? 0.95 : 0.65
         }).addTo(routeGroup);
@@ -522,6 +522,24 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
       markerLayer.current = markerGroup;
     }
   }, [pathData]);
+
+  // 🎯 เมื่อผู้ใช้กด "ค้นหาเส้นทาง" ให้พาไปหารถล่าสุด 1 ครั้ง
+  // Auto-refresh หลังจากนั้นจะอัปเดตข้อมูลอย่างเดียว ไม่แย่งกล้อง
+  useEffect(() => {
+    if (!focusRequest || pathData.length === 0 || !mapInstance.current) return;
+
+    const lastPoint = pathData[pathData.length - 1];
+    const lat = Number(lastPoint.latitude);
+    const lng = Number(lastPoint.longitude);
+
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      setAutoFollow(false);
+      mapInstance.current.flyTo([lat, lng], 17, {
+        animate: true,
+        duration: 0.9
+      });
+    }
+  }, [focusRequest]);
 
   // 3. ติดตามรถอัตโนมัติเมื่อข้อมูลใหม่เข้ามา
   useEffect(() => {
@@ -714,13 +732,13 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
               {trackingMode === 'realtime' ? (statusOnline ? '● ออนไลน์' : '● สัญญาณเงียบ') : '🕒 ประวัติ'}
             </span>
             <span>🛣️ {gpsStats.totalKm.toFixed(2)} กม.</span>
-            <span className="text-green-700">🌾 เกี่ยว {gpsStats.harvestKm.toFixed(2)} กม.</span>
+            <span className="text-fuchsia-700">🌾 เกี่ยว {gpsStats.harvestKm.toFixed(2)} กม.</span>
             <span>⏱️ {durationText}</span>
             <span>📡 {gpsStats.points.toLocaleString()} จุด</span>
           </div>
           <div className="mt-1 flex items-center gap-3 text-[9px] text-gray-500">
             <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-blue-600"></i> วิ่งทั่วไป</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-green-600"></i> กำลังเกี่ยว/ประเมิน</span>
+            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-fuchsia-500"></i> กำลังเกี่ยว/ประเมิน</span>
           </div>
         </div>
       )}
@@ -847,6 +865,7 @@ function App() {
   const [trackingDate, setTrackingDate] = useState(new Date().toISOString().slice(0, 10));
   const [gpsPathData, setGpsPathData] = useState([]);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
+  const [gpsFocusRequest, setGpsFocusRequest] = useState(0); // เพิ่มเมื่อกดค้นหา เพื่อพาแผนที่ไปหารถ 1 ครั้ง
 
   // วันที่อ้างอิงของ GPS/แปลง ใช้ค่าเดียวกันทั้งค้นหาเส้นทางและบันทึกแปลง
   const getLocalDateString = () => {
@@ -2123,8 +2142,12 @@ function App() {
                     const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
                     const data = await res.json();
                     
-                    if(data.length === 0) alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
-                    setGpsPathData(data);
+                    if(data.length === 0) {
+                      alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
+                    } else {
+                      setGpsPathData(data);
+                      setGpsFocusRequest(prev => prev + 1);
+                    }
                   } catch(e) { console.error(e); }
                   setIsFetchingGps(false);
                 }}
@@ -2157,6 +2180,7 @@ function App() {
                 vehicleId={trackingVehicleId}
                 workDate={effectiveTrackingDate}
                 trackingMode={trackingMode}
+                focusRequest={gpsFocusRequest}
                 isMapFullScreen={isMapFullScreen} 
                 setIsMapFullScreen={setIsMapFullScreen} 
                 isFetchingGps={isFetchingGps} 
