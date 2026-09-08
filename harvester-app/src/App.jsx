@@ -226,6 +226,8 @@ function App() {
   const [customersList, setCustomersList] = useState([])
   const [weatherData, setWeatherData] = useState(null);
   const [weatherLocationName, setWeatherLocationName] = useState('กำลังค้นหาพิกัด...');
+  const [isMapFullScreen, setIsMapFullScreen] = useState(false);
+
 
   // 📸 State สำหรับระบบแกลเลอรี่รูปภาพ
   const [jobAttachments, setJobAttachments] = useState([]); // เก็บรูปของงานที่กำลังกดดู
@@ -1507,7 +1509,7 @@ function App() {
 
         {/* 👇 วางหน้าจอ GPS ตรงนี้ 👇 */}
         {activeTab === 'gps' && (
-          <div className="bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[75vh]">
+          <div className={isMapFullScreen ? "fixed inset-0 z-[500] bg-white flex flex-col" : "bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[75vh]"}>
             
             {/* แผงควบคุมด้านบน */}
             <div className="p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm">
@@ -1555,7 +1557,6 @@ function App() {
                   if(!trackingVehicleId) return alert('กรุณาเลือกรถเกี่ยวครับ');
                   setIsFetchingGps(true);
                   try {
-                    // 💡 แก้บั๊ก Timezone: ถ้าเป็น Realtime บังคับสร้างวันที่ปัจจุบัน (เวลาไทย) ส่งไปเลย
                     let dateToSend = trackingDate;
                     if (trackingMode === 'realtime') {
                       const now = new Date();
@@ -1563,7 +1564,6 @@ function App() {
                       dateToSend = now.toISOString().slice(0, 10);
                     }
                     
-                    // บังคับแนบ ?date= ไปที่ API เสมอ เพื่อให้หลังบ้านใช้สูตร +07:00 ที่เราเขียนไว้
                     const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
                     const data = await res.json();
                     
@@ -1578,11 +1578,10 @@ function App() {
               </button>
             </div>
 
-            {/* แผงบอกสถานะ (ย้ายออกมาจัดเรียงด้านบน ไม่ให้ลอยบังแผนที่บนมือถือ) */}
+            {/* แผงบอกสถานะ */}
             {gpsPathData.length > 0 && (
               <div className="bg-white border-b border-gray-200 p-3 z-10 shadow-sm">
                  
-                 {/* ส่วนที่ 1: เวลาล่าสุด + ปุ่มนำทางด่วน */}
                  <div className="flex justify-between items-start">
                     <div>
                        <p className="text-xs text-gray-500 mb-0.5">ข้อมูลจุดล่าสุด (เวลา):</p>
@@ -1598,7 +1597,6 @@ function App() {
                     </button>
                  </div>
                  
-                 {/* ส่วนที่ 2: โชว์พิกัด + ปุ่มคัดลอก */}
                  <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between items-center">
                     <div>
                       <p className="text-xs text-gray-500">พิกัด GPS (Lat, Lon):</p>
@@ -1617,42 +1615,51 @@ function App() {
                     </button>
                  </div>
 
-                 // ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ
-                    {gpsPathData.length >= 3 && (
-                      <div className="mt-2 pt-2 border-t border-green-100 bg-green-50/50 -mx-3 -mb-3 p-3 flex justify-between items-center">
-                          <p className="text-xs text-green-700 font-bold">📐 พื้นที่วิ่งงานโดยประมาณ:</p>
-                          <p className="font-bold text-green-700 text-sm bg-green-200/50 px-2 py-1 rounded-md">
-                            {(() => {
-                              try {
-                                // 💡 พระเอกอยู่ตรงนี้: กรองเอาเฉพาะพิกัดที่รถ "วิ่งคลาน" ในแปลงมาคิดพื้นที่
-                                const harvestPoints = gpsPathData.filter(p => p.is_harvesting === true);
+                 {/* ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ (แบบอัจฉริยะ) */}
+                 {gpsPathData.length >= 3 && (
+                   <div className="mt-2 pt-2 border-t border-green-100 bg-green-50/50 -mx-3 -mb-3 p-3 flex justify-between items-center">
+                      <p className="text-xs text-green-700 font-bold">📐 พื้นที่วิ่งงานโดยประมาณ:</p>
+                      <p className="font-bold text-green-700 text-sm bg-green-200/50 px-2 py-1 rounded-md">
+                        {(() => {
+                           try {
+                             const harvestPoints = gpsPathData.filter(p => p.is_harvesting === true);
 
-                                // ถ้าจุดที่วิ่งในแปลงมีน้อยกว่า 3 จุด (เพิ่งลงแปลง) ให้แสดงข้อความรอก่อน
-                                if (harvestPoints.length < 3) return 'กำลังรวบรวมข้อมูลลงแปลง...';
+                             if (harvestPoints.length < 3) return 'กำลังรวบรวมข้อมูลลงแปลง...';
 
-                                // โยนพิกัดที่กรองแล้วเข้า Turf.js เพื่อสร้างพื้นที่
-                                const turfPoints = turf.featureCollection(harvestPoints.map(p => turf.point([p.longitude, p.latitude])));
-                                const hull = turf.convex(turfPoints);
+                             const turfPoints = turf.featureCollection(harvestPoints.map(p => turf.point([p.longitude, p.latitude])));
+                             const hull = turf.convex(turfPoints);
 
-                                if (!hull) return 'กำลังประมวลผล...';
-                                const sqM = turf.area(hull);
-                                const rai = Math.floor(sqM / 1600);
-                                const ngan = Math.floor((sqM % 1600) / 400);
-                                const sqWah = ((sqM % 400) / 4).toFixed(1);
-                                return `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`;
-                              } catch (e) {
-                                return 'กำลังคำนวณ...';
-                              }
-                            })()}
-                          </p>
-                      </div>
-                    )}
+                             if (!hull) return 'กำลังประมวลผล...';
+                             const sqM = turf.area(hull);
+                             const rai = Math.floor(sqM / 1600);
+                             const ngan = Math.floor((sqM % 1600) / 400);
+                             const sqWah = ((sqM % 400) / 4).toFixed(1);
+                             return `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`;
+                           } catch (e) {
+                             return 'กำลังคำนวณ...';
+                           }
+                        })()}
+                      </p>
+                   </div>
+                 )}
 
               </div>
             )}
 
             {/* ส่วนแสดงแผนที่ */}
             <div className="flex-1 relative bg-gray-200 min-h-[300px]">
+              
+              {/* 👇 ปุ่มขยายเต็มจอ 👇 */}
+              <button 
+                onClick={() => {
+                  setIsMapFullScreen(!isMapFullScreen);
+                  setTimeout(() => window.dispatchEvent(new Event('resize')), 300);
+                }}
+                className="absolute top-4 right-4 z-[400] bg-white text-gray-800 px-3 py-2 rounded-lg shadow-lg border border-gray-300 font-bold text-xs hover:bg-gray-100 transition flex items-center gap-1"
+              >
+                {isMapFullScreen ? '↙️ ย่อหน้าจอ' : '🔲 ขยายเต็มจอ'}
+              </button>
+
               <TrackingMap pathData={gpsPathData} />
               
               {/* ข้อความแจ้งเตือนตอนยังไม่มีข้อมูล */}
