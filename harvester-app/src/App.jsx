@@ -150,7 +150,7 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
-// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw) + เด้งซูม + จำแปลงได้ 7 วัน
+// 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
 function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -166,7 +166,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
   const [currentArea, setCurrentArea] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
   const [isSavingPlot, setIsSavingPlot] = useState(false);
   const [plotSyncStatus, setPlotSyncStatus] = useState('');
-  const [autoFollow, setAutoFollow] = useState(true);
+  const [autoFollow, setAutoFollow] = useState(false);
 
   const calculateThaiArea = (sqMeters) => {
     const rai = Math.floor(sqMeters / 1600);
@@ -334,6 +334,54 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
     return () => controller.abort();
   }, [vehicleId, workDate]);
 
+  // 🧠 วิเคราะห์แต่ละช่วงทาง: ใช้ธงจาก server ก่อน และมี fallback คำนวณความเร็วจากระยะ/เวลา
+  // ช่วยแยกช่วงเกี่ยวได้แม้ ST-901 บางจุดรายงาน speed=0 หรือข้อมูลเก่า is_harvesting=false
+  const getSegmentInfo = (a, b) => {
+    const aLat = Number(a?.latitude), aLng = Number(a?.longitude);
+    const bLat = Number(b?.latitude), bLng = Number(b?.longitude);
+
+    if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) {
+      return { km: 0, harvesting: false, inferredSpeedKmh: null };
+    }
+
+    const km = turf.distance(
+      turf.point([aLng, aLat]),
+      turf.point([bLng, bLat]),
+      { units: 'kilometers' }
+    );
+
+    if (!Number.isFinite(km) || km >= 5) {
+      return { km: 0, harvesting: false, inferredSpeedKmh: null };
+    }
+
+    const explicitHarvesting =
+      b?.is_harvesting === true || String(b?.is_harvesting).toLowerCase() === 'true';
+
+    let inferredSpeedKmh = null;
+    let inferredHarvesting = false;
+
+    const aTime = a?.created_at ? new Date(a.created_at).getTime() : NaN;
+    const bTime = b?.created_at ? new Date(b.created_at).getTime() : NaN;
+    const dtSec = (bTime - aTime) / 1000;
+
+    if (Number.isFinite(dtSec) && dtSec > 0 && dtSec <= 180) {
+      inferredSpeedKmh = km / (dtSec / 3600);
+      const movedMeters = km * 1000;
+
+      inferredHarvesting =
+        movedMeters >= 1.5 &&
+        movedMeters <= 250 &&
+        inferredSpeedKmh >= 0.4 &&
+        inferredSpeedKmh <= 15;
+    }
+
+    return {
+      km,
+      harvesting: explicitHarvesting || inferredHarvesting,
+      inferredSpeedKmh
+    };
+  };
+
   // สถิติ GPS จากข้อมูลที่มีอยู่ โดยไม่ต้องเพิ่มคอลัมน์ในฐานข้อมูล
   const gpsStats = (() => {
     let totalKm = 0;
@@ -342,18 +390,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
     for (let i = 1; i < pathData.length; i++) {
       const a = pathData[i - 1];
       const b = pathData[i];
-      const aLat = Number(a.latitude), aLng = Number(a.longitude);
-      const bLat = Number(b.latitude), bLng = Number(b.longitude);
-      if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
-
-      const km = turf.distance(
-        turf.point([aLng, aLat]),
-        turf.point([bLng, bLat]),
-        { units: 'kilometers' }
-      );
-      if (Number.isFinite(km) && km < 5) { // ตัด GPS กระโดดผิดปกติแบบหยาบ
-        totalKm += km;
-        if (b.is_harvesting === true || String(b.is_harvesting) === 'true') harvestKm += km;
+      const segment = getSegmentInfo(a, b);
+      if (segment.km > 0) {
+        totalKm += segment.km;
+        if (segment.harvesting) harvestKm += segment.km;
       }
     }
 
@@ -374,6 +414,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
   })();
 
   const fitAllRoute = () => {
+    setAutoFollow(false); // ผู้ใช้กำลังดูภาพรวม ห้ามรีเฟรชแล้วดึงกล้องกลับไปที่รถ
     if (!mapInstance.current || pathData.length === 0) return;
     const latlngs = pathData
       .map(p => [Number(p.latitude), Number(p.longitude)])
@@ -406,6 +447,28 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
     };
   }, []);
 
+  // ผู้ใช้ลาก/แตะแผนที่เอง = กำลังสำรวจตำแหน่งอื่น
+  // Auto-refresh ยังดึงข้อมูลต่อ แต่กล้องจะไม่เด้งกลับจนกว่าจะกดเปิดตามรถใหม่
+  useEffect(() => {
+    if (!mapInstance.current) return;
+
+    const map = mapInstance.current;
+    const container = map.getContainer();
+    const pauseAutoFollow = () => setAutoFollow(false);
+
+    map.on('dragstart', pauseAutoFollow);
+    map.on('click', pauseAutoFollow);
+    container.addEventListener('wheel', pauseAutoFollow, { passive: true });
+    container.addEventListener('touchstart', pauseAutoFollow, { passive: true });
+
+    return () => {
+      map.off('dragstart', pauseAutoFollow);
+      map.off('click', pauseAutoFollow);
+      container.removeEventListener('wheel', pauseAutoFollow);
+      container.removeEventListener('touchstart', pauseAutoFollow);
+    };
+  }, []);
+
   // 2. วาดเส้นทาง: เขียว = กำลังเกี่ยว, น้ำเงิน = วิ่งทั่วไป
   useEffect(() => {
     if (!mapInstance.current) return;
@@ -422,7 +485,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
         const aLat = Number(a.latitude), aLng = Number(a.longitude);
         const bLat = Number(b.latitude), bLng = Number(b.longitude);
         if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
-        const harvesting = b.is_harvesting === true || String(b.is_harvesting) === 'true';
+        const segment = getSegmentInfo(a, b);
+        const harvesting = segment.harvesting;
         L.polyline([[aLat, aLng], [bLat, bLng]], {
           color: harvesting ? '#16A34A' : '#2563EB',
           weight: harvesting ? 5 : 3,
@@ -596,7 +660,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
             </button>
             {trackingMode === 'realtime' && (
               <button onClick={() => setAutoFollow(v => !v)} className={`px-3 py-2 rounded-lg shadow-lg border font-bold text-xs transition ${autoFollow ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-gray-700 border-gray-300'}`}>
-                {autoFollow ? '🎯 ตามรถ: เปิด' : '🎯 ตามรถ: ปิด'}
+                {autoFollow ? '🎯 ตามรถ: เปิด' : '🖐️ ดูแผนที่อิสระ'}
               </button>
             )}
           </>
@@ -606,7 +670,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
       {/* เครื่องมือวาด + รายการแปลง */}
       <div className="absolute top-4 left-4 z-[400] flex flex-col gap-2 pointer-events-none">
         <button
-          onClick={() => setDrawMode(!drawMode)}
+          onClick={() => {
+            setAutoFollow(false);
+            setDrawMode(!drawMode);
+          }}
           className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-bold text-xs border transition flex items-center gap-1 w-max ${drawMode ? 'bg-red-500 hover:bg-red-600 text-white border-red-600' : 'bg-white hover:bg-gray-50 text-gray-800 border-gray-300'}`}
         >
           {drawMode ? '❌ ปิดโหมดวาด' : '📏 วาดแปลง'}
@@ -653,7 +720,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, isMapFullScr
           </div>
           <div className="mt-1 flex items-center gap-3 text-[9px] text-gray-500">
             <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-blue-600"></i> วิ่งทั่วไป</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-green-600"></i> กำลังเกี่ยว</span>
+            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-green-600"></i> กำลังเกี่ยว/ประเมิน</span>
           </div>
         </div>
       )}

@@ -864,6 +864,22 @@ function convertToDecimal(raw, dir) {
 
 const GPS_PORT = 5000;
 
+// 🧠 จำจุดล่าสุดของรถไว้ใน RAM เพื่อช่วยประเมินความเร็วจริงจากระยะทาง
+// มีประโยชน์กับ ST-901 ที่บางครั้งรายงาน speed=0 ตอนรถคลานช้าในแปลง
+const lastGpsByVehicle = new Map();
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+    const toRad = (v) => (Number(v) * Math.PI) / 180;
+    const R = 6371;
+    const dLat = toRad(Number(lat2) - Number(lat1));
+    const dLon = toRad(Number(lon2) - Number(lon1));
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 const gpsServer = net.createServer((socket) => {
     console.log('📡 มีการเชื่อมต่อเข้ามาที่ Port GPS!');
 
@@ -887,21 +903,50 @@ const gpsServer = net.createServer((socket) => {
                 const speedKnots = parseFloat(parts[8]) || 0;
                 const speedKmH = speedKnots * 1.852; 
 
-                // 💡 2. ให้ระบบคิดเองว่าเป็นตอน "กำลังเกี่ยว" หรือไม่ (ความเร็ว 1 ถึง 15 กม./ชม.)
-                // ถ้ารถวิ่งบนถนน (ความเร็วเกิน 15) หรือจอดนิ่ง (ความเร็ว 0) สถานะนี้จะเป็น false
-                const isHarvesting = speedKmH >= 1 && speedKmH <= 15;
-
                 if (status === 'A') {
-                    const lat = convertToDecimal(latRaw, latDir);
-                    const lon = convertToDecimal(lonRaw, lonDir);
-                    
-                    console.log(`📍 ถอดรหัสพิกัดได้: Lat ${lat}, Lon ${lon} | 🚀 ความเร็ว: ${speedKmH.toFixed(2)} กม./ชม. | 🌾 กำลังเกี่ยว: ${isHarvesting}`);
+                    const lat = Number(convertToDecimal(latRaw, latDir));
+                    const lon = Number(convertToDecimal(lonRaw, lonDir));
+                    const vehicleId = 1; // TODO V3: ผูก IMEI -> vehicle_id อัตโนมัติ
+
+                    // 💡 วิเคราะห์กำลังเกี่ยว 2 ชั้น
+                    // 1) ความเร็วจากกล่อง
+                    const byDeviceSpeed = speedKmH >= 0.4 && speedKmH <= 15;
+
+                    // 2) ถ้ากล่องรายงาน 0 ให้คำนวณจากระยะ GPS / เวลาจริง
+                    const nowMs = Date.now();
+                    const prev = lastGpsByVehicle.get(vehicleId);
+                    let inferredSpeedKmH = null;
+                    let byMovement = false;
+
+                    if (prev) {
+                        const dtSec = (nowMs - prev.at) / 1000;
+                        const km = haversineKm(prev.lat, prev.lon, lat, lon);
+
+                        if (dtSec > 0 && dtSec <= 180 && Number.isFinite(km) && km < 0.25) {
+                            inferredSpeedKmH = km / (dtSec / 3600);
+                            const movedMeters = km * 1000;
+                            byMovement =
+                                movedMeters >= 1.5 &&
+                                inferredSpeedKmH >= 0.4 &&
+                                inferredSpeedKmH <= 15;
+                        }
+                    }
+
+                    const isHarvesting = byDeviceSpeed || byMovement;
+                    lastGpsByVehicle.set(vehicleId, { lat, lon, at: nowMs });
+
+                    console.log(
+                        `📍 Lat ${lat}, Lon ${lon}` +
+                        ` | 🚀 กล่อง: ${speedKmH.toFixed(2)} กม./ชม.` +
+                        ` | 🧭 คำนวณ: ${inferredSpeedKmH === null ? '-' : inferredSpeedKmH.toFixed(2)} กม./ชม.` +
+                        ` | 🌾 กำลังเกี่ยว: ${isHarvesting}`
+                    );
 
                     // โยนข้อมูลเข้า Database Supabase ของเรา
                     try {
                         // 💡 สมมติให้กล่องนี้เป็นของรถ "คันที่ 1" (vehicle_id: 1) ในช่วงทดสอบ
                         const { error } = await supabase.from('gps_logs').insert([{
-                            vehicle_id: 1, 
+                            vehicle_id: vehicleId,
                             latitude: lat,
                             longitude: lon,
                             is_harvesting: isHarvesting // 👈 บันทึกความฉลาด (true/false) ลงฐานข้อมูล
