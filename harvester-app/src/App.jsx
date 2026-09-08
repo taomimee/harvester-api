@@ -179,6 +179,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const [editingPlotIndex, setEditingPlotIndex] = useState(null);
   const [draftKind, setDraftKind] = useState('manual'); // manual | auto | edit
   const [isAutoPlotting, setIsAutoPlotting] = useState(false);
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false); // 📱 แผงเครื่องมือบนมือถือ
 
   const calculateThaiArea = (sqMeters) => {
     const rai = Math.floor(sqMeters / 1600);
@@ -1120,7 +1121,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       <div ref={mapRef} className="flex-1 w-full z-0" />
 
       {/* ปุ่มควบคุมด้านขวา */}
-      <div className="absolute top-4 right-4 z-[400] flex flex-col gap-2 items-end">
+      <div className="absolute top-4 right-4 z-[400] hidden sm:flex flex-col gap-2 items-end">
         <button
           onClick={() => {
             setIsMapFullScreen(!isMapFullScreen);
@@ -1145,8 +1146,42 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         )}
       </div>
 
+      {/* 📱 ปุ่มลอยบนมือถือ: เหลือเฉพาะสิ่งที่ใช้บ่อย เพื่อไม่บังแผนที่ */}
+      <div className="sm:hidden absolute top-3 right-3 z-[430] flex flex-col gap-2 items-end">
+        <button
+          onClick={() => {
+            setIsMapFullScreen(!isMapFullScreen);
+            setTimeout(() => mapInstance.current?.invalidateSize(), 300);
+          }}
+          className="w-11 h-11 rounded-full bg-white/95 backdrop-blur shadow-lg border border-gray-200 text-lg flex items-center justify-center active:scale-95"
+          title={isMapFullScreen ? 'ย่อแผนที่' : 'ขยายแผนที่'}
+        >
+          {isMapFullScreen ? '↙️' : '⛶'}
+        </button>
+
+        {pathData.length > 0 && (
+          <button
+            onClick={fitAllRoute}
+            className="w-11 h-11 rounded-full bg-white/95 backdrop-blur shadow-lg border border-blue-200 text-lg flex items-center justify-center active:scale-95"
+            title="ดูเส้นทางทั้งหมด"
+          >
+            🗺️
+          </button>
+        )}
+
+        {pathData.length > 0 && trackingMode === 'realtime' && (
+          <button
+            onClick={() => setAutoFollow(v => !v)}
+            className={`w-11 h-11 rounded-full shadow-lg border text-lg flex items-center justify-center active:scale-95 ${autoFollow ? 'bg-blue-600 text-white border-blue-700' : 'bg-white/95 text-gray-800 border-gray-200'}`}
+            title={autoFollow ? 'กำลังตามรถ' : 'ตามรถ'}
+          >
+            🎯
+          </button>
+        )}
+      </div>
+
       {/* เครื่องมือวาด + รายการแปลง */}
-      <div className="absolute top-4 left-4 z-[400] flex flex-col gap-2 pointer-events-none">
+      <div className="absolute top-4 left-4 z-[400] hidden sm:flex flex-col gap-2 pointer-events-none">
         <button
           onClick={() => {
             setAutoFollow(false);
@@ -1258,9 +1293,181 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         )}
       </div>
 
+      {/* 📱 แถบเครื่องมือย่อด้านล่างบนมือถือ */}
+      {!drawMode && (
+        <div
+          className="sm:hidden absolute left-3 right-3 z-[430] flex items-center gap-2 pointer-events-none"
+          style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+        >
+          <button
+            onClick={() => setMobileToolsOpen(v => !v)}
+            className={`pointer-events-auto h-11 px-4 rounded-full shadow-xl border font-black text-xs flex items-center gap-1.5 active:scale-95 ${mobileToolsOpen ? 'bg-gray-900 text-white border-gray-900' : 'bg-white/95 text-gray-800 border-gray-200'}`}
+          >
+            ☰ เครื่องมือ
+          </button>
+
+          {pathData.length > 0 && (
+            <button
+              onClick={() => {
+                setMobileToolsOpen(false);
+                generateAutoPlot();
+              }}
+              disabled={isAutoPlotting}
+              className={`pointer-events-auto h-11 px-4 rounded-full shadow-xl border font-black text-xs active:scale-95 ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 text-white border-indigo-700'}`}
+            >
+              {isAutoPlotting ? '⏳...' : '✨ Auto'}
+            </button>
+          )}
+
+          {plots.length > 0 && (
+            <div className="pointer-events-none ml-auto bg-white/95 backdrop-blur border border-amber-200 rounded-full shadow-lg px-3 h-11 flex items-center text-[10px] font-black text-amber-800 whitespace-nowrap">
+              🌾 {plots.length} แปลง • {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 📱 Bottom sheet เครื่องมือ — เปิดเฉพาะเมื่อผู้ใช้ต้องการ */}
+      {mobileToolsOpen && !drawMode && (
+        <>
+          <button
+            aria-label="ปิดเครื่องมือ"
+            onClick={() => setMobileToolsOpen(false)}
+            className="sm:hidden absolute inset-0 z-[435] bg-black/10"
+          />
+          <div
+            className="sm:hidden absolute left-2 right-2 z-[450] bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-gray-200 overflow-hidden"
+            style={{ bottom: 'calc(4.25rem + env(safe-area-inset-bottom))', maxHeight: '68%' }}
+          >
+            <div className="px-3 py-2.5 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white z-10">
+              <div>
+                <p className="font-black text-sm text-gray-800">🛠️ เครื่องมือแผนที่</p>
+                <p className="text-[9px] text-gray-500">เปิดเฉพาะตอนใช้งาน แผนที่จะได้ไม่โดนบัง</p>
+              </div>
+              <button onClick={() => setMobileToolsOpen(false)} className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 font-black">✕</button>
+            </div>
+
+            <div className="p-3 overflow-y-auto" style={{ maxHeight: 'calc(68dvh - 3.25rem)' }}>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    setAutoFollow(false);
+                    setEditingPlotIndex(null);
+                    setDraftKind('manual');
+                    setPoints([]);
+                    setDrawMode(true);
+                    setMobileToolsOpen(false);
+                  }}
+                  className="bg-white border border-gray-300 rounded-xl py-2.5 px-2 font-black text-xs text-gray-800 shadow-sm"
+                >
+                  📏 วาดแปลงมือ
+                </button>
+
+                <button
+                  onClick={() => {
+                    const value = window.prompt('ความกว้างหัวเกี่ยว (เมตร)', String(headWidthMeters));
+                    if (value === null) return;
+                    const n = Number(value);
+                    if (!Number.isFinite(n) || n < 1 || n > 15) return alert('กรุณาใส่ความกว้าง 1 - 15 เมตรครับ');
+                    setHeadWidthMeters(n);
+                  }}
+                  className="bg-amber-50 border border-amber-300 rounded-xl py-2.5 px-2 font-black text-xs text-amber-800 shadow-sm"
+                >
+                  ⚙️ หัวเกี่ยว {headWidthMeters.toFixed(1)} ม.
+                </button>
+
+                {pathData.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setMobileToolsOpen(false);
+                      generateAutoPlot();
+                    }}
+                    disabled={isAutoPlotting}
+                    className={`col-span-2 rounded-xl py-2.5 px-3 font-black text-xs shadow-sm border ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 text-white border-indigo-700'}`}
+                  >
+                    {isAutoPlotting ? '⏳ กำลังแยกหลายแปลง...' : '✨ วาดหลายแปลงออโต้'}
+                  </button>
+                )}
+              </div>
+
+              {plotSyncStatus && (
+                <div className="mt-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-[10px] font-bold text-gray-600">
+                  {plotSyncStatus}
+                </div>
+              )}
+
+              {plots.length > 0 && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-black text-xs text-amber-800">🌾 แปลงที่บันทึก ({plots.length})</p>
+                    <p className="font-black text-xs text-gray-700">รวม {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    {plots.map((plot, i) => {
+                      const progress = plotProgressList[i] || { percent: 0, coveredRai: 0, totalRai: Number(plot.area?.rawRai || 0) };
+                      const center = plot.center || centerFromPoints(plot.points);
+                      const centerText = center ? (center.text || `${Number(center.lat).toFixed(6)}, ${Number(center.lng).toFixed(6)}`) : '';
+                      return (
+                        <div key={`mobile-plot-${i}`} className="bg-amber-50 border border-amber-100 rounded-xl p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="font-black text-xs text-amber-800">แปลง {i + 1} <span className="text-blue-700">• {progress.percent.toFixed(0)}%</span></p>
+                              <p className="text-[9px] font-bold text-gray-500">{Number(plot.area?.rawRai || progress.totalRai || 0).toFixed(2)} ไร่ • เกี่ยว ~{progress.coveredRai.toFixed(2)} ไร่</p>
+                            </div>
+                            <div className="flex gap-1">
+                              <button
+                                disabled={isSavingPlot}
+                                onClick={() => {
+                                  openPlotEditor(i);
+                                  setMobileToolsOpen(false);
+                                }}
+                                className="w-9 h-9 rounded-lg bg-blue-100 text-blue-700 font-black disabled:opacity-40"
+                                title="แก้ไขขอบแปลง"
+                              >✏️</button>
+                              <button
+                                disabled={isSavingPlot}
+                                onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))}
+                                className="w-9 h-9 rounded-lg bg-red-100 text-red-600 font-black disabled:opacity-40"
+                                title="ลบแปลง"
+                              >✕</button>
+                            </div>
+                          </div>
+                          <div className="mt-2 h-1.5 bg-white rounded-full overflow-hidden border border-blue-100">
+                            <div className="h-full bg-blue-600 rounded-full" style={{ width: `${progress.percent}%` }} />
+                          </div>
+                          {center && (
+                            <button
+                              onClick={() => copyPlotCenter({ ...center, text: centerText })}
+                              className="mt-2 w-full text-left bg-white border border-sky-100 rounded-lg px-2 py-1.5 text-[9px] font-black text-sky-700"
+                            >
+                              📍 {centerText} <span className="float-right">📋</span>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-3 bg-blue-50 border border-blue-100 rounded-xl p-2.5">
+                    <div className="flex items-center justify-between text-xs font-black">
+                      <span className="text-blue-900">📈 ความคืบหน้ารวม</span>
+                      <span className="text-blue-700">{overallProgress.percent.toFixed(0)}%</span>
+                    </div>
+                    <div className="mt-1.5 h-2 bg-white rounded-full overflow-hidden border border-blue-100">
+                      <div className="h-full bg-blue-600 rounded-full" style={{ width: `${overallProgress.percent}%` }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
       {/* GPS mini dashboard */}
       {pathData.length > 0 && !drawMode && (
-        <div className="absolute bottom-4 left-4 z-[390] bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-200 p-2.5 max-w-[calc(100%-90px)]">
+        <div className="hidden sm:block absolute bottom-4 left-4 z-[390] bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-200 p-2.5 max-w-[calc(100%-90px)]">
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold text-gray-700">
             <span className={trackingMode === 'realtime' ? (statusOnline ? 'text-green-600' : 'text-orange-600') : 'text-purple-600'}>
               {trackingMode === 'realtime' ? (statusOnline ? '● ออนไลน์' : '● สัญญาณเงียบ') : '🕒 ประวัติ'}
@@ -1278,15 +1485,32 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         </div>
       )}
 
+      {/* 📱 สถานะย่อบนมือถือ ไม่บังแผนที่ */}
+      {pathData.length > 0 && !drawMode && !mobileToolsOpen && (
+        <div
+          className="sm:hidden absolute left-3 z-[410] bg-white/90 backdrop-blur rounded-full shadow-lg border border-gray-200 px-3 py-1.5 max-w-[calc(100%-5.5rem)]"
+          style={{ bottom: 'calc(4.25rem + env(safe-area-inset-bottom))' }}
+        >
+          <div className="flex items-center gap-2 text-[9px] font-black text-gray-700 whitespace-nowrap overflow-hidden">
+            <span className={trackingMode === 'realtime' ? (statusOnline ? 'text-green-600' : 'text-orange-600') : 'text-purple-600'}>
+              {trackingMode === 'realtime' ? (statusOnline ? '● Online' : '● เงียบ') : '🕒 ประวัติ'}
+            </span>
+            <span>🛣️ {gpsStats.totalKm.toFixed(2)}กม.</span>
+            <span className="text-blue-700">🌾 {gpsStats.harvestKm.toFixed(2)}กม.</span>
+            {plots.length > 0 && <span className="text-blue-700">📈 {overallProgress.percent.toFixed(0)}%</span>}
+          </div>
+        </div>
+      )}
+
       {/* แผงวาดด้านล่าง */}
       {drawMode && (
         <>
-          <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-4 py-1.5 rounded-full shadow-lg border border-orange-300 pointer-events-none">
+          <div className="absolute top-16 sm:top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-3 sm:px-4 py-1.5 rounded-full shadow-lg border border-orange-300 pointer-events-none max-w-[92%]">
             <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text} {draftKind !== 'manual' ? '• ลากจุดเพื่อแก้ขอบ' : ''}</span>
           </div>
 
-          <div className="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[400] flex items-center bg-white/90 backdrop-blur p-2 rounded-full shadow-xl border border-gray-200 gap-2 pointer-events-auto">
-            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0 || draftKind !== 'manual'} className={`px-4 py-2 rounded-full font-bold text-sm transition ${points.length === 0 || draftKind !== 'manual' ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
+          <div className="absolute left-1/2 transform -translate-x-1/2 z-[460] flex items-center bg-white/95 backdrop-blur p-1.5 sm:p-2 rounded-full shadow-xl border border-gray-200 gap-1.5 sm:gap-2 pointer-events-auto max-w-[96%]" style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0 || draftKind !== 'manual'} className={`px-3 sm:px-4 py-2 rounded-full font-bold text-xs sm:text-sm transition ${points.length === 0 || draftKind !== 'manual' ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
               ↩️ ย้อนกลับ
             </button>
             <button
@@ -1322,7 +1546,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                 if (ok) exitPlotEditor();
               }}
               disabled={points.length < 3 || isSavingPlot || !vehicleId || !workDate}
-              className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 || isSavingPlot || !vehicleId || !workDate ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}
+              className={`px-4 sm:px-6 py-2 rounded-full font-bold text-xs sm:text-sm transition shadow-md whitespace-nowrap ${points.length < 3 || isSavingPlot || !vehicleId || !workDate ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}
             >
               {isSavingPlot ? '⏳ บันทึก...' : (editingPlotIndex !== null ? '💾 บันทึกการแก้ไข' : '💾 บันทึกแปลง')}
             </button>
@@ -1425,6 +1649,7 @@ function App() {
   const [gpsPathData, setGpsPathData] = useState([]);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
   const [gpsFocusRequest, setGpsFocusRequest] = useState(0); // เพิ่มเมื่อกดค้นหา เพื่อพาแผนที่ไปหารถ 1 ครั้ง
+  const [showGpsMobilePanel, setShowGpsMobilePanel] = useState(false); // 📱 ตั้งค่าค้นหา GPS แบบ bottom sheet
 
   // วันที่อ้างอิงของ GPS/แปลง ใช้ค่าเดียวกันทั้งค้นหาเส้นทางและบันทึกแปลง
   const getLocalDateString = () => {
@@ -1433,6 +1658,36 @@ function App() {
     return now.toISOString().slice(0, 10);
   };
   const effectiveTrackingDate = trackingMode === 'realtime' ? getLocalDateString() : trackingDate;
+
+  // 🔍 ใช้ฟังก์ชันเดียวกันทั้งคอมและมือถือ
+  const searchGpsRoute = async () => {
+    if (!trackingVehicleId) {
+      alert('กรุณาเลือกรถเกี่ยวครับ');
+      return false;
+    }
+
+    setIsFetchingGps(true);
+    try {
+      const dateToSend = effectiveTrackingDate;
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
+      const data = await res.json();
+
+      if (!Array.isArray(data) || data.length === 0) {
+        alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
+        return false;
+      }
+
+      setGpsPathData(data);
+      setGpsFocusRequest(prev => prev + 1);
+      return true;
+    } catch (e) {
+      console.error(e);
+      alert('ดึงข้อมูล GPS ไม่สำเร็จครับ');
+      return false;
+    } finally {
+      setIsFetchingGps(false);
+    }
+  };
   // 👆 จบการวาง State 👆
 
   // 👇 วางต่อท้าย isFetchingGps 👇
@@ -2649,10 +2904,108 @@ function App() {
 
         {/* 👇 วางหน้าจอ GPS ตรงนี้ 👇 */}
         {activeTab === 'gps' && (
-          <div className={isMapFullScreen ? "fixed inset-0 z-[500] bg-white flex flex-col" : "bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[75vh]"}>
+          <div data-gps-shell className={isMapFullScreen ? "fixed inset-0 z-[500] bg-white flex flex-col pb-[env(safe-area-inset-bottom)]" : "bg-white sm:rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[calc(100dvh-5.5rem)] sm:h-[75vh] min-h-[500px]"}>
             
+            {/* 📱 Mobile GPS header — สูงนิดเดียว ไม่กินพื้นที่แผนที่ */}
+            <div className="sm:hidden h-12 shrink-0 px-2.5 bg-white border-b border-gray-200 z-[470] flex items-center gap-2 shadow-sm">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-blue-600">🛰️</span>
+                  <p className="font-black text-xs text-gray-800 truncate">
+                    {vehicles.find(v => String(v.id) === String(trackingVehicleId))?.name || 'GPS รถเกี่ยว'}
+                  </p>
+                  <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-full ${trackingMode === 'realtime' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                    {trackingMode === 'realtime' ? 'LIVE' : 'ย้อนหลัง'}
+                  </span>
+                </div>
+                <p className="text-[8px] text-gray-400 truncate">
+                  {trackingVehicleId ? `${effectiveTrackingDate}${gpsPathData.length ? ` • ${gpsPathData.length.toLocaleString()} จุด` : ''}` : 'แตะค้นหาเพื่อเลือกรถ'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowGpsMobilePanel(true)}
+                className="h-9 px-3 rounded-full bg-blue-600 text-white font-black text-[11px] shadow-sm active:scale-95"
+              >
+                🔍 ค้นหา
+              </button>
+            </div>
+
+            {/* 📱 Mobile search/settings bottom sheet */}
+            {showGpsMobilePanel && (
+              <div className="sm:hidden fixed inset-0 z-[1000] flex items-end">
+                <button aria-label="ปิด" onClick={() => setShowGpsMobilePanel(false)} className="absolute inset-0 bg-black/35" />
+                <div className="relative w-full bg-white rounded-t-3xl shadow-2xl p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+                  <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="font-black text-base text-gray-800">🛰️ ค้นหาเส้นทาง</h3>
+                      <p className="text-[10px] text-gray-500">ปิดแผงนี้แล้วแผนที่จะกลับมาเต็มพื้นที่</p>
+                    </div>
+                    <button onClick={() => setShowGpsMobilePanel(false)} className="w-9 h-9 rounded-full bg-gray-100 text-gray-600 font-black">✕</button>
+                  </div>
+
+                  <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-xl">
+                    <button
+                      onClick={() => setTrackingMode('realtime')}
+                      className={`flex-1 py-2 text-xs font-black rounded-lg ${trackingMode === 'realtime' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}
+                    >🟢 ปัจจุบัน</button>
+                    <button
+                      onClick={() => setTrackingMode('history')}
+                      className={`flex-1 py-2 text-xs font-black rounded-lg ${trackingMode === 'history' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}
+                    >🕒 ย้อนหลัง</button>
+                  </div>
+
+                  <label className="block text-[10px] font-black text-gray-600 mb-1">รถเกี่ยว</label>
+                  <select
+                    className="w-full border border-gray-300 p-3 rounded-xl bg-white text-sm font-bold text-gray-700 mb-3"
+                    value={trackingVehicleId}
+                    onChange={(e) => setTrackingVehicleId(e.target.value)}
+                  >
+                    <option value="">-- เลือกรถเกี่ยว --</option>
+                    {vehicles.map(v => (<option key={`mobile-${v.id}`} value={v.id}>🚜 {v.name}</option>))}
+                  </select>
+
+                  {trackingMode === 'history' && (
+                    <>
+                      <label className="block text-[10px] font-black text-gray-600 mb-1">วันที่</label>
+                      <input
+                        type="date"
+                        className="w-full border border-gray-300 p-3 rounded-xl bg-white text-sm mb-3"
+                        value={trackingDate}
+                        onChange={(e) => setTrackingDate(e.target.value)}
+                      />
+                    </>
+                  )}
+
+                  {gpsPathData.length > 0 && (
+                    <div className="mb-3 bg-sky-50 border border-sky-100 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-black text-sky-700">📍 พิกัดล่าสุด</p>
+                        <p className="font-mono text-[9px] text-gray-600 truncate">{gpsPathData[gpsPathData.length - 1].latitude}, {gpsPathData[gpsPathData.length - 1].longitude}</p>
+                      </div>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length - 1].latitude}, ${gpsPathData[gpsPathData.length - 1].longitude}`)}
+                        className="w-9 h-9 shrink-0 bg-white rounded-lg border border-sky-200"
+                      >📋</button>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={async () => {
+                      const ok = await searchGpsRoute();
+                      if (ok) setShowGpsMobilePanel(false);
+                    }}
+                    disabled={isFetchingGps}
+                    className="w-full bg-blue-600 text-white font-black py-3 rounded-xl text-sm shadow-md disabled:opacity-50"
+                  >
+                    {isFetchingGps ? '⏳ กำลังดึงข้อมูล...' : '🔍 ค้นหาแล้วไปที่รถ'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* แผงควบคุมด้านบน */}
-            <div className="p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm shrink-0">
+            <div className="hidden sm:block p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm shrink-0">
               <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
                 <span className="text-blue-600">🛰️</span> ระบบติดตามรถเกี่ยว
               </h2>
@@ -2693,23 +3046,7 @@ function App() {
               </div>
 
               <button 
-                onClick={async () => {
-                  if(!trackingVehicleId) return alert('กรุณาเลือกรถเกี่ยวครับ');
-                  setIsFetchingGps(true);
-                  try {
-                    const dateToSend = effectiveTrackingDate;
-                    const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
-                    const data = await res.json();
-                    
-                    if(data.length === 0) {
-                      alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
-                    } else {
-                      setGpsPathData(data);
-                      setGpsFocusRequest(prev => prev + 1);
-                    }
-                  } catch(e) { console.error(e); }
-                  setIsFetchingGps(false);
-                }}
+                onClick={searchGpsRoute}
                 className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-md transition flex justify-center items-center gap-2"
               >
                 {isFetchingGps ? '⏳ กำลังดึงข้อมูล...' : '🔍 ค้นหาเส้นทาง'}
@@ -2718,7 +3055,7 @@ function App() {
 
             {/* แผงบอกสถานะย่อส่วน (ซ่อนป้ายพื้นที่อัตโนมัติเก่าทิ้งไป) */}
             {gpsPathData.length > 0 && !isMapFullScreen && (
-              <div className="bg-white border-b border-gray-200 p-3 z-10 shadow-sm shrink-0 flex justify-between items-center">
+              <div className="hidden sm:flex bg-white border-b border-gray-200 p-3 z-10 shadow-sm shrink-0 justify-between items-center">
                  <div>
                    <p className="text-[10px] text-gray-500 mb-0.5">พิกัดล่าสุด: <span className="font-mono">{gpsPathData[gpsPathData.length-1].latitude}, {gpsPathData[gpsPathData.length-1].longitude}</span></p>
                    <p className="font-bold text-blue-800 text-xs">
@@ -2733,7 +3070,7 @@ function App() {
             )}
 
             {/* ส่วนแสดงแผนที่อัจฉริยะแบบใหม่ */}
-            <div className="flex-1 relative bg-gray-200 min-h-[300px]">
+            <div className="flex-1 relative bg-gray-200 min-h-0 sm:min-h-[300px]">
               <TrackingMap 
                 pathData={gpsPathData}
                 vehicleId={trackingVehicleId}
@@ -2748,9 +3085,9 @@ function App() {
               {/* ข้อความแจ้งเตือนตอนยังไม่มีข้อมูล */}
               {gpsPathData.length === 0 && (
                 <div className="absolute inset-0 flex items-center justify-center z-[400] pointer-events-none">
-                  <div className="bg-white/90 backdrop-blur border border-gray-300 p-3 rounded-xl shadow-sm text-center text-gray-500 text-sm font-bold pointer-events-auto">
-                    กรุณากดปุ่มค้นหาเพื่อดูเส้นทาง
-                  </div>
+                  <button onClick={() => setShowGpsMobilePanel(true)} className="bg-white/90 backdrop-blur border border-gray-300 px-4 py-3 rounded-xl shadow-sm text-center text-gray-500 text-xs sm:text-sm font-bold pointer-events-auto">
+                    🔍 กรุณากดค้นหาเพื่อดูเส้นทาง
+                  </button>
                 </div>
               )}
             </div>
