@@ -169,7 +169,8 @@ function TrackingMap({ pathData }) {
         attribution: 'Google Maps', maxZoom: 20
       }).addTo(mapInstance.current);
     } else {
-      mapInstance.current.setView(center, zoom);
+      // ❌ คอมเมนต์ปิดบรรทัดนี้ทิ้งไป เพื่อไม่ให้แผนที่โดนบังคับรีเซ็ตการซูม
+      // mapInstance.current.setView(center, zoom);
     }
 
     // 💡 สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่โผล่ครึ่งจอ)
