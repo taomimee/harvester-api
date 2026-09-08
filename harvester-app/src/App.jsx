@@ -2336,7 +2336,12 @@ function App() {
             return { jobWorkers, paidWorkers };
           };
 
-          // 1) สร้างกระเป๋ารวมรายคนจากค่าแรงทั้งหมด เหมือน getWorkerWallet ในสมุดค่าแรง
+          // 1) ยอดสะสมต้องย้อนตามช่วงเวลาที่เลือกด้วย
+          //    กันยายน = ยอดถึงสิ้นกันยายน, สิงหาคม = ยอดถึงสิ้นสิงหาคม ฯลฯ
+          const selectedPeriodEnd = dashMonth === 0
+            ? new Date(dashYear, 11, 31, 23, 59, 59, 999)
+            : new Date(dashYear, dashMonth, 0, 23, 59, 59, 999);
+
           const dashboardWorkerWallets = new Map();
           const getDashboardWallet = (workerName) => {
             if (!dashboardWorkerWallets.has(workerName)) {
@@ -2345,7 +2350,11 @@ function App() {
             return dashboardWorkerWallets.get(workerName);
           };
 
+          // ค่าแรงที่เกิดขึ้น "ไม่เกินสิ้นเดือน/ปีที่เลือก"
           wageTransactions.forEach(tx => {
+            const wageDate = new Date(tx.created_at || tx.transaction_date);
+            if (Number.isNaN(wageDate.getTime()) || wageDate > selectedPeriodEnd) return;
+
             const { jobWorkers, paidWorkers } = parseDashboardWageNote(tx.note);
             if (jobWorkers.length === 0) return;
 
@@ -2354,24 +2363,33 @@ function App() {
               const wallet = getDashboardWallet(workerName);
               wallet.earned += share;
 
-              // ระบบเก่า: บิล PAID หรือมี [จ่ายแล้ว:ชื่อ] ให้ถือว่าคนนั้นรับเงินแล้ว
-              if (tx.status === 'PAID' || paidWorkers.includes(workerName)) {
+              // ระบบเก่า: ถ้ามี paid_at ให้ใช้วันที่จ่ายจริง เพื่อไม่ให้การจ่ายเดือนถัดไป
+              // ย้อนกลับไปทำให้เดือนก่อนหน้าดูเหมือนจ่ายแล้ว
+              const paidAt = tx.paid_at ? new Date(tx.paid_at) : null;
+              const statusPaidAsOfCutoff = tx.status === 'PAID' &&
+                (!paidAt || Number.isNaN(paidAt.getTime()) || paidAt <= selectedPeriodEnd);
+
+              // [จ่ายแล้ว:ชื่อ] เป็นข้อมูล legacy ที่ไม่มีวันเวลา จึงยังคงรองรับตามเดิม
+              if (statusPaidAsOfCutoff || paidWorkers.includes(workerName)) {
                 wallet.oldPaid += share;
               }
             });
           });
 
-          // 2) ระบบใหม่: เงินเบิกต้องหักเฉพาะ "เจ้าของชื่อ" เท่านั้น
+          // 2) เงินเบิกแบบใหม่: นับเฉพาะรายการที่เกิดขึ้น "ไม่เกินสิ้นเดือน/ปีที่เลือก"
           expenseTransactions
             .filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name)
             .forEach(tx => {
+              const withdrawalDate = new Date(tx.transaction_date || tx.created_at);
+              if (Number.isNaN(withdrawalDate.getTime()) || withdrawalDate > selectedPeriodEnd) return;
+
               const workerName = String(tx.spender_name).trim();
               if (!workerName) return;
               const wallet = getDashboardWallet(workerName);
               wallet.withdrawn += Number(tx.total_amount) || 0;
             });
 
-          // 3) ยอด "ค่าแรงรอจ่าย (ยอดสะสมรวม)" = ผลรวมยอดคงเหลือของกระเป๋าทุกคน
+          // 3) ยอด "ค่าแรงรอจ่าย" = ยอดคงเหลือสะสม ณ สิ้นช่วงเวลาที่เลือก
           dashboardWorkerWallets.forEach(wallet => {
             const balance = wallet.earned - wallet.oldPaid - wallet.withdrawn;
             totalUnpaidWageAllTime += Math.max(0, balance);
@@ -2652,7 +2670,7 @@ function App() {
                     </button>
                     
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime และแก้ข้อความเป็น "ยอดสะสมรวม" */}
-                    {totalUnpaidWageAllTime > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย (ยอดสะสมรวม)</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(totalUnpaidWageAllTime)} ฿</strong></button>}
+                    {totalUnpaidWageAllTime > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย (ยอดสะสมถึงช่วงที่เลือก)</span><span className="block text-[10px] text-orange-600 mt-0.5">ยอดคงเหลือ ณ สิ้นช่วงเวลา</span></span><strong className="text-orange-600">{formatMoney(totalUnpaidWageAllTime)} ฿</strong></button>}
                     
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime */}
                     {debtJobs.length === 0 && totalUnpaidWageAllTime <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
