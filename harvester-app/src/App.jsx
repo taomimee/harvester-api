@@ -1777,6 +1777,7 @@ function App() {
                 pathData={gpsPathData} 
                 isMapFullScreen={isMapFullScreen} 
                 setIsMapFullScreen={setIsMapFullScreen} 
+                isFetchingGps={isFetchingGps} 
               />
               
               {/* ข้อความแจ้งเตือนตอนยังไม่มีข้อมูล */}
