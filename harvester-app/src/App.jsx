@@ -2316,8 +2316,6 @@ function App() {
 
           // ✅ ค่าแรง Dashboard ใช้สูตรเดียวกับ "กระเป๋าเงิน" ของคนงาน
           // สำคัญ: ห้ามเอายอดเบิกของทุกคนมาหักรวมก้อนเดียว เพราะจะทำให้ยอดค้างเพี้ยนข้ามคน
-          let unpaidWage = 0;
-          let paidWage = 0;
           let totalUnpaidWageAllTime = 0;
 
           const parseDashboardWageNote = (rawNote) => {
@@ -2395,57 +2393,53 @@ function App() {
             totalUnpaidWageAllTime += Math.max(0, balance);
           });
 
-          // 4) การ์ดเดือน/ปีด้านบนยังคงแสดงค่าแรงของช่วงที่เลือก
-          //    แต่หักยอดเบิกแบบใหม่เฉพาะคน เพื่อไม่ให้เงินของคนหนึ่งไปตัดยอดของอีกคน
-          const periodWallets = new Map();
-          const getPeriodWallet = (workerName) => {
-            if (!periodWallets.has(workerName)) {
-              periodWallets.set(workerName, { earned: 0, oldPaid: 0 });
-            }
-            return periodWallets.get(workerName);
+          // 4) การ์ดด้านบน: แสดง "กระแสเงินของช่วงที่เลือก" ตามเงินจริง
+          //    - ค่าแรงเกิดขึ้น = ค่าแรงจากงานที่เกิดในเดือน/ปีนั้น
+          //    - เบิกจ่ายจริง = เงินที่จ่ายออกจริงในเดือน/ปีนั้น
+          // สำคัญ: เงินเบิกสามารถนำไปเคลียร์ยอดค้างจากเดือนก่อน จึงห้ามจำกัดยอดจ่าย
+          // ไว้แค่ค่าแรงที่เกิดในเดือนปัจจุบัน (สาเหตุเดิมที่ทำให้ 10,200 กลายเป็น 4,530)
+          let periodWageEarned = periodWages.reduce(
+            (sum, tx) => sum + (Number(tx.total_amount) || 0),
+            0
+          );
+
+          const isDateInSelectedPeriod = (dateValue) => {
+            if (!dateValue) return false;
+            const d = new Date(dateValue);
+            return !Number.isNaN(d.getTime()) &&
+              d.getFullYear() === dashYear &&
+              (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
           };
 
-          periodWages.forEach(tx => {
+          // ระบบใหม่: รายการ "เบิกค่าแรง" คือเงินจริงที่จ่ายออก
+          let periodWagePaid = expenseTransactions
+            .filter(tx =>
+              tx.category === 'เบิกค่าแรง' &&
+              isDateInSelectedPeriod(tx.transaction_date || tx.created_at)
+            )
+            .reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
+
+          // รองรับข้อมูลระบบเก่าที่ยังไม่ได้บันทึกเป็น "เบิกค่าแรง"
+          // ถ้ามี paid_at/updated_at จะใช้วันจ่ายจริง; ถ้าไม่มีจริง ๆ จึง fallback เป็นวันที่สร้างบิล
+          wageTransactions.forEach(tx => {
             const { jobWorkers, paidWorkers } = parseDashboardWageNote(tx.note);
             if (jobWorkers.length === 0) return;
 
-            const share = (Number(tx.total_amount) || 0) / jobWorkers.length;
-            jobWorkers.forEach(workerName => {
-              const wallet = getPeriodWallet(workerName);
-              wallet.earned += share;
-              if (tx.status === 'PAID' || paidWorkers.includes(workerName)) {
-                wallet.oldPaid += share;
-              }
-            });
+            const hasLegacyPaid = tx.status === 'PAID' || paidWorkers.length > 0;
+            if (!hasLegacyPaid) return;
+
+            const legacyPaidDate = tx.paid_at || tx.updated_at || tx.created_at;
+            if (!isDateInSelectedPeriod(legacyPaidDate)) return;
+
+            const totalAmount = Number(tx.total_amount) || 0;
+            if (tx.status === 'PAID') {
+              periodWagePaid += totalAmount;
+            } else {
+              const uniquePaidWorkers = new Set(paidWorkers.filter(w => jobWorkers.includes(w)));
+              periodWagePaid += (totalAmount / jobWorkers.length) * uniquePaidWorkers.size;
+            }
           });
 
-          // ยอดเบิกในช่วงเวลาที่เลือก แยกตามคน
-          const periodWithdrawalsByWorker = new Map();
-          expenseTransactions
-            .filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name)
-            .forEach(tx => {
-              const d = new Date(tx.transaction_date || tx.created_at);
-              const isPeriod = !Number.isNaN(d.getTime()) &&
-                d.getFullYear() === dashYear &&
-                (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
-              if (!isPeriod) return;
-
-              const workerName = String(tx.spender_name).trim();
-              if (!workerName) return;
-              periodWithdrawalsByWorker.set(
-                workerName,
-                (periodWithdrawalsByWorker.get(workerName) || 0) + (Number(tx.total_amount) || 0)
-              );
-            });
-
-          periodWallets.forEach((wallet, workerName) => {
-            const withdrawn = periodWithdrawalsByWorker.get(workerName) || 0;
-            const workerUnpaid = Math.max(0, wallet.earned - wallet.oldPaid - withdrawn);
-            const workerPaid = Math.min(wallet.earned, wallet.oldPaid + withdrawn);
-            unpaidWage += workerUnpaid;
-            paidWage += workerPaid;
-          });
-          
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
           
@@ -2651,8 +2645,16 @@ function App() {
                   <button onClick={() => { setWageFilter([]); setShowWageSummary(true); }} className="px-3 py-2 bg-white rounded-xl border border-orange-200 text-orange-700 text-[10px] font-black shadow-sm">เปิดสมุดค่าแรง →</button>
                 </div>
                 <div className="grid grid-cols-2 gap-3 mt-4">
-                  <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">จ่ายแล้ว</p><p className="text-2xl font-black text-green-600 mt-1">{formatMoney(paidWage)} ฿</p></div>
-                  <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">รอจ่าย</p><p className="text-2xl font-black text-red-600 mt-1">{formatMoney(unpaidWage)} ฿</p></div>
+                  <div className="bg-white/80 rounded-2xl p-3 border border-orange-100">
+                    <p className="text-[10px] font-bold text-orange-700">ค่าแรงเกิดขึ้น</p>
+                    <p className="text-2xl font-black text-green-600 mt-1">{formatMoney(periodWageEarned)} ฿</p>
+                    <p className="text-[9px] text-gray-400 mt-1">จากงานในช่วงที่เลือก</p>
+                  </div>
+                  <div className="bg-white/80 rounded-2xl p-3 border border-orange-100">
+                    <p className="text-[10px] font-bold text-orange-700">เบิกจ่ายจริง</p>
+                    <p className="text-2xl font-black text-red-600 mt-1">{formatMoney(periodWagePaid)} ฿</p>
+                    <p className="text-[9px] text-gray-400 mt-1">เงินที่จ่ายออกในช่วงที่เลือก</p>
+                  </div>
                 </div>
               </div>
 
