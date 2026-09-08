@@ -150,7 +150,7 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
-// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงด้วยมือ (Manual Draw Mode)
+// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw เหมือนแอปลิง)
 function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -174,6 +174,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
     return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
   };
 
+  // 1. สร้างแผนที่
   useEffect(() => {
     if (!mapRef.current) return;
     const center = pathData.length > 0 ? [pathData[pathData.length-1].latitude, pathData[pathData.length-1].longitude] : [15.7012, 101.1012];
@@ -188,9 +189,9 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
       drawLayer.current = L.layerGroup().addTo(mapInstance.current);
       plotsLayer.current = L.layerGroup().addTo(mapInstance.current);
     }
-  }, []); // ลบ dependencies ออกเพื่อไม่ให้แผนที่เด้งกลับ
+  }, []);
 
-  // 1. อัปเดตเส้นสีน้ำเงินและรูปรถ
+  // 2. อัปเดตเส้นสีน้ำเงินและรูปรถ
   useEffect(() => {
     if (!mapInstance.current) return;
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
@@ -211,7 +212,31 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
     }
   }, [pathData]);
 
-  // 2. อัปเดตจุดที่กำลังวาด (Draw Mode)
+  // 💡 3. ระบบจิ้มจอเพื่อเพิ่มจุด (Tap to add point)
+  useEffect(() => {
+    if (!mapInstance.current) return;
+    const handleMapClick = (e) => {
+      if (drawMode) {
+        setPoints(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng }]);
+      }
+    };
+    
+    // เปิด-ปิด การรับคำสั่งจิ้มจอ
+    if (drawMode) {
+      mapInstance.current.on('click', handleMapClick);
+      // เปลี่ยนเมาส์ให้เป็นรูปเป้าเล็งเวลาเปิดโหมดวาด
+      mapInstance.current.getContainer().style.cursor = 'crosshair';
+    } else {
+      mapInstance.current.off('click', handleMapClick);
+      mapInstance.current.getContainer().style.cursor = '';
+    }
+
+    return () => {
+      mapInstance.current.off('click', handleMapClick);
+    };
+  }, [drawMode]);
+
+  // 4. วาดเส้นขอบและจุดตามที่จิ้ม
   useEffect(() => {
     if (!drawLayer.current || !mapInstance.current) return;
     drawLayer.current.clearLayers();
@@ -242,7 +267,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
             html: `<div class="bg-orange-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold text-[10px] border-2 border-white shadow-md cursor-pointer" style="margin-left: -10px; margin-top: -10px;">${idx + 1}</div>`,
             iconSize: [0, 0]
           }),
-          draggable: true
+          draggable: true // 💡 หมุดสามารถใช้นิ้วกดค้างเพื่อเลื่อนขยับได้
         }).addTo(drawLayer.current);
 
         marker.on('drag', (e) => {
@@ -258,11 +283,11 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
         });
       });
     } else {
-      setCurrentArea({ text: 'เลื่อนเป้าแล้วกด + เพื่อตีกรอบ', rawRai: 0 });
+      setCurrentArea({ text: '👆 จิ้มบนแผนที่เพื่อเริ่มปักหมุด', rawRai: 0 });
     }
   }, [points, drawMode]);
 
-  // 3. วาดแปลงที่บันทึกไว้แล้ว (Saved Plots)
+  // 5. วาดแปลงที่บันทึกไว้
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
@@ -300,7 +325,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
         {isMapFullScreen ? '↙️ ย่อหน้าจอ' : '🔲 ขยายเต็มจอ'}
       </button>
 
-      {/* เครื่องมือวาดแปลงและรายการสรุป */}
+      {/* เครื่องมือเปิดโหมดวาด */}
       <div className="absolute top-4 left-4 z-[400] flex flex-col gap-2 pointer-events-none">
         <button 
           onClick={() => setDrawMode(!drawMode)} 
@@ -330,32 +355,24 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
         )}
       </div>
 
-      {/* เป้าเล็งและปุ่มควบคุม (แสดงเฉพาะตอนเปิดโหมดวาด) */}
+      {/* แผงควบคุมด้านล่าง (แสดงเฉพาะตอนเปิดโหมดวาด) */}
       {drawMode && (
         <>
-          <div className="absolute inset-0 pointer-events-none z-[400] flex items-center justify-center">
-            <div className="relative flex items-center justify-center w-12 h-12">
-              <div className="absolute w-full h-0.5 bg-red-500/90 drop-shadow-md"></div>
-              <div className="absolute h-full w-0.5 bg-red-500/90 drop-shadow-md"></div>
-              <div className="absolute w-3.5 h-3.5 border-2 border-white rounded-full bg-red-500 shadow-md"></div>
-            </div>
-          </div>
-
-          <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-4 py-1.5 rounded-full shadow-lg border border-orange-300">
+          <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-4 py-1.5 rounded-full shadow-lg border border-orange-300 pointer-events-none">
             <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text}</span>
           </div>
 
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-[400] flex items-end gap-3 pointer-events-auto">
-            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0} className={`w-12 h-12 rounded-full shadow-lg font-bold flex items-center justify-center border-2 border-white text-xl ${points.length === 0 ? 'bg-gray-300 text-gray-500' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>↩️</button>
+          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-[400] flex items-center bg-white/90 backdrop-blur p-2 rounded-full shadow-xl border border-gray-200 gap-2 pointer-events-auto">
+            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0} className={`px-4 py-2 rounded-full font-bold text-sm transition ${points.length === 0 ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
+              ↩️ ย้อนกลับ
+            </button>
             <button onClick={() => {
-              const center = mapInstance.current.getCenter();
-              setPoints([...points, { lat: center.lat, lng: center.lng }]);
-            }} className="w-16 h-16 bg-orange-600 hover:bg-orange-700 text-white rounded-full shadow-2xl font-bold flex items-center justify-center border-4 border-white text-4xl transform active:scale-95">+</button>
-            <button onClick={() => {
-              if (points.length < 3) return alert('ตีกรอบอย่างน้อย 3 มุมครับ');
+              if (points.length < 3) return alert('ต้องจิ้มจุดอย่างน้อย 3 มุมขึ้นไปครับ');
               setPlots([...plots, { points, area: currentArea }]);
-              setPoints([]); // รีเซ็ตเส้นที่วาดอยู่ เพื่อเตรียมวาดแปลงต่อไป
-            }} disabled={points.length < 3} className={`w-12 h-12 rounded-full shadow-lg font-bold flex items-center justify-center border-2 border-white text-xl ${points.length < 3 ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white hover:bg-green-700'}`}>💾</button>
+              setPoints([]); 
+            }} disabled={points.length < 3} className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}>
+              💾 บันทึกแปลง
+            </button>
           </div>
         </>
       )}
