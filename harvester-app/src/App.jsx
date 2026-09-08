@@ -3,7 +3,7 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
-// 🛰️ GPS V3.1 Progress + Auto Plot + Editable Boundary
+// 🛰️ GPS V3.3 Auto Multi-Plot + Progress + Editable Boundary + Center Point
 // 🗺️ ระบบแผนที่เป้าเล็ง + ค้นหาสถานที่อัจฉริยะ + แผนที่ดาวเทียมมีป้ายชื่อ
 function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const mapRef = useRef(null);
@@ -607,15 +607,18 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     };
   })();
 
-  // ✨ GPS V3: สร้างขอบแปลงอัตโนมัติจากเที่ยววิ่งเกี่ยวที่วิ่งซ้ำหนาแน่น
-  // ตัดเส้นเดินทางเดี่ยว ๆ ออกด้วย spatial-density ของ segment ที่ไม่ติดกันตามเวลา
+  // ✨ GPS V3.3: Auto Multi-Plot
+  // วิเคราะห์รอยเกี่ยวที่หนาแน่น แล้วแยก Polygon ที่ไม่ติดกันเป็นหลายแปลงอัตโนมัติ
+  // กรองก้อนเล็ก/สัญญาณรบกวนออก และบันทึกในเครื่องทันที จากนั้นแก้แต่ละแปลงได้ด้วย ✏️
   const generateAutoPlot = async () => {
     if (pathData.length < 8) return alert('ข้อมูล GPS ยังน้อยเกินไปสำหรับวาดแปลงอัตโนมัติครับ');
     if (!vehicleId || !workDate) return alert('กรุณาเลือกรถและวันที่ก่อนครับ');
 
     setIsAutoPlotting(true);
     setAutoFollow(false);
+
     try {
+      // 1) เก็บเฉพาะ segment ที่ระบบประเมินว่า "กำลังเกี่ยว"
       const candidates = [];
       for (let i = 1; i < pathData.length; i++) {
         const a = pathData[i - 1];
@@ -627,28 +630,47 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         const bLat = Number(b.latitude), bLng = Number(b.longitude);
         if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
 
-        const mid = turf.midpoint(turf.point([aLng, aLat]), turf.point([bLng, bLat])).geometry.coordinates;
-        candidates.push({ index: i, a: [aLng, aLat], b: [bLng, bLat], mid });
+        const mid = turf.midpoint(
+          turf.point([aLng, aLat]),
+          turf.point([bLng, bLat])
+        ).geometry.coordinates;
+
+        candidates.push({
+          index: i,
+          a: [aLng, aLat],
+          b: [bLng, bLat],
+          mid
+        });
       }
 
       if (candidates.length < 4) {
         return alert('ยังหาเที่ยววิ่งเกี่ยวได้ไม่พอครับ\nลองเลือกวันที่ที่รถเกี่ยวเต็มแปลงก่อน');
       }
 
+      // 2) ตัดเส้นเดินทางเดี่ยวออก: แปลงจริงจะมีเที่ยววิ่งไป-กลับอยู่ใกล้กันหลายเส้น
       const densityRadiusMeters = Math.max(16, headWidthMeters * 5);
       const denseSegments = candidates.filter((seg, idx) => {
         let nonAdjacentNeighbors = 0;
+
         for (let j = 0; j < candidates.length; j++) {
           if (j === idx) continue;
           const other = candidates[j];
-          // ไม่นับจุดที่วิ่งติดกันตามเวลา เพราะถนนเส้นเดียวก็มีจุดติดกันเยอะ
+
+          // ไม่นับจุดติดกันตามเวลา เพราะถนนเส้นเดียวก็มีจุดต่อกันจำนวนมาก
           if (Math.abs(other.index - seg.index) <= 4) continue;
-          const meters = turf.distance(turf.point(seg.mid), turf.point(other.mid), { units: 'kilometers' }) * 1000;
+
+          const meters = turf.distance(
+            turf.point(seg.mid),
+            turf.point(other.mid),
+            { units: 'kilometers' }
+          ) * 1000;
+
           if (meters <= densityRadiusMeters) {
             nonAdjacentNeighbors++;
             if (nonAdjacentNeighbors >= 2) break;
           }
         }
+
         return nonAdjacentNeighbors >= 2;
       });
 
@@ -656,69 +678,169 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         return alert('ระบบเห็นรอยเกี่ยว แต่ยังแยกพื้นที่แปลงออกจากทางเดินรถไม่ได้ชัดพอครับ\nลองใช้วาดมือ หรือปรับหัวเกี่ยวให้ตรงก่อน');
       }
 
+      // 3) ขยายรอยวิ่งตามความกว้างหัวเกี่ยว
       const multi = turf.multiLineString(denseSegments.map(s => [s.a, s.b]));
-      let buffered = turf.buffer(multi, Math.max(1, headWidthMeters / 2), { units: 'meters', steps: 6 });
+      const buffered = turf.buffer(
+        multi,
+        Math.max(1, headWidthMeters / 2),
+        { units: 'meters', steps: 6 }
+      );
+
       if (!buffered) return alert('สร้างพื้นที่จากรอย GPS ไม่สำเร็จครับ');
 
-      // ลดจำนวนจุดขอบให้อยู่ในระดับที่ลากแก้ได้สะดวก แต่ยังตามรูปแปลงจริง
-      let tolerance = Math.max(0.000006, Math.min(0.00003, headWidthMeters / 150000));
-      let simplified = turf.simplify(buffered, { tolerance, highQuality: true, mutate: false });
-
-      const getRings = (feature) => {
+      const getOuterRings = (feature) => {
         if (!feature?.geometry) return [];
         if (feature.geometry.type === 'Polygon') return [feature.geometry.coordinates[0]];
-        if (feature.geometry.type === 'MultiPolygon') return feature.geometry.coordinates.map(poly => poly[0]);
+        if (feature.geometry.type === 'MultiPolygon') {
+          return feature.geometry.coordinates.map(poly => poly[0]);
+        }
         return [];
       };
 
-      let rings = getRings(simplified)
-        .map(ring => {
-          const coords = ring.slice(0, -1);
-          const polygon = turf.polygon([[...coords, coords[0]]]);
-          return { coords, sqM: turf.area(polygon) };
-        })
-        .filter(item => item.coords.length >= 3 && item.sqM >= Math.max(60, headWidthMeters * 25))
+      // 4) ลดจำนวนจุด "แยกทีละก้อน" เพื่อให้แต่ละแปลงลากแก้ได้ง่าย
+      const simplifyOneRing = (rawRing) => {
+        let coords = rawRing.slice(0, -1);
+        if (coords.length < 3) return null;
+
+        const originalFeature = turf.polygon([[...coords, coords[0]]]);
+        const originalSqM = turf.area(originalFeature);
+        let tolerance = Math.max(0.000006, Math.min(0.00003, headWidthMeters / 150000));
+        let bestCoords = coords;
+
+        for (let pass = 0; pass < 6; pass++) {
+          try {
+            const feature = turf.polygon([[...coords, coords[0]]]);
+            const simplified = turf.simplify(feature, {
+              tolerance,
+              highQuality: true,
+              mutate: false
+            });
+
+            const ring = simplified?.geometry?.coordinates?.[0];
+            if (Array.isArray(ring) && ring.length >= 4) {
+              bestCoords = ring.slice(0, -1);
+            }
+
+            if (bestCoords.length <= 48) break;
+            tolerance *= 1.45;
+          } catch (_) {
+            break;
+          }
+        }
+
+        if (bestCoords.length < 3) return null;
+        return { coords: bestCoords, sqM: originalSqM };
+      };
+
+      let rings = getOuterRings(buffered)
+        .map(simplifyOneRing)
+        .filter(Boolean)
+        .filter(item => item.coords.length >= 3)
         .sort((a, b) => b.sqM - a.sqM);
 
-      if (rings.length === 0) return alert('ยังสร้างขอบแปลงที่เชื่อถือได้ไม่สำเร็จครับ');
-
-      // ใช้พื้นที่ต่อเนื่องก้อนใหญ่สุดก่อน เพื่อไม่ลากถนน/แปลงอื่นเข้ามารวมกัน
-      let mainRing = rings[0].coords;
-
-      // ถ้าจุดเยอะเกินไป เพิ่ม simplify ทีละนิดจนลากแก้สะดวก
-      for (let pass = 0; pass < 5 && mainRing.length > 48; pass++) {
-        tolerance *= 1.45;
-        simplified = turf.simplify(buffered, { tolerance, highQuality: true, mutate: false });
-        const retry = getRings(simplified)
-          .map(ring => {
-            const coords = ring.slice(0, -1);
-            const polygon = turf.polygon([[...coords, coords[0]]]);
-            return { coords, sqM: turf.area(polygon) };
-          })
-          .filter(item => item.coords.length >= 3)
-          .sort((a, b) => b.sqM - a.sqM);
-        if (retry.length) mainRing = retry[0].coords;
+      if (rings.length === 0) {
+        return alert('ยังสร้างขอบแปลงที่เชื่อถือได้ไม่สำเร็จครับ');
       }
 
-      const autoPoints = mainRing.map(([lng, lat]) => ({ lat, lng }));
-      const autoArea = areaFromPoints(autoPoints);
+      // 5) กรองเศษรอย GPS เล็ก ๆ ออก
+      // เก็บก้อนที่มีอย่างน้อย ~0.08 ไร่ และไม่น้อยกว่า 1.5% ของก้อนใหญ่สุด
+      const largestSqM = rings[0].sqM;
+      const minPlotSqM = Math.max(
+        120,
+        headWidthMeters * 35,
+        largestSqM * 0.015
+      );
+
+      rings = rings
+        .filter(item => item.sqM >= minPlotSqM)
+        .slice(0, 12); // กันกรณี GPS แตกเป็นเศษจำนวนมากผิดปกติ
+
+      if (rings.length === 0) {
+        return alert('พบแต่พื้นที่เล็กเกินไป ระบบจึงยังไม่สร้างเป็นแปลงให้อัตโนมัติครับ');
+      }
+
+      // 6) แปลงทุกก้อนที่แยกจากกันเป็น Plot คนละแปลง
+      const batchId = `AUTO-${vehicleId}-${workDate}-${Date.now()}`;
+      const autoPlots = rings.map((ring, index) => {
+        const autoPoints = ring.coords.map(([lng, lat]) => ({ lat, lng }));
+        const area = areaFromPoints(autoPoints);
+        const center = centerFromPoints(autoPoints);
+
+        return {
+          points: autoPoints,
+          area,
+          center,
+          source: 'AUTO_GPS_MULTI',
+          auto_batch_id: batchId,
+          auto_group: index + 1,
+          head_width_m: headWidthMeters,
+          created_at: new Date().toISOString()
+        };
+      });
+
+      // ถ้ากด Auto ซ้ำ ให้เลือกแทนเฉพาะแปลง Auto เดิม ไม่แตะแปลงที่วาดมือ
+      const oldAutoCount = plots.filter(p => String(p?.source || '').startsWith('AUTO_GPS')).length;
+      let basePlots = plots;
+
+      if (oldAutoCount > 0) {
+        const replaceOld = window.confirm(
+          `มีแปลงออโต้เดิม ${oldAutoCount} แปลง\n\nกด ตกลง = สร้างใหม่แทนแปลงออโต้เดิม\nกด ยกเลิก = ไม่เปลี่ยนแปลงข้อมูลเดิม\n\n(แปลงที่วาดมือจะไม่ถูกลบ)`
+        );
+        if (!replaceOld) return;
+        basePlots = plots.filter(p => !String(p?.source || '').startsWith('AUTO_GPS'));
+      }
+
+      const startIndex = basePlots.length;
+      const nextPlots = [...basePlots, ...autoPlots];
+
+      // บันทึก localStorage ก่อนเสมอ; Server เป็น sync เสริมเท่านั้น
+      const ok = await savePlotsToServer(nextPlots, { silent: true });
+      if (!ok) return;
 
       setEditingPlotIndex(null);
-      setDraftKind('auto');
-      setPoints(autoPoints);
-      setCurrentArea(autoArea);
-      setDrawMode(true);
+      setPoints([]);
+      setDraftKind('manual');
+      setDrawMode(false);
 
+      // 7) ซูมให้เห็นทุกแปลงที่ Auto สร้าง
       setTimeout(() => {
         if (!mapInstance.current) return;
-        const bounds = L.latLngBounds(autoPoints.map(p => [p.lat, p.lng]));
-        if (bounds.isValid()) mapInstance.current.fitBounds(bounds, { padding: [55, 55], maxZoom: 19 });
+        const allLatLngs = autoPlots.flatMap(plot =>
+          plot.points.map(p => [Number(p.lat), Number(p.lng)])
+        );
+        if (!allLatLngs.length) return;
+
+        const bounds = L.latLngBounds(allLatLngs);
+        if (bounds.isValid()) {
+          mapInstance.current.fitBounds(bounds, { padding: [55, 55], maxZoom: 19 });
+        }
       }, 100);
 
-      const extraText = rings.length > 1 ? `\nพบพื้นที่แยก ${rings.length} กลุ่ม ระบบเลือกก้อนใหญ่สุดให้ก่อน` : '';
-      alert(`✨ Auto Plot สำเร็จ\nประมาณ ${autoArea.text}\nมี ${autoPoints.length} จุดให้ลากแก้ขอบแปลง${extraText}\n\nลากจุดให้ตรงแล้วกด 💾 บันทึกครับ`);
+      const details = autoPlots
+        .slice(0, 6)
+        .map((plot, i) => `แปลง ${i + 1}: ${plot.area?.rawRai || '0.00'} ไร่`)
+        .join('\n');
+      const moreText = autoPlots.length > 6 ? `\n...และอีก ${autoPlots.length - 6} แปลง` : '';
+
+      if (autoPlots.length === 1) {
+        // ถ้ามีแปลงเดียว เปิดจุดให้ลากแก้ทันทีเหมือนเดิม
+        const plot = autoPlots[0];
+        setEditingPlotIndex(startIndex);
+        setDraftKind('edit');
+        setPoints(plot.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })));
+        setCurrentArea(areaFromPoints(plot.points));
+        setDrawMode(true);
+
+        alert(
+          `✨ Auto Plot สำเร็จ\n${details}\n\nระบบบันทึกในเครื่องให้แล้ว\nลากจุดแก้ขอบได้เลย แล้วกด 💾 บันทึกการแก้ไขครับ`
+        );
+      } else {
+        alert(
+          `✨ Auto Multi-Plot สำเร็จ\nพบ ${autoPlots.length} แปลงที่ไม่ติดกัน\n\n${details}${moreText}\n\nระบบบันทึกในเครื่องให้แล้ว\nกด ✏️ ที่แต่ละแปลงเพื่อลากแก้ขอบได้ครับ`
+        );
+      }
     } catch (err) {
-      console.error('Auto Plot Error:', err);
+      console.error('Auto Multi-Plot Error:', err);
       alert(`สร้างแปลงอัตโนมัติไม่สำเร็จครับ\n${err.message || err}`);
     } finally {
       setIsAutoPlotting(false);
@@ -1049,7 +1171,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               disabled={isAutoPlotting}
               className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-black text-xs border transition w-max ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'}`}
             >
-              {isAutoPlotting ? '⏳ กำลังวิเคราะห์...' : '✨ วาดแปลงออโต้'}
+              {isAutoPlotting ? '⏳ กำลังแยกแปลง...' : '✨ วาดหลายแปลงออโต้'}
             </button>
             <button
               onClick={() => {
