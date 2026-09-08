@@ -150,7 +150,7 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
-// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw) + เด้งซูม
+// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw) + เด้งซูม + จำแปลงได้ 7 วัน
 function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -174,6 +174,41 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
     return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
   };
 
+  // 💡 ระบบช่วยจำ: บันทึกแปลงลงเครื่อง
+  const savePlotsToLocal = (newPlots) => {
+    setPlots(newPlots);
+    if (pathData.length === 0) return;
+    const d = new Date(pathData[0].created_at);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const key = `plots_${pathData[0].vehicle_id}_${dateStr}`; // แยกจำตามรถและวันที่
+    localStorage.setItem(key, JSON.stringify(newPlots));
+  };
+
+  // 💡 ระบบช่วยจำ: โหลดแปลงเก่ากลับมาตอนเปิดดู และลบทิ้งถ้าเกิน 7 วัน
+  useEffect(() => {
+    if (pathData.length > 0) {
+      const d = new Date(pathData[0].created_at);
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const key = `plots_${pathData[0].vehicle_id}_${dateStr}`;
+      
+      const saved = localStorage.getItem(key);
+      if (saved) setPlots(JSON.parse(saved));
+      else setPlots([]);
+
+      // 🧹 แอบทำความสะอาดแปลงที่วาดไว้เกิน 7 วัน
+      const sevenDaysAgo = new Date().getTime() - (7 * 24 * 60 * 60 * 1000);
+      for (let i = 0; i < localStorage.length; i++) {
+        const lsKey = localStorage.key(i);
+        if (lsKey && lsKey.startsWith('plots_')) {
+          const datePart = lsKey.split('_')[2];
+          if (datePart && new Date(datePart).getTime() < sevenDaysAgo) {
+            localStorage.removeItem(lsKey);
+          }
+        }
+      }
+    }
+  }, [pathData]);
+
   // 1. สร้างแผนที่
   useEffect(() => {
     if (!mapRef.current) return;
@@ -181,22 +216,23 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
     const zoom = pathData.length > 0 ? 17 : 6;
 
     if (!mapInstance.current) {
-      mapInstance.current = L.map(mapRef.current, { zoomControl: true }).setView(center, zoom);
+      // 💡 ปิดปุ่มซูมซ้ายบน แล้วย้ายไปขวาล่างแทน จะได้ไม่ทับกัน
+      mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(center, zoom);
       L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
         attribution: 'Google Maps', maxZoom: 20
       }).addTo(mapInstance.current);
       
+      L.control.zoom({ position: 'bottomright' }).addTo(mapInstance.current);
+      
       drawLayer.current = L.layerGroup().addTo(mapInstance.current);
       plotsLayer.current = L.layerGroup().addTo(mapInstance.current);
 
-      // 👇 เติมโค้ดนี้กลับเข้าไปเพื่อแก้บั๊กโหลดครึ่งจอ 👇
       setTimeout(() => {
-        if (mapInstance.current) {
-          mapInstance.current.invalidateSize();
-        }
-      }, 300); // หน่วงเวลา 0.3 วินาทีให้กรอบกางเสร็จก่อนแล้วค่อยวาดภาพ
+        if (mapInstance.current) mapInstance.current.invalidateSize();
+      }, 300);
     }
   }, []);
+
   // 2. อัปเดตเส้นสีน้ำเงินและรูปรถ
   useEffect(() => {
     if (!mapInstance.current) return;
@@ -214,7 +250,14 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
         iconSize: [0, 0]
       });
       
-      markerLayer.current = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
+      const marker = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
+      
+      // 💡 กดที่รูปรถแล้วเด้งไป Google Maps นำทาง
+      marker.on('click', () => {
+        window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastPoint.latitude},${lastPoint.longitude}`, '_blank');
+      });
+
+      markerLayer.current = marker;
     }
   }, [pathData]);
 
@@ -227,7 +270,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
         duration: 1.5
       });
     }
-  }, [isFetchingGps]); // 👈 ลบ pathData ออกไปแล้ว
+  }, [isFetchingGps]); 
 
   // 4. ระบบจิ้มจอเพื่อเพิ่มจุด
   useEffect(() => {
@@ -358,7 +401,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
                   <span className="font-bold text-green-700">แปลง {i+1}</span>
                   <div className="flex items-center gap-1">
                     <span className="text-gray-600 font-semibold">{plot.area.rawRai} ไร่</span>
-                    <button onClick={() => setPlots(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold">✕</button>
+                    <button onClick={() => savePlotsToLocal(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold">✕</button>
                   </div>
                 </div>
               ))}
@@ -377,13 +420,14 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
             <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text}</span>
           </div>
 
-          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-[400] flex items-center bg-white/90 backdrop-blur p-2 rounded-full shadow-xl border border-gray-200 gap-2 pointer-events-auto">
+          <div className="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[400] flex items-center bg-white/90 backdrop-blur p-2 rounded-full shadow-xl border border-gray-200 gap-2 pointer-events-auto">
             <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0} className={`px-4 py-2 rounded-full font-bold text-sm transition ${points.length === 0 ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
               ↩️ ย้อนกลับ
             </button>
             <button onClick={() => {
               if (points.length < 3) return alert('ต้องจิ้มจุดอย่างน้อย 3 มุมขึ้นไปครับ');
-              setPlots([...plots, { points, area: currentArea }]);
+              // 💡 ใช้ฟังก์ชัน savePlotsToLocal แทนเพื่อเซฟลงเครื่องทันที
+              savePlotsToLocal([...plots, { points, area: currentArea }]);
               setPoints([]); 
             }} disabled={points.length < 3} className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}>
               💾 บันทึกแปลง
