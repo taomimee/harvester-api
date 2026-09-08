@@ -310,6 +310,19 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
     });
   }, [plots]);
 
+  // 👇 2. เพิ่มโค้ดระบบเด้งซูมนี้ เข้าไปก่อนบรรทัด return (
+  useEffect(() => {
+    // ถ้าปุ่มค้นหาทำงานเสร็จแล้ว (!isFetchingGps) และมีข้อมูลพิกัด
+    if (!isFetchingGps && pathData.length > 0 && mapInstance.current) {
+      const lastPoint = pathData[pathData.length - 1];
+      // สั่งให้กล้องบิน (flyTo) ไปหาจุดล่าสุดแบบมีอนิเมชัน
+      mapInstance.current.flyTo([lastPoint.latitude, lastPoint.longitude], 17, {
+        animate: true,
+        duration: 1.5 // ความเร็วในการเลื่อนกล้อง (วินาที)
+      });
+    }
+  }, [isFetchingGps]); // ดักจับเฉพาะตอนปุ่มค้นหาเปลี่ยนสถานะ
+
   return (
     <div className="relative w-full h-full flex flex-col">
       <div ref={mapRef} className="flex-1 w-full z-0" />
