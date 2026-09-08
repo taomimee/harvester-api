@@ -413,7 +413,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetching
                   <span className="font-bold text-green-700">แปลง {i+1}</span>
                   <div className="flex items-center gap-1">
                     <span className="text-gray-600 font-semibold">{plot.area.rawRai} ไร่</span>
-                    <button onClick={() => savePlotsToLocal(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold">✕</button>
+                    <button onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold">✕</button>
                   </div>
                 </div>
               ))}
