@@ -11,8 +11,27 @@ app.use(express.json());
 
 // เชื่อมต่อฐานข้อมูล Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+
+// 🔐 Backend ต้องใช้ Service Role เพื่อให้ API ที่เชื่อถือได้เขียนข้อมูลผ่าน RLS ได้
+// ห้ามนำ SUPABASE_SERVICE_ROLE_KEY ไปใส่ใน React / Frontend เด็ดขาด
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseFallbackKey = process.env.SUPABASE_KEY;
+const supabaseKey = supabaseServiceRoleKey || supabaseFallbackKey;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.error('❌ Supabase ENV ไม่ครบ: ต้องมี SUPABASE_URL และ SUPABASE_SERVICE_ROLE_KEY');
+}
+
+if (!supabaseServiceRoleKey) {
+    console.warn('⚠️ ยังไม่ได้ตั้ง SUPABASE_SERVICE_ROLE_KEY — ตารางที่เปิด RLS เช่น harvest_plots อาจบันทึกไม่ได้');
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+        persistSession: false,
+        autoRefreshToken: false
+    }
+});
 
 app.get('/', (req, res) => {
     res.send('🚀 ระบบคิวรถเกี่ยว (Harvester API) กำลังทำงาน!');
@@ -822,6 +841,16 @@ app.post('/api/plots', express.json(), async (req, res) => {
         });
     } catch (err) {
         console.error('Save Plots API Error:', err.message);
+
+        const isRlsError = String(err.message || '').toLowerCase().includes('row-level security');
+        if (isRlsError) {
+            return res.status(500).json({
+                error: err.message,
+                code: 'HARVEST_PLOTS_RLS',
+                hint: 'ตั้ง SUPABASE_SERVICE_ROLE_KEY ใน Vercel Environment Variables แล้ว Redeploy'
+            });
+        }
+
         res.status(500).json({ error: err.message });
     }
 });
