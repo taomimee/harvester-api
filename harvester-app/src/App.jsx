@@ -3433,12 +3433,12 @@ function App() {
           // บังคับให้เลือกดูทีละคน เพื่อความชัดเจนของยอด
           const activeWorker = wageFilter.length === 1 ? wageFilter[0] : null;
 
-          // 🧮 2. ฟังก์ชันคำนวณยอดกระเป๋าเงิน (เวอร์ชันตัวเลขิ่ง ไม่กระโดด)
+          // 🧮 2. ฟังก์ชันคำนวณยอดกระเป๋าเงิน (หา ยอดทำได้, ยอดเบิก, ยอดคงเหลือ)
           const getWorkerWallet = (workerName) => {
             let earned = 0;
-            let totalWithdrawn = 0;
+            let oldSystemPaid = 0;
             
-            // 1. คำนวณรายได้สะสมจากงานที่ทำ (Wage Transactions)
+            // รวมยอดจากรายได้หน้าแปลง
             wageTransactions.forEach(tx => {
                const { jobWorkers, paidWorkers } = parseWageNote(tx.note);
                if (jobWorkers.includes(workerName)) {
@@ -3446,24 +3446,20 @@ function App() {
                   const share = Number(tx.total_amount) / divisor;
                   earned += share;
                   
-                  // ถ้าระบบบันทึกว่าจ่ายแล้วในบิลนั้นๆ
+                  // ถ้าระบบเก่าเคยกด จ่ายแล้ว/จ่ายเหมา ไปแล้ว ให้ถือว่าเบิกเงินแล้ว
                   if (tx.status === 'PAID' || paidWorkers.includes(workerName)) {
-                     totalWithdrawn += share;
-                  }
+                     oldSystemPaid += share;
+                   }
                }
             });
 
-            // 2. หักลบยอดการเบิกเงินสดจริงจากตารางรายจ่าย (หมวด 'เบิกค่าแรง' ของคนนี้)
-            const workerWithdrawals = expenseTransactions.filter(tx => 
-               (tx.category === 'เบิกค่าแรง' || tx.category === 'WAGE') && 
-               (tx.spender_name || '').trim() === workerName.trim()
-            );
+            // รวมยอดจากประวัติการกด "เบิกเงิน" แบบใหม่ (พิมพ์ตัวเลขเอง)
+            const newWithdrawals = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name === workerName);
+            const withdrawnNew = newWithdrawals.reduce((sum, tx) => sum + Number(tx.total_amount), 0);
             
-            const withdrawnNew = workerWithdrawals.reduce((sum, tx) => sum + Number(tx.total_amount), 0);
-            totalWithdrawn += withdrawnNew;
-
+            const totalWithdrawn = oldSystemPaid + withdrawnNew;
             const balance = earned - totalWithdrawn;
-            return { earned, totalWithdrawn, balance, newWithdrawals: workerWithdrawals };
+            return { earned, totalWithdrawn, balance, newWithdrawals };
           };
 
           // 💸 ฟังก์ชันเบิกเงิน (พิมพ์ตัวเลขได้ตามใจชอบ เช่น 5,000)
