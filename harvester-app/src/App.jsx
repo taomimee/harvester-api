@@ -203,6 +203,57 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     }
   };
 
+  // 📍 หาพิกัดกลางแปลงจาก Polygon
+  // ใช้ centerOfMass และถ้าจุดหลุดออกนอกแปลงเว้า จะ fallback ไปจุดที่อยู่บน/ใน Polygon
+  const centerFromPoints = (plotPoints) => {
+    if (!Array.isArray(plotPoints) || plotPoints.length < 3) return null;
+    try {
+      const coords = plotPoints
+        .map(p => [Number(p.lng), Number(p.lat)])
+        .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+
+      if (coords.length < 3) return null;
+      coords.push(coords[0]);
+
+      const polygon = turf.polygon([coords]);
+      let centerFeature = turf.centerOfMass(polygon);
+
+      try {
+        if (
+          typeof turf.booleanPointInPolygon === 'function' &&
+          typeof turf.pointOnFeature === 'function' &&
+          !turf.booleanPointInPolygon(centerFeature, polygon)
+        ) {
+          centerFeature = turf.pointOnFeature(polygon);
+        }
+      } catch (_) {}
+
+      const [lng, lat] = centerFeature.geometry.coordinates;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+      return {
+        lat,
+        lng,
+        text: `${lat.toFixed(6)}, ${lng.toFixed(6)}`
+      };
+    } catch (err) {
+      console.warn('คำนวณพิกัดกลางแปลงไม่ได้:', err);
+      return null;
+    }
+  };
+
+  const copyPlotCenter = async (center) => {
+    if (!center) return;
+    const coordText = center.text || `${Number(center.lat).toFixed(6)}, ${Number(center.lng).toFixed(6)}`;
+
+    try {
+      await navigator.clipboard.writeText(coordText);
+      setPlotSyncStatus(`📍 คัดลอกพิกัดแล้ว ${coordText}`);
+    } catch (_) {
+      window.prompt('คัดลอกพิกัดกลางแปลง:', coordText);
+    }
+  };
+
   const exitPlotEditor = () => {
     setDrawMode(false);
     setPoints([]);
@@ -295,11 +346,12 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       if (!silent) console.log(`✅ บันทึกแปลง รถ ${vehicleId} วันที่ ${workDate} สำเร็จ`);
       return true;
     } catch (err) {
-      console.error('❌ บันทึกแปลงลงเซิร์ฟเวอร์ไม่สำเร็จ:', err);
-      // ไม่ลบแปลงออกจากจอ เพราะมีสำรองใน localStorage แล้ว
-      setPlotSyncStatus('⚠️ เก็บสำรองในเครื่องแล้ว');
-      if (!silent) alert(`เซิร์ฟเวอร์ยังบันทึกแปลงไม่ได้\nแต่ระบบเก็บสำรองไว้ในเครื่องนี้แล้วครับ\n\n${err.message}`);
-      return false;
+      console.warn('⚠️ Server sync ไม่สำเร็จ แต่บันทึกในเครื่องเรียบร้อย:', err);
+      // โหมดใช้งานจริง: localStorage คือแหล่งหลักสำหรับแปลงชั่วคราว 1-2 วัน
+      // Server เป็นเพียงการซิงก์เสริม จึงไม่ถือว่า Save ล้มเหลว
+      setPlotSyncStatus('📱 บันทึกในเครื่องแล้ว');
+      writePlotBackup(newPlots, true);
+      return true;
     } finally {
       setIsSavingPlot(false);
     }
@@ -853,6 +905,20 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         turfCoords.push([points[0].lng, points[0].lat]);
         const sqM = turf.area(turf.polygon([turfCoords]));
         setCurrentArea(calculateThaiArea(sqM));
+
+        // 📍 แสดงจุดกลางแปลงทันที ทั้ง Auto Plot / วาดมือ / ตอนแก้ไข
+        const draftCenter = centerFromPoints(points);
+        if (draftCenter) {
+          const centerMarker = L.marker([draftCenter.lat, draftCenter.lng], {
+            icon: L.divIcon({
+              className: 'bg-transparent border-0',
+              html: `<div class="bg-sky-700/95 text-white px-2 py-1.5 rounded-xl text-[10px] font-black shadow-lg border-2 border-white whitespace-nowrap cursor-pointer" style="transform:translate(-50%,-50%);">📍 กลางแปลง<br/><span class="font-mono text-[9px]">${draftCenter.text}</span><br/><span class="text-[8px] font-medium opacity-90">แตะเพื่อคัดลอก</span></div>`,
+              iconSize: [0, 0]
+            })
+          }).addTo(drawLayer.current);
+
+          centerMarker.on('click', () => copyPlotCenter(draftCenter));
+        }
       } else {
         shape = L.polyline(latlngs, { color: '#F97316', weight: 3, dashArray: '5, 5' }).addTo(drawLayer.current);
         setCurrentArea({ text: 'ต้องมีอย่างน้อย 3 จุด', rawRai: 0 });
@@ -897,16 +963,25 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       L.polygon(latlngs, { color: '#F59E0B', fillColor: '#FDE047', fillOpacity: 0.20, weight: 3 }).addTo(plotsLayer.current);
 
       try {
-        const turfCoords = latlngs.map(([lat, lng]) => [lng, lat]);
-        turfCoords.push(turfCoords[0]);
-        const center = turf.centerOfMass(turf.polygon([turfCoords])).geometry.coordinates;
-        L.marker([center[1], center[0]], {
-          icon: L.divIcon({
-            className: 'bg-transparent border-0',
-            html: `<div class="bg-amber-600/95 text-white px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border border-green-300 whitespace-nowrap" style="transform:translate(-50%,-50%);">✅ แปลง ${index + 1}<br/>${plot.area?.text || ''}</div>`,
-            iconSize: [0, 0]
-          })
-        }).addTo(plotsLayer.current);
+        const centerInfo = plot.center?.lat && plot.center?.lng
+          ? {
+              lat: Number(plot.center.lat),
+              lng: Number(plot.center.lng),
+              text: plot.center.text || `${Number(plot.center.lat).toFixed(6)}, ${Number(plot.center.lng).toFixed(6)}`
+            }
+          : centerFromPoints(plot.points);
+
+        if (centerInfo) {
+          const centerMarker = L.marker([centerInfo.lat, centerInfo.lng], {
+            icon: L.divIcon({
+              className: 'bg-transparent border-0',
+              html: `<div class="bg-amber-600/95 text-white px-2 py-1.5 rounded-xl text-[10px] font-black shadow-lg border-2 border-white whitespace-nowrap cursor-pointer" style="transform:translate(-50%,-50%);">📍 แปลง ${index + 1} • ${plot.area?.rawRai || '0.00'} ไร่<br/><span class="font-mono text-[9px]">${centerInfo.text}</span><br/><span class="text-[8px] font-medium opacity-90">แตะเพื่อคัดลอกพิกัด</span></div>`,
+              iconSize: [0, 0]
+            })
+          }).addTo(plotsLayer.current);
+
+          centerMarker.on('click', () => copyPlotCenter(centerInfo));
+        }
       } catch (e) {
         console.warn('คำนวณจุดกึ่งกลางแปลงไม่ได้:', e);
       }
@@ -1023,6 +1098,20 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                       <span>เกี่ยวแล้ว ~{progress.coveredRai.toFixed(2)} ไร่</span>
                       <span>เหลือ {Math.max(0, 100 - progress.percent).toFixed(0)}%</span>
                     </div>
+                    {(() => {
+                      const center = plot.center || centerFromPoints(plot.points);
+                      if (!center) return null;
+                      const centerText = center.text || `${Number(center.lat).toFixed(6)}, ${Number(center.lng).toFixed(6)}`;
+                      return (
+                        <button
+                          onClick={() => copyPlotCenter({ ...center, text: centerText })}
+                          className="mt-1 w-full text-left bg-white/80 hover:bg-sky-50 border border-sky-100 rounded px-1.5 py-1 text-[8px] font-bold text-sky-700"
+                          title="คัดลอกพิกัดกลางแปลง"
+                        >
+                          📍 {centerText} <span className="float-right">📋</span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -1082,6 +1171,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               onClick={async () => {
                 if (points.length < 3) return alert('ต้องมีอย่างน้อย 3 จุดขึ้นไปครับ');
                 const freshArea = areaFromPoints(points);
+                const freshCenter = centerFromPoints(points);
                 let nextPlots;
 
                 if (editingPlotIndex !== null) {
@@ -1090,6 +1180,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                         ...plot,
                         points,
                         area: freshArea,
+                        center: freshCenter,
                         updated_at: new Date().toISOString()
                       }
                     : plot
@@ -1098,6 +1189,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                   nextPlots = [...plots, {
                     points,
                     area: freshArea,
+                    center: freshCenter,
                     source: draftKind === 'auto' ? 'AUTO_GPS' : 'MANUAL',
                     head_width_m: draftKind === 'auto' ? headWidthMeters : undefined,
                     created_at: new Date().toISOString()
