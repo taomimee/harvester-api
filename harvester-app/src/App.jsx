@@ -63,6 +63,13 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
           const newLatLng = e.target.getLatLng();
           latlngs[idx] = [newLatLng.lat, newLatLng.lng];
           shape.setLatLngs(latlngs);
+          if (latlngs.length >= 3) {
+            try {
+              const coords = latlngs.map(([lat, lng]) => [lng, lat]);
+              coords.push(coords[0]);
+              setCurrentArea(calculateThaiArea(turf.area(turf.polygon([coords]))));
+            } catch (_) {}
+          }
         });
         marker.on('dragend', (e) => {
           const newLatLng = e.target.getLatLng();
@@ -127,7 +134,7 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
         )}
       </div>
 
-      <div className="absolute top-28 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-5 py-2 rounded-full shadow-lg border border-green-300">
+      <div className="absolute top-28 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-5 py-2 rounded-full shadow-lg border border-amber-300">
         <span className="font-bold text-green-700 text-sm whitespace-nowrap">📐 พื้นที่: {areaInfo.text}</span>
       </div>
       <div ref={mapRef} className="flex-1 w-full z-0" />
@@ -167,6 +174,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const [isSavingPlot, setIsSavingPlot] = useState(false);
   const [plotSyncStatus, setPlotSyncStatus] = useState('');
   const [autoFollow, setAutoFollow] = useState(false);
+  const [headWidthMeters, setHeadWidthMeters] = useState(3.0);
+  const [editingPlotIndex, setEditingPlotIndex] = useState(null);
+  const [draftKind, setDraftKind] = useState('manual'); // manual | auto | edit
+  const [isAutoPlotting, setIsAutoPlotting] = useState(false);
 
   const calculateThaiArea = (sqMeters) => {
     const rai = Math.floor(sqMeters / 1600);
@@ -176,6 +187,43 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     const sqWah = (remain / 4).toFixed(1);
     const rawRai = (sqMeters / 1600).toFixed(2);
     return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
+  };
+
+
+  const areaFromPoints = (plotPoints) => {
+    if (!Array.isArray(plotPoints) || plotPoints.length < 3) return { text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 };
+    try {
+      const coords = plotPoints.map(p => [Number(p.lng), Number(p.lat)]).filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+      if (coords.length < 3) return { text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 };
+      coords.push(coords[0]);
+      return calculateThaiArea(turf.area(turf.polygon([coords])));
+    } catch (_) {
+      return { text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 };
+    }
+  };
+
+  const exitPlotEditor = () => {
+    setDrawMode(false);
+    setPoints([]);
+    setEditingPlotIndex(null);
+    setDraftKind('manual');
+  };
+
+  const openPlotEditor = (plotIndex) => {
+    const plot = plots[plotIndex];
+    if (!plot?.points || plot.points.length < 3) return;
+    setAutoFollow(false);
+    setEditingPlotIndex(plotIndex);
+    setDraftKind('edit');
+    setPoints(plot.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })));
+    setCurrentArea(areaFromPoints(plot.points));
+    setDrawMode(true);
+
+    setTimeout(() => {
+      if (!mapInstance.current) return;
+      const bounds = L.latLngBounds(plot.points.map(p => [Number(p.lat), Number(p.lng)]));
+      if (bounds.isValid()) mapInstance.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 19 });
+    }, 80);
   };
 
   const plotStorageKey = vehicleId && workDate ? `harvester_plots_v2_${vehicleId}_${workDate}` : null;
@@ -413,6 +461,124 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     };
   })();
 
+  // ✨ GPS V3: สร้างขอบแปลงอัตโนมัติจากเที่ยววิ่งเกี่ยวที่วิ่งซ้ำหนาแน่น
+  // ตัดเส้นเดินทางเดี่ยว ๆ ออกด้วย spatial-density ของ segment ที่ไม่ติดกันตามเวลา
+  const generateAutoPlot = async () => {
+    if (pathData.length < 8) return alert('ข้อมูล GPS ยังน้อยเกินไปสำหรับวาดแปลงอัตโนมัติครับ');
+    if (!vehicleId || !workDate) return alert('กรุณาเลือกรถและวันที่ก่อนครับ');
+
+    setIsAutoPlotting(true);
+    setAutoFollow(false);
+    try {
+      const candidates = [];
+      for (let i = 1; i < pathData.length; i++) {
+        const a = pathData[i - 1];
+        const b = pathData[i];
+        const info = getSegmentInfo(a, b);
+        if (!info.harvesting || info.km <= 0 || info.km > 0.25) continue;
+
+        const aLat = Number(a.latitude), aLng = Number(a.longitude);
+        const bLat = Number(b.latitude), bLng = Number(b.longitude);
+        if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
+
+        const mid = turf.midpoint(turf.point([aLng, aLat]), turf.point([bLng, bLat])).geometry.coordinates;
+        candidates.push({ index: i, a: [aLng, aLat], b: [bLng, bLat], mid });
+      }
+
+      if (candidates.length < 4) {
+        return alert('ยังหาเที่ยววิ่งเกี่ยวได้ไม่พอครับ\nลองเลือกวันที่ที่รถเกี่ยวเต็มแปลงก่อน');
+      }
+
+      const densityRadiusMeters = Math.max(16, headWidthMeters * 5);
+      const denseSegments = candidates.filter((seg, idx) => {
+        let nonAdjacentNeighbors = 0;
+        for (let j = 0; j < candidates.length; j++) {
+          if (j === idx) continue;
+          const other = candidates[j];
+          // ไม่นับจุดที่วิ่งติดกันตามเวลา เพราะถนนเส้นเดียวก็มีจุดติดกันเยอะ
+          if (Math.abs(other.index - seg.index) <= 4) continue;
+          const meters = turf.distance(turf.point(seg.mid), turf.point(other.mid), { units: 'kilometers' }) * 1000;
+          if (meters <= densityRadiusMeters) {
+            nonAdjacentNeighbors++;
+            if (nonAdjacentNeighbors >= 2) break;
+          }
+        }
+        return nonAdjacentNeighbors >= 2;
+      });
+
+      if (denseSegments.length < 3) {
+        return alert('ระบบเห็นรอยเกี่ยว แต่ยังแยกพื้นที่แปลงออกจากทางเดินรถไม่ได้ชัดพอครับ\nลองใช้วาดมือ หรือปรับหัวเกี่ยวให้ตรงก่อน');
+      }
+
+      const multi = turf.multiLineString(denseSegments.map(s => [s.a, s.b]));
+      let buffered = turf.buffer(multi, Math.max(1, headWidthMeters / 2), { units: 'meters', steps: 6 });
+      if (!buffered) return alert('สร้างพื้นที่จากรอย GPS ไม่สำเร็จครับ');
+
+      // ลดจำนวนจุดขอบให้อยู่ในระดับที่ลากแก้ได้สะดวก แต่ยังตามรูปแปลงจริง
+      let tolerance = Math.max(0.000006, Math.min(0.00003, headWidthMeters / 150000));
+      let simplified = turf.simplify(buffered, { tolerance, highQuality: true, mutate: false });
+
+      const getRings = (feature) => {
+        if (!feature?.geometry) return [];
+        if (feature.geometry.type === 'Polygon') return [feature.geometry.coordinates[0]];
+        if (feature.geometry.type === 'MultiPolygon') return feature.geometry.coordinates.map(poly => poly[0]);
+        return [];
+      };
+
+      let rings = getRings(simplified)
+        .map(ring => {
+          const coords = ring.slice(0, -1);
+          const polygon = turf.polygon([[...coords, coords[0]]]);
+          return { coords, sqM: turf.area(polygon) };
+        })
+        .filter(item => item.coords.length >= 3 && item.sqM >= Math.max(60, headWidthMeters * 25))
+        .sort((a, b) => b.sqM - a.sqM);
+
+      if (rings.length === 0) return alert('ยังสร้างขอบแปลงที่เชื่อถือได้ไม่สำเร็จครับ');
+
+      // ใช้พื้นที่ต่อเนื่องก้อนใหญ่สุดก่อน เพื่อไม่ลากถนน/แปลงอื่นเข้ามารวมกัน
+      let mainRing = rings[0].coords;
+
+      // ถ้าจุดเยอะเกินไป เพิ่ม simplify ทีละนิดจนลากแก้สะดวก
+      for (let pass = 0; pass < 5 && mainRing.length > 48; pass++) {
+        tolerance *= 1.45;
+        simplified = turf.simplify(buffered, { tolerance, highQuality: true, mutate: false });
+        const retry = getRings(simplified)
+          .map(ring => {
+            const coords = ring.slice(0, -1);
+            const polygon = turf.polygon([[...coords, coords[0]]]);
+            return { coords, sqM: turf.area(polygon) };
+          })
+          .filter(item => item.coords.length >= 3)
+          .sort((a, b) => b.sqM - a.sqM);
+        if (retry.length) mainRing = retry[0].coords;
+      }
+
+      const autoPoints = mainRing.map(([lng, lat]) => ({ lat, lng }));
+      const autoArea = areaFromPoints(autoPoints);
+
+      setEditingPlotIndex(null);
+      setDraftKind('auto');
+      setPoints(autoPoints);
+      setCurrentArea(autoArea);
+      setDrawMode(true);
+
+      setTimeout(() => {
+        if (!mapInstance.current) return;
+        const bounds = L.latLngBounds(autoPoints.map(p => [p.lat, p.lng]));
+        if (bounds.isValid()) mapInstance.current.fitBounds(bounds, { padding: [55, 55], maxZoom: 19 });
+      }, 100);
+
+      const extraText = rings.length > 1 ? `\nพบพื้นที่แยก ${rings.length} กลุ่ม ระบบเลือกก้อนใหญ่สุดให้ก่อน` : '';
+      alert(`✨ Auto Plot สำเร็จ\nประมาณ ${autoArea.text}\nมี ${autoPoints.length} จุดให้ลากแก้ขอบแปลง${extraText}\n\nลากจุดให้ตรงแล้วกด 💾 บันทึกครับ`);
+    } catch (err) {
+      console.error('Auto Plot Error:', err);
+      alert(`สร้างแปลงอัตโนมัติไม่สำเร็จครับ\n${err.message || err}`);
+    } finally {
+      setIsAutoPlotting(false);
+    }
+  };
+
   const fitAllRoute = () => {
     setAutoFollow(false); // ผู้ใช้กำลังดูภาพรวม ห้ามรีเฟรชแล้วดึงกล้องกลับไปที่รถ
     if (!mapInstance.current || pathData.length === 0) return;
@@ -559,7 +725,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   useEffect(() => {
     if (!mapInstance.current) return;
     const handleMapClick = (e) => {
-      if (drawMode) setPoints(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng }]);
+      // วาดมือเท่านั้นที่คลิกเพื่อเพิ่มจุด; Auto/Edit ใช้ลากจุดเดิมเพื่อกันรูปเสีย
+      if (drawMode && draftKind === 'manual') setPoints(prev => [...prev, { lat: e.latlng.lat, lng: e.latlng.lng }]);
     };
 
     if (drawMode) {
@@ -570,7 +737,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     }
 
     return () => mapInstance.current?.off('click', handleMapClick);
-  }, [drawMode]);
+  }, [drawMode, draftKind]);
 
   // 5. วาดเส้นขอบและจุดตามที่จิ้ม
   useEffect(() => {
@@ -578,7 +745,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     drawLayer.current.clearLayers();
 
     if (!drawMode) {
-      setPoints([]);
+      drawLayer.current.clearLayers();
       return;
     }
 
@@ -627,11 +794,12 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     plotsLayer.current.clearLayers();
 
     plots.forEach((plot, index) => {
+      if (drawMode && editingPlotIndex === index) return; // ตอนแก้ไข แสดง draft layer แทนเพื่อไม่ซ้อนกัน
       if (!plot?.points || plot.points.length < 3) return;
       const latlngs = plot.points.map(p => [Number(p.lat), Number(p.lng)]).filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
       if (latlngs.length < 3) return;
 
-      L.polygon(latlngs, { color: '#16A34A', fillColor: '#4ADE80', fillOpacity: 0.35, weight: 3 }).addTo(plotsLayer.current);
+      L.polygon(latlngs, { color: '#F59E0B', fillColor: '#FDE047', fillOpacity: 0.20, weight: 3 }).addTo(plotsLayer.current);
 
       try {
         const turfCoords = latlngs.map(([lat, lng]) => [lng, lat]);
@@ -640,7 +808,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         L.marker([center[1], center[0]], {
           icon: L.divIcon({
             className: 'bg-transparent border-0',
-            html: `<div class="bg-green-700/90 text-white px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border border-green-300 whitespace-nowrap" style="transform:translate(-50%,-50%);">✅ แปลง ${index + 1}<br/>${plot.area?.text || ''}</div>`,
+            html: `<div class="bg-amber-600/95 text-white px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border border-green-300 whitespace-nowrap" style="transform:translate(-50%,-50%);">✅ แปลง ${index + 1}<br/>${plot.area?.text || ''}</div>`,
             iconSize: [0, 0]
           })
         }).addTo(plotsLayer.current);
@@ -648,7 +816,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         console.warn('คำนวณจุดกึ่งกลางแปลงไม่ได้:', e);
       }
     });
-  }, [plots]);
+  }, [plots, drawMode, editingPlotIndex]);
 
   const statusOnline = trackingMode === 'realtime' && gpsStats.lastAgeSec !== null && gpsStats.lastAgeSec <= 30;
   const durationText = gpsStats.durationMin >= 60
@@ -690,12 +858,43 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         <button
           onClick={() => {
             setAutoFollow(false);
-            setDrawMode(!drawMode);
+            if (drawMode) {
+              exitPlotEditor();
+            } else {
+              setEditingPlotIndex(null);
+              setDraftKind('manual');
+              setPoints([]);
+              setDrawMode(true);
+            }
           }}
           className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-bold text-xs border transition flex items-center gap-1 w-max ${drawMode ? 'bg-red-500 hover:bg-red-600 text-white border-red-600' : 'bg-white hover:bg-gray-50 text-gray-800 border-gray-300'}`}
         >
-          {drawMode ? '❌ ปิดโหมดวาด' : '📏 วาดแปลง'}
+          {drawMode ? '❌ ยกเลิกแก้แปลง' : '📏 วาดแปลง'}
         </button>
+
+        {!drawMode && pathData.length > 0 && (
+          <>
+            <button
+              onClick={generateAutoPlot}
+              disabled={isAutoPlotting}
+              className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-black text-xs border transition w-max ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white border-fuchsia-700'}`}
+            >
+              {isAutoPlotting ? '⏳ กำลังวิเคราะห์...' : '✨ วาดแปลงออโต้'}
+            </button>
+            <button
+              onClick={() => {
+                const value = window.prompt('ความกว้างหัวเกี่ยว (เมตร)', String(headWidthMeters));
+                if (value === null) return;
+                const n = Number(value);
+                if (!Number.isFinite(n) || n < 1 || n > 15) return alert('กรุณาใส่ความกว้าง 1 - 15 เมตรครับ');
+                setHeadWidthMeters(n);
+              }}
+              className="pointer-events-auto bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 px-3 py-1.5 rounded-lg shadow font-bold text-[10px] w-max"
+            >
+              ⚙️ หัวเกี่ยว {headWidthMeters.toFixed(1)} ม.
+            </button>
+          </>
+        )}
 
         {plotSyncStatus && (
           <div className="pointer-events-auto bg-white/95 px-2 py-1 rounded-lg shadow border border-gray-200 text-[9px] font-bold text-gray-600 w-max max-w-52">
@@ -704,20 +903,21 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         )}
 
         {plots.length > 0 && (
-          <div className="pointer-events-auto bg-white/95 backdrop-blur border border-green-200 p-2 rounded-lg shadow-lg w-52 mt-1">
-            <h4 className="text-[10px] font-black text-green-800 border-b border-green-100 pb-1 mb-1">🌾 แปลงที่บันทึกไว้ ({workDate || '-'})</h4>
+          <div className="pointer-events-auto bg-white/95 backdrop-blur border border-amber-200 p-2 rounded-lg shadow-lg w-52 mt-1">
+            <h4 className="text-[10px] font-black text-amber-800 border-b border-amber-100 pb-1 mb-1">🌾 แปลงที่บันทึกไว้ ({workDate || '-'})</h4>
             <div className="max-h-32 overflow-y-auto space-y-1">
               {plots.map((plot, i) => (
-                <div key={i} className="flex justify-between items-center text-[10px] bg-green-50 p-1.5 rounded">
-                  <span className="font-bold text-green-700">แปลง {i + 1}</span>
+                <div key={i} className="flex justify-between items-center text-[10px] bg-amber-50 p-1.5 rounded">
+                  <span className="font-bold text-amber-700">แปลง {i + 1}</span>
                   <div className="flex items-center gap-1">
                     <span className="text-gray-600 font-semibold">{plot.area?.rawRai || 0} ไร่</span>
+                    <button disabled={isSavingPlot} onClick={() => openPlotEditor(i)} className="text-blue-600 hover:bg-blue-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40" title="แก้ไขขอบแปลง">✏️</button>
                     <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
                   </div>
                 </div>
               ))}
             </div>
-            <div className="mt-1 pt-1.5 border-t border-green-200 text-[11px] font-black text-gray-800 text-right">
+            <div className="mt-1 pt-1.5 border-t border-amber-200 text-[11px] font-black text-gray-800 text-right">
               รวม: {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่
             </div>
           </div>
@@ -747,25 +947,46 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       {drawMode && (
         <>
           <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-4 py-1.5 rounded-full shadow-lg border border-orange-300 pointer-events-none">
-            <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text}</span>
+            <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text} {draftKind !== 'manual' ? '• ลากจุดเพื่อแก้ขอบ' : ''}</span>
           </div>
 
           <div className="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-[400] flex items-center bg-white/90 backdrop-blur p-2 rounded-full shadow-xl border border-gray-200 gap-2 pointer-events-auto">
-            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0} className={`px-4 py-2 rounded-full font-bold text-sm transition ${points.length === 0 ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
+            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0 || draftKind !== 'manual'} className={`px-4 py-2 rounded-full font-bold text-sm transition ${points.length === 0 || draftKind !== 'manual' ? 'bg-gray-200 text-gray-400' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>
               ↩️ ย้อนกลับ
             </button>
             <button
               onClick={async () => {
-                if (points.length < 3) return alert('ต้องจิ้มจุดอย่างน้อย 3 มุมขึ้นไปครับ');
-                const ok = await savePlotsToServer([...plots, { points, area: currentArea }]);
-                // ต่อให้ server ล่ม ระบบมี local backup แล้ว จึงเคลียร์จุดวาดได้
-                setPoints([]);
-                if (ok) setDrawMode(false);
+                if (points.length < 3) return alert('ต้องมีอย่างน้อย 3 จุดขึ้นไปครับ');
+                const freshArea = areaFromPoints(points);
+                let nextPlots;
+
+                if (editingPlotIndex !== null) {
+                  nextPlots = plots.map((plot, idx) => idx === editingPlotIndex
+                    ? {
+                        ...plot,
+                        points,
+                        area: freshArea,
+                        updated_at: new Date().toISOString()
+                      }
+                    : plot
+                  );
+                } else {
+                  nextPlots = [...plots, {
+                    points,
+                    area: freshArea,
+                    source: draftKind === 'auto' ? 'AUTO_GPS' : 'MANUAL',
+                    head_width_m: draftKind === 'auto' ? headWidthMeters : undefined,
+                    created_at: new Date().toISOString()
+                  }];
+                }
+
+                const ok = await savePlotsToServer(nextPlots);
+                if (ok) exitPlotEditor();
               }}
               disabled={points.length < 3 || isSavingPlot || !vehicleId || !workDate}
               className={`px-6 py-2 rounded-full font-bold text-sm transition shadow-md ${points.length < 3 || isSavingPlot || !vehicleId || !workDate ? 'bg-gray-200 text-gray-400' : 'bg-green-600 text-white hover:bg-green-700'}`}
             >
-              {isSavingPlot ? '⏳ บันทึก...' : '💾 บันทึกแปลง'}
+              {isSavingPlot ? '⏳ บันทึก...' : (editingPlotIndex !== null ? '💾 บันทึกการแก้ไข' : '💾 บันทึกแปลง')}
             </button>
           </div>
         </>
