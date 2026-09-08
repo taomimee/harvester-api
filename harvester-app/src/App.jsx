@@ -150,8 +150,8 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
-// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw เหมือนแอปลิง)
-function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
+// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงแบบจิ้มจอ (Tap to Draw) + เด้งซูม
+function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
@@ -212,7 +212,18 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
     }
   }, [pathData]);
 
-  // 💡 3. ระบบจิ้มจอเพื่อเพิ่มจุด (Tap to add point)
+  // 3. ระบบเด้งซูมไปหารถเมื่อกดค้นหา
+  useEffect(() => {
+    if (!isFetchingGps && pathData.length > 0 && mapInstance.current) {
+      const lastPoint = pathData[pathData.length - 1];
+      mapInstance.current.flyTo([lastPoint.latitude, lastPoint.longitude], 17, {
+        animate: true,
+        duration: 1.5
+      });
+    }
+  }, [isFetchingGps, pathData]); 
+
+  // 4. ระบบจิ้มจอเพื่อเพิ่มจุด
   useEffect(() => {
     if (!mapInstance.current) return;
     const handleMapClick = (e) => {
@@ -221,10 +232,8 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
       }
     };
     
-    // เปิด-ปิด การรับคำสั่งจิ้มจอ
     if (drawMode) {
       mapInstance.current.on('click', handleMapClick);
-      // เปลี่ยนเมาส์ให้เป็นรูปเป้าเล็งเวลาเปิดโหมดวาด
       mapInstance.current.getContainer().style.cursor = 'crosshair';
     } else {
       mapInstance.current.off('click', handleMapClick);
@@ -236,7 +245,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
     };
   }, [drawMode]);
 
-  // 4. วาดเส้นขอบและจุดตามที่จิ้ม
+  // 5. วาดเส้นขอบและจุดตามที่จิ้ม
   useEffect(() => {
     if (!drawLayer.current || !mapInstance.current) return;
     drawLayer.current.clearLayers();
@@ -267,7 +276,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
             html: `<div class="bg-orange-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold text-[10px] border-2 border-white shadow-md cursor-pointer" style="margin-left: -10px; margin-top: -10px;">${idx + 1}</div>`,
             iconSize: [0, 0]
           }),
-          draggable: true // 💡 หมุดสามารถใช้นิ้วกดค้างเพื่อเลื่อนขยับได้
+          draggable: true
         }).addTo(drawLayer.current);
 
         marker.on('drag', (e) => {
@@ -287,7 +296,7 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
     }
   }, [points, drawMode]);
 
-  // 5. วาดแปลงที่บันทึกไว้
+  // 6. วาดแปลงที่บันทึกไว้
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
@@ -309,19 +318,6 @@ function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
       }).addTo(plotsLayer.current);
     });
   }, [plots]);
-
-  // 👇 2. เพิ่มโค้ดระบบเด้งซูมนี้ เข้าไปก่อนบรรทัด return (
-  useEffect(() => {
-    // ถ้าปุ่มค้นหาทำงานเสร็จแล้ว (!isFetchingGps) และมีข้อมูลพิกัด
-    if (!isFetchingGps && pathData.length > 0 && mapInstance.current) {
-      const lastPoint = pathData[pathData.length - 1];
-      // สั่งให้กล้องบิน (flyTo) ไปหาจุดล่าสุดแบบมีอนิเมชัน
-      mapInstance.current.flyTo([lastPoint.latitude, lastPoint.longitude], 17, {
-        animate: true,
-        duration: 1.5 // ความเร็วในการเลื่อนกล้อง (วินาที)
-      });
-    }
-  }, [isFetchingGps]); // ดักจับเฉพาะตอนปุ่มค้นหาเปลี่ยนสถานะ
 
   return (
     <div className="relative w-full h-full flex flex-col">
