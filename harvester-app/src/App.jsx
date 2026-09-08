@@ -3,6 +3,7 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
+// 🛰️ GPS V3.1 Progress + Auto Plot + Editable Boundary
 // 🗺️ ระบบแผนที่เป้าเล็ง + ค้นหาสถานที่อัจฉริยะ + แผนที่ดาวเทียมมีป้ายชื่อ
 function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const mapRef = useRef(null);
@@ -461,6 +462,99 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     };
   })();
 
+  // 📈 GPS V3.1: คำนวณความคืบหน้าการเกี่ยวจาก "พื้นที่จริง" ไม่ใช่แค่ระยะทาง
+  // 1) เอาเฉพาะ segment ที่ระบบมองว่ากำลังเกี่ยว
+  // 2) ขยายเส้นออกตามครึ่งหนึ่งของความกว้างหัวเกี่ยว
+  // 3) ตัดเฉพาะพื้นที่ที่อยู่ภายในขอบแปลงที่บันทึก
+  // ผลที่ได้จึงเป็นค่าประมาณพื้นที่ที่หัวเกี่ยวผ่านแล้วจริง
+  const harvestCoverage = (() => {
+    try {
+      const segments = [];
+      for (let i = 1; i < pathData.length; i++) {
+        const a = pathData[i - 1];
+        const b = pathData[i];
+        const info = getSegmentInfo(a, b);
+        if (!info.harvesting || info.km <= 0 || info.km > 0.25) continue;
+
+        const aLat = Number(a.latitude), aLng = Number(a.longitude);
+        const bLat = Number(b.latitude), bLng = Number(b.longitude);
+        if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
+        segments.push([[aLng, aLat], [bLng, bLat]]);
+      }
+
+      if (segments.length === 0) return null;
+      return turf.buffer(
+        turf.multiLineString(segments),
+        Math.max(0.5, Number(headWidthMeters) / 2),
+        { units: 'meters', steps: 5 }
+      );
+    } catch (err) {
+      console.warn('คำนวณพื้นที่เกี่ยวไม่ได้:', err);
+      return null;
+    }
+  })();
+
+  const intersectFeatures = (a, b) => {
+    if (!a || !b) return null;
+    // Turf รุ่นใหม่ใช้ FeatureCollection ส่วนรุ่นเก่ารับ 2 feature ตรงๆ
+    try {
+      return turf.intersect(turf.featureCollection([a, b]));
+    } catch (_) {
+      try { return turf.intersect(a, b); } catch (_) { return null; }
+    }
+  };
+
+  const plotProgressList = plots.map((plot, index) => {
+    let totalSqM = 0;
+    let coveredSqM = 0;
+
+    try {
+      if (Array.isArray(plot?.points) && plot.points.length >= 3) {
+        const coords = plot.points
+          .map(p => [Number(p.lng), Number(p.lat)])
+          .filter(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat));
+
+        if (coords.length >= 3) {
+          coords.push(coords[0]);
+          const plotPolygon = turf.polygon([coords]);
+          totalSqM = Math.max(0, turf.area(plotPolygon));
+
+          if (harvestCoverage && totalSqM > 0) {
+            const clipped = intersectFeatures(plotPolygon, harvestCoverage);
+            if (clipped) coveredSqM = Math.max(0, Math.min(totalSqM, turf.area(clipped)));
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`คำนวณ progress แปลง ${index + 1} ไม่ได้:`, err);
+    }
+
+    const percent = totalSqM > 0 ? Math.min(100, Math.max(0, (coveredSqM / totalSqM) * 100)) : 0;
+    return {
+      index,
+      totalSqM,
+      coveredSqM,
+      totalRai: totalSqM / 1600,
+      coveredRai: coveredSqM / 1600,
+      remainingRai: Math.max(0, (totalSqM - coveredSqM) / 1600),
+      percent,
+      remainingPercent: Math.max(0, 100 - percent)
+    };
+  });
+
+  const overallProgress = (() => {
+    const totalSqM = plotProgressList.reduce((sum, p) => sum + p.totalSqM, 0);
+    const coveredSqM = plotProgressList.reduce((sum, p) => sum + p.coveredSqM, 0);
+    const percent = totalSqM > 0 ? Math.min(100, Math.max(0, (coveredSqM / totalSqM) * 100)) : 0;
+    return {
+      totalRai: totalSqM / 1600,
+      coveredRai: coveredSqM / 1600,
+      remainingRai: Math.max(0, (totalSqM - coveredSqM) / 1600),
+      percent,
+      remainingPercent: Math.max(0, 100 - percent)
+    };
+  })();
+
   // ✨ GPS V3: สร้างขอบแปลงอัตโนมัติจากเที่ยววิ่งเกี่ยวที่วิ่งซ้ำหนาแน่น
   // ตัดเส้นเดินทางเดี่ยว ๆ ออกด้วย spatial-density ของ segment ที่ไม่ติดกันตามเวลา
   const generateAutoPlot = async () => {
@@ -635,7 +729,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     };
   }, []);
 
-  // 2. วาดเส้นทาง: ม่วงชมพู = กำลังเกี่ยว, น้ำเงิน = วิ่งทั่วไป
+  // 2. วาดเส้นทาง: น้ำเงิน = กำลังเกี่ยว, ม่วงชมพู = วิ่งทั่วไป
   useEffect(() => {
     if (!mapInstance.current) return;
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
@@ -654,9 +748,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         const segment = getSegmentInfo(a, b);
         const harvesting = segment.harvesting;
         L.polyline([[aLat, aLng], [bLat, bLng]], {
-          color: harvesting ? '#D946EF' : '#2563EB',
-          weight: harvesting ? 5 : 3,
-          opacity: harvesting ? 0.95 : 0.65
+          // กำลังเกี่ยวให้เด่นชัด ส่วนวิ่งทั่วไปทำบาง/โปร่งเพื่อลดตาลาย
+          color: harvesting ? '#2563EB' : '#D946EF',
+          weight: harvesting ? 5 : 2,
+          opacity: harvesting ? 0.90 : 0.38
         }).addTo(routeGroup);
       }
 
@@ -877,7 +972,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
             <button
               onClick={generateAutoPlot}
               disabled={isAutoPlotting}
-              className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-black text-xs border transition w-max ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white border-fuchsia-700'}`}
+              className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-black text-xs border transition w-max ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'}`}
             >
               {isAutoPlotting ? '⏳ กำลังวิเคราะห์...' : '✨ วาดแปลงออโต้'}
             </button>
@@ -906,19 +1001,47 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           <div className="pointer-events-auto bg-white/95 backdrop-blur border border-amber-200 p-2 rounded-lg shadow-lg w-52 mt-1">
             <h4 className="text-[10px] font-black text-amber-800 border-b border-amber-100 pb-1 mb-1">🌾 แปลงที่บันทึกไว้ ({workDate || '-'})</h4>
             <div className="max-h-32 overflow-y-auto space-y-1">
-              {plots.map((plot, i) => (
-                <div key={i} className="flex justify-between items-center text-[10px] bg-amber-50 p-1.5 rounded">
-                  <span className="font-bold text-amber-700">แปลง {i + 1}</span>
-                  <div className="flex items-center gap-1">
-                    <span className="text-gray-600 font-semibold">{plot.area?.rawRai || 0} ไร่</span>
-                    <button disabled={isSavingPlot} onClick={() => openPlotEditor(i)} className="text-blue-600 hover:bg-blue-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40" title="แก้ไขขอบแปลง">✏️</button>
-                    <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
+              {plots.map((plot, i) => {
+                const progress = plotProgressList[i] || { percent: 0, coveredRai: 0, totalRai: Number(plot.area?.rawRai || 0) };
+                return (
+                  <div key={i} className="text-[10px] bg-amber-50 p-1.5 rounded">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="font-bold text-amber-700">แปลง {i + 1}</span>
+                        <span className="ml-1 text-blue-700 font-black">• {progress.percent.toFixed(0)}%</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-600 font-semibold">{Number(plot.area?.rawRai || progress.totalRai || 0).toFixed(2)} ไร่</span>
+                        <button disabled={isSavingPlot} onClick={() => openPlotEditor(i)} className="text-blue-600 hover:bg-blue-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40" title="แก้ไขขอบแปลง">✏️</button>
+                        <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
+                      </div>
+                    </div>
+                    <div className="mt-1 h-1.5 bg-white rounded-full overflow-hidden border border-blue-100">
+                      <div className="h-full bg-blue-600 rounded-full transition-all duration-300" style={{ width: `${progress.percent}%` }}></div>
+                    </div>
+                    <div className="mt-0.5 flex justify-between text-[8px] text-gray-500">
+                      <span>เกี่ยวแล้ว ~{progress.coveredRai.toFixed(2)} ไร่</span>
+                      <span>เหลือ {Math.max(0, 100 - progress.percent).toFixed(0)}%</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div className="mt-1 pt-1.5 border-t border-amber-200 text-[11px] font-black text-gray-800 text-right">
               รวม: {plots.reduce((sum, p) => sum + Number(p.area?.rawRai || 0), 0).toFixed(2)} ไร่
+            </div>
+            <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-2">
+              <div className="flex items-center justify-between text-[10px] font-black">
+                <span className="text-blue-900">📈 ความคืบหน้าการเกี่ยว</span>
+                <span className="text-blue-700 text-sm">{overallProgress.percent.toFixed(0)}%</span>
+              </div>
+              <div className="mt-1 h-2 bg-white rounded-full overflow-hidden border border-blue-100">
+                <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${overallProgress.percent}%` }}></div>
+              </div>
+              <div className="mt-1 flex justify-between text-[8px] font-bold text-gray-600">
+                <span>✅ ~{overallProgress.coveredRai.toFixed(2)} / {overallProgress.totalRai.toFixed(2)} ไร่</span>
+                <span>เหลือ ~{overallProgress.remainingRai.toFixed(2)} ไร่</span>
+              </div>
             </div>
           </div>
         )}
@@ -932,13 +1055,14 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               {trackingMode === 'realtime' ? (statusOnline ? '● ออนไลน์' : '● สัญญาณเงียบ') : '🕒 ประวัติ'}
             </span>
             <span>🛣️ {gpsStats.totalKm.toFixed(2)} กม.</span>
-            <span className="text-fuchsia-700">🌾 เกี่ยว {gpsStats.harvestKm.toFixed(2)} กม.</span>
+            <span className="text-blue-700">🌾 เกี่ยว {gpsStats.harvestKm.toFixed(2)} กม.</span>
+            {plots.length > 0 && <span className="text-blue-700">📈 {overallProgress.percent.toFixed(0)}%</span>}
             <span>⏱️ {durationText}</span>
             <span>📡 {gpsStats.points.toLocaleString()} จุด</span>
           </div>
           <div className="mt-1 flex items-center gap-3 text-[9px] text-gray-500">
-            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-blue-600"></i> วิ่งทั่วไป</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-fuchsia-500"></i> กำลังเกี่ยว/ประเมิน</span>
+            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-blue-600"></i> กำลังเกี่ยว/ประเมิน</span>
+            <span className="flex items-center gap-1"><i className="inline-block w-3 h-1 rounded bg-fuchsia-500 opacity-60"></i> วิ่งทั่วไป</span>
           </div>
         </div>
       )}
