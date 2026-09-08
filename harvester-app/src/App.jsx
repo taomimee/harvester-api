@@ -150,16 +150,32 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
-// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยวโดยเฉพาะ (Tracking Map)
-function TrackingMap({ pathData }) {
+// 🗺️ แผนที่สำหรับดูเส้นทางรถเกี่ยว + ระบบวาดแปลงด้วยมือ (Manual Draw Mode)
+function TrackingMap({ pathData, isMapFullScreen, setIsMapFullScreen }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
-  const markerLayer = useRef(null); // 💡 ตัวแปรสำหรับจำรูปรถเกี่ยว (กันรูปซ้อนทับ)
+  const markerLayer = useRef(null);
+  const drawLayer = useRef(null);
+  const plotsLayer = useRef(null);
+
+  const [drawMode, setDrawMode] = useState(false);
+  const [points, setPoints] = useState([]);
+  const [plots, setPlots] = useState([]);
+  const [currentArea, setCurrentArea] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
+
+  const calculateThaiArea = (sqMeters) => {
+    const rai = Math.floor(sqMeters / 1600);
+    let remain = sqMeters % 1600;
+    const ngan = Math.floor(remain / 400);
+    remain = remain % 400;
+    const sqWah = (remain / 4).toFixed(1);
+    const rawRai = (sqMeters / 1600).toFixed(2);
+    return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
+  };
 
   useEffect(() => {
     if (!mapRef.current) return;
-    // ตั้งค่าพิกัดเริ่มต้น (ถ้าไม่มีข้อมูลให้ซูมระดับประเทศ)
     const center = pathData.length > 0 ? [pathData[pathData.length-1].latitude, pathData[pathData.length-1].longitude] : [15.7012, 101.1012];
     const zoom = pathData.length > 0 ? 17 : 6;
 
@@ -168,53 +184,183 @@ function TrackingMap({ pathData }) {
       L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
         attribution: 'Google Maps', maxZoom: 20
       }).addTo(mapInstance.current);
-    } else {
-      // ❌ คอมเมนต์ปิดบรรทัดนี้ทิ้งไป เพื่อไม่ให้แผนที่โดนบังคับรีเซ็ตการซูม
-      // mapInstance.current.setView(center, zoom);
+      
+      drawLayer.current = L.layerGroup().addTo(mapInstance.current);
+      plotsLayer.current = L.layerGroup().addTo(mapInstance.current);
     }
+  }, []); // ลบ dependencies ออกเพื่อไม่ให้แผนที่เด้งกลับ
 
-    // 💡 สั่งให้แผนที่รีเฟรชขนาดตัวเองใหม่ (แก้บั๊กแผนที่โผล่ครึ่งจอ)
-    setTimeout(() => {
-      if (mapInstance.current) {
-        mapInstance.current.invalidateSize();
-      }
-    }, 200);
-
-    // 💡 ล้างเส้นทางเก่า และ "รถคันเก่า" ออกจากแผนที่ก่อนวาดรอบใหม่
+  // 1. อัปเดตเส้นสีน้ำเงินและรูปรถ
+  useEffect(() => {
+    if (!mapInstance.current) return;
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
     if (markerLayer.current) mapInstance.current.removeLayer(markerLayer.current);
     
     if (pathData.length > 0) {
-      // 💡 วาดเส้นทางใหม่ (ลากทุกจุดต่อกันแบบ 100% เพื่อให้เห็นรอยเกี่ยวข้าวทุกซอกมุม)
       const latlngs = pathData.map(p => [p.latitude, p.longitude]);
-      polylineLayer.current = L.polyline(latlngs, { 
-        color: '#2563EB', // สีน้ำเงิน
-        weight: 4, 
-        opacity: 0.8 
-      }).addTo(mapInstance.current);
+      polylineLayer.current = L.polyline(latlngs, { color: '#2563EB', weight: 4, opacity: 0.8 }).addTo(mapInstance.current);
       
-      // ปักหมุดจุดล่าสุด (รูปรถเกี่ยว 🚜)
       const lastPoint = pathData[pathData.length - 1];
       const carIcon = L.divIcon({
         className: 'bg-transparent border-0',
-        html: `<div class="bg-orange-500 hover:bg-orange-600 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer transition transform hover:scale-110" style="margin-left: -16px; margin-top: -16px;">🚜</div>`,
+        html: `<div class="bg-orange-500 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer transition transform hover:scale-110" style="margin-left: -16px; margin-top: -16px;">🚜</div>`,
         iconSize: [0, 0]
       });
       
-      // เก็บรูปรถเกี่ยวที่เพิ่งวาดไว้ใน markerLayer เพื่อให้ลบได้ทันในรอบถัดไป
       markerLayer.current = L.marker([lastPoint.latitude, lastPoint.longitude], { icon: carIcon }).addTo(mapInstance.current);
-      
-      // เพิ่มอีเวนต์ให้กดที่ตัวรถแล้วเด้งไป Google Maps
-      markerLayer.current.bindTooltip("คลิกเพื่อเปิด Google Maps นำทางไปหารถ", { direction: 'top', offset: [0, -10] });
-      markerLayer.current.on('click', () => {
-        window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastPoint.latitude},${lastPoint.longitude}`, '_blank');
-      });
     }
-
-    return () => {};
   }, [pathData]);
 
-  return <div ref={mapRef} className="w-full h-full z-0" />;
+  // 2. อัปเดตจุดที่กำลังวาด (Draw Mode)
+  useEffect(() => {
+    if (!drawLayer.current || !mapInstance.current) return;
+    drawLayer.current.clearLayers();
+    
+    if (!drawMode) {
+      setPoints([]);
+      return;
+    }
+
+    if (points.length > 0) {
+      const latlngs = points.map(p => [p.lat, p.lng]);
+      let shape;
+      if (points.length >= 3) {
+        shape = L.polygon(latlngs, { color: '#F97316', fillColor: '#FB923C', fillOpacity: 0.5, weight: 3, dashArray: '5, 5' }).addTo(drawLayer.current);
+        const turfCoords = points.map(p => [p.lng, p.lat]);
+        turfCoords.push([points[0].lng, points[0].lat]);
+        const sqM = turf.area(turf.polygon([turfCoords]));
+        setCurrentArea(calculateThaiArea(sqM));
+      } else {
+        shape = L.polyline(latlngs, { color: '#F97316', weight: 3, dashArray: '5, 5' }).addTo(drawLayer.current);
+        setCurrentArea({ text: 'ต้องมีอย่างน้อย 3 จุด', rawRai: 0 });
+      }
+
+      points.forEach((p, idx) => {
+        const marker = L.marker([p.lat, p.lng], {
+          icon: L.divIcon({
+            className: 'bg-transparent border-0',
+            html: `<div class="bg-orange-600 text-white rounded-full w-5 h-5 flex items-center justify-center font-bold text-[10px] border-2 border-white shadow-md cursor-pointer" style="margin-left: -10px; margin-top: -10px;">${idx + 1}</div>`,
+            iconSize: [0, 0]
+          }),
+          draggable: true
+        }).addTo(drawLayer.current);
+
+        marker.on('drag', (e) => {
+          const newLatLng = e.target.getLatLng();
+          latlngs[idx] = [newLatLng.lat, newLatLng.lng];
+          shape.setLatLngs(latlngs);
+        });
+        marker.on('dragend', (e) => {
+          const newLatLng = e.target.getLatLng();
+          const newPoints = [...points];
+          newPoints[idx] = { lat: newLatLng.lat, lng: newLatLng.lng };
+          setPoints(newPoints);
+        });
+      });
+    } else {
+      setCurrentArea({ text: 'เลื่อนเป้าแล้วกด + เพื่อตีกรอบ', rawRai: 0 });
+    }
+  }, [points, drawMode]);
+
+  // 3. วาดแปลงที่บันทึกไว้แล้ว (Saved Plots)
+  useEffect(() => {
+    if (!plotsLayer.current || !mapInstance.current) return;
+    plotsLayer.current.clearLayers();
+    
+    plots.forEach((plot, index) => {
+      const latlngs = plot.points.map(p => [p.lat, p.lng]);
+      L.polygon(latlngs, { color: '#16A34A', fillColor: '#4ADE80', fillOpacity: 0.4, weight: 3 }).addTo(plotsLayer.current);
+      
+      const turfCoords = plot.points.map(p => [p.lng, p.lat]);
+      turfCoords.push([plot.points[0].lng, plot.points[0].lat]);
+      const center = turf.centerOfMass(turf.polygon([turfCoords])).geometry.coordinates;
+      
+      L.marker([center[1], center[0]], {
+        icon: L.divIcon({
+          className: 'bg-transparent border-0',
+          html: `<div class="bg-green-700/90 text-white px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border border-green-300 whitespace-nowrap transform -translate-x-1/2 -translate-y-1/2">✅ แปลง ${index + 1}<br/>${plot.area.text}</div>`,
+          iconSize: [0, 0]
+        })
+      }).addTo(plotsLayer.current);
+    });
+  }, [plots]);
+
+  return (
+    <div className="relative w-full h-full flex flex-col">
+      <div ref={mapRef} className="flex-1 w-full z-0" />
+
+      {/* ปุ่มขยายเต็มจอ */}
+      <button 
+        onClick={() => {
+          setIsMapFullScreen(!isMapFullScreen);
+          setTimeout(() => { if (mapInstance.current) mapInstance.current.invalidateSize(); }, 300);
+        }}
+        className="absolute top-4 right-4 z-[400] bg-white text-gray-800 px-3 py-2 rounded-lg shadow-lg border border-gray-300 font-bold text-xs hover:bg-gray-100 transition flex items-center gap-1"
+      >
+        {isMapFullScreen ? '↙️ ย่อหน้าจอ' : '🔲 ขยายเต็มจอ'}
+      </button>
+
+      {/* เครื่องมือวาดแปลงและรายการสรุป */}
+      <div className="absolute top-4 left-4 z-[400] flex flex-col gap-2 pointer-events-none">
+        <button 
+          onClick={() => setDrawMode(!drawMode)} 
+          className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-bold text-xs border transition flex items-center gap-1 w-max ${drawMode ? 'bg-red-500 hover:bg-red-600 text-white border-red-600' : 'bg-white hover:bg-gray-50 text-gray-800 border-gray-300'}`}
+        >
+          {drawMode ? '❌ ปิดโหมดวาด' : '📏 วาดแปลงคิดเงิน'}
+        </button>
+        
+        {plots.length > 0 && (
+          <div className="pointer-events-auto bg-white/95 backdrop-blur border border-green-200 p-2 rounded-lg shadow-lg w-48 mt-1">
+            <h4 className="text-[10px] font-black text-green-800 border-b border-green-100 pb-1 mb-1">สรุปแปลงที่วาดได้:</h4>
+            <div className="max-h-32 overflow-y-auto space-y-1">
+              {plots.map((plot, i) => (
+                <div key={i} className="flex justify-between items-center text-[10px] bg-green-50 p-1.5 rounded">
+                  <span className="font-bold text-green-700">แปลง {i+1}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-600 font-semibold">{plot.area.rawRai} ไร่</span>
+                    <button onClick={() => setPlots(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-1 pt-1.5 border-t border-green-200 text-[11px] font-black text-gray-800 text-right">
+              รวม: {plots.reduce((sum, p) => sum + Number(p.area.rawRai), 0).toFixed(2)} ไร่
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* เป้าเล็งและปุ่มควบคุม (แสดงเฉพาะตอนเปิดโหมดวาด) */}
+      {drawMode && (
+        <>
+          <div className="absolute inset-0 pointer-events-none z-[400] flex items-center justify-center">
+            <div className="relative flex items-center justify-center w-12 h-12">
+              <div className="absolute w-full h-0.5 bg-red-500/90 drop-shadow-md"></div>
+              <div className="absolute h-full w-0.5 bg-red-500/90 drop-shadow-md"></div>
+              <div className="absolute w-3.5 h-3.5 border-2 border-white rounded-full bg-red-500 shadow-md"></div>
+            </div>
+          </div>
+
+          <div className="absolute top-16 left-1/2 transform -translate-x-1/2 z-[400] bg-white/95 backdrop-blur px-4 py-1.5 rounded-full shadow-lg border border-orange-300">
+            <span className="font-bold text-orange-700 text-xs whitespace-nowrap">📐 {currentArea.text}</span>
+          </div>
+
+          <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-[400] flex items-end gap-3 pointer-events-auto">
+            <button onClick={() => setPoints(points.slice(0, -1))} disabled={points.length === 0} className={`w-12 h-12 rounded-full shadow-lg font-bold flex items-center justify-center border-2 border-white text-xl ${points.length === 0 ? 'bg-gray-300 text-gray-500' : 'bg-gray-700 text-white hover:bg-gray-800'}`}>↩️</button>
+            <button onClick={() => {
+              const center = mapInstance.current.getCenter();
+              setPoints([...points, { lat: center.lat, lng: center.lng }]);
+            }} className="w-16 h-16 bg-orange-600 hover:bg-orange-700 text-white rounded-full shadow-2xl font-bold flex items-center justify-center border-4 border-white text-4xl transform active:scale-95">+</button>
+            <button onClick={() => {
+              if (points.length < 3) return alert('ตีกรอบอย่างน้อย 3 มุมครับ');
+              setPlots([...plots, { points, area: currentArea }]);
+              setPoints([]); // รีเซ็ตเส้นที่วาดอยู่ เพื่อเตรียมวาดแปลงต่อไป
+            }} disabled={points.length < 3} className={`w-12 h-12 rounded-full shadow-lg font-bold flex items-center justify-center border-2 border-white text-xl ${points.length < 3 ? 'bg-gray-300 text-gray-500' : 'bg-green-600 text-white hover:bg-green-700'}`}>💾</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 function App() {
@@ -1513,7 +1659,7 @@ function App() {
           <div className={isMapFullScreen ? "fixed inset-0 z-[500] bg-white flex flex-col" : "bg-white rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[75vh]"}>
             
             {/* แผงควบคุมด้านบน */}
-            <div className="p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm">
+            <div className="p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm shrink-0">
               <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
                 <span className="text-blue-600">🛰️</span> ระบบติดตามรถเกี่ยว
               </h2>
@@ -1579,89 +1725,29 @@ function App() {
               </button>
             </div>
 
-            {/* แผงบอกสถานะ */}
-            {gpsPathData.length > 0 && (
-              <div className="bg-white border-b border-gray-200 p-3 z-10 shadow-sm">
-                 
-                 <div className="flex justify-between items-start">
-                    <div>
-                       <p className="text-xs text-gray-500 mb-0.5">ข้อมูลจุดล่าสุด (เวลา):</p>
-                       <p className="font-bold text-blue-800 text-sm">
-                         {new Date(gpsPathData[gpsPathData.length-1].created_at).toLocaleString('th-TH')}
-                       </p>
-                    </div>
-                    <button 
-                      onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${gpsPathData[gpsPathData.length-1].latitude},${gpsPathData[gpsPathData.length-1].longitude}`, '_blank')}
-                      className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded-lg shadow-sm font-bold flex items-center gap-1 transition"
-                    >
-                      📍 นำทาง
-                    </button>
+            {/* แผงบอกสถานะย่อส่วน (ซ่อนป้ายพื้นที่อัตโนมัติเก่าทิ้งไป) */}
+            {gpsPathData.length > 0 && !isMapFullScreen && (
+              <div className="bg-white border-b border-gray-200 p-3 z-10 shadow-sm shrink-0 flex justify-between items-center">
+                 <div>
+                   <p className="text-[10px] text-gray-500 mb-0.5">พิกัดล่าสุด: <span className="font-mono">{gpsPathData[gpsPathData.length-1].latitude}, {gpsPathData[gpsPathData.length-1].longitude}</span></p>
+                   <p className="font-bold text-blue-800 text-xs">
+                     {new Date(gpsPathData[gpsPathData.length-1].created_at).toLocaleString('th-TH')}
+                   </p>
                  </div>
-                 
-                 <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between items-center">
-                    <div>
-                      <p className="text-xs text-gray-500">พิกัด GPS (Lat, Lon):</p>
-                      <p className="font-mono text-xs text-gray-700 font-semibold">
-                        {gpsPathData[gpsPathData.length-1].latitude}, {gpsPathData[gpsPathData.length-1].longitude}
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length-1].latitude}, ${gpsPathData[gpsPathData.length-1].longitude}`);
-                        alert('📋 คัดลอกพิกัดเรียบร้อยแล้ว นำไปวางได้เลยครับ!');
-                      }}
-                      className="bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs px-3 py-1.5 rounded-lg font-bold transition shadow-sm"
-                    >
-                      📋 คัดลอก
-                    </button>
+                 <div className="flex gap-1">
+                   <button onClick={() => navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length-1].latitude}, ${gpsPathData[gpsPathData.length-1].longitude}`)} className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-2 py-1.5 rounded-lg text-xs font-bold transition shadow-sm">📋</button>
+                   <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${gpsPathData[gpsPathData.length-1].latitude},${gpsPathData[gpsPathData.length-1].longitude}`, '_blank')} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg shadow-sm text-xs font-bold transition">📍 นำทาง</button>
                  </div>
-
-                 {/* ส่วนที่ 3: ระบบคำนวณพื้นที่อัตโนมัติ (แบบอัจฉริยะ) */}
-                 {gpsPathData.length >= 3 && (
-                   <div className="mt-2 pt-2 border-t border-green-100 bg-green-50/50 -mx-3 -mb-3 p-3 flex justify-between items-center">
-                      <p className="text-xs text-green-700 font-bold">📐 พื้นที่วิ่งงานโดยประมาณ:</p>
-                      <p className="font-bold text-green-700 text-sm bg-green-200/50 px-2 py-1 rounded-md">
-                        {(() => {
-                           try {
-                             const harvestPoints = gpsPathData.filter(p => p.is_harvesting === true);
-
-                             if (harvestPoints.length < 3) return 'กำลังรวบรวมข้อมูลลงแปลง...';
-
-                             const turfPoints = turf.featureCollection(harvestPoints.map(p => turf.point([p.longitude, p.latitude])));
-                             const hull = turf.convex(turfPoints);
-
-                             if (!hull) return 'กำลังประมวลผล...';
-                             const sqM = turf.area(hull);
-                             const rai = Math.floor(sqM / 1600);
-                             const ngan = Math.floor((sqM % 1600) / 400);
-                             const sqWah = ((sqM % 400) / 4).toFixed(1);
-                             return `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`;
-                           } catch (e) {
-                             return 'กำลังคำนวณ...';
-                           }
-                        })()}
-                      </p>
-                   </div>
-                 )}
-
               </div>
             )}
 
-            {/* ส่วนแสดงแผนที่ */}
+            {/* ส่วนแสดงแผนที่อัจฉริยะแบบใหม่ */}
             <div className="flex-1 relative bg-gray-200 min-h-[300px]">
-              
-              {/* 👇 ปุ่มขยายเต็มจอ 👇 */}
-              <button 
-                onClick={() => {
-                  setIsMapFullScreen(!isMapFullScreen);
-                  setTimeout(() => window.dispatchEvent(new Event('resize')), 300);
-                }}
-                className="absolute top-4 right-4 z-[400] bg-white text-gray-800 px-3 py-2 rounded-lg shadow-lg border border-gray-300 font-bold text-xs hover:bg-gray-100 transition flex items-center gap-1"
-              >
-                {isMapFullScreen ? '↙️ ย่อหน้าจอ' : '🔲 ขยายเต็มจอ'}
-              </button>
-
-              <TrackingMap pathData={gpsPathData} />
+              <TrackingMap 
+                pathData={gpsPathData} 
+                isMapFullScreen={isMapFullScreen} 
+                setIsMapFullScreen={setIsMapFullScreen} 
+              />
               
               {/* ข้อความแจ้งเตือนตอนยังไม่มีข้อมูล */}
               {gpsPathData.length === 0 && (
