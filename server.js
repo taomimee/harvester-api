@@ -124,23 +124,49 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
             .single();
 
         if (jobError) throw jobError;
-        // 2. 💡 พิเศษ: ถ้าสถานะคือ DONE และมีการส่งค่าแรงมา ให้บันทึกลงตาราง Transactions
+        // 2. 💡 ถ้าสถานะคือ DONE และมีค่าแรง ให้บันทึก 1 บิลต่อ 1 job เท่านั้น
         if (status === 'DONE' && wageData) {
             const totalWage = (Number(wageData.area) * Number(wageData.wagePerRai)) || 0;
-            
-            const { error: txError } = await supabase
+            const wageNote = `คนทำ: ${wageData.workers} (พื้นที่ ${wageData.area} ไร่, เรท ${wageData.wagePerRai} บ./ไร่)`;
+
+            // ✅ กันการกด DONE ซ้ำ / request ซ้ำ แล้วสร้างค่าแรงเบิ้ล
+            const { data: existingWages, error: findWageError } = await supabase
                 .from('transactions')
-                .insert([{
-                    job_id: id,
-                    type: 'OUT',            // รายจ่าย
-                    category: 'ค่าแรง',       // หมวดหมู่
-                    total_amount: totalWage,
-                    paid_amount: 0,         // ยังไม่ได้จ่าย
-                    status: 'UNPAID',       // สถานะรอเบิก
-                    note: `คนทำ: ${wageData.workers} (พื้นที่ ${wageData.area} ไร่, เรท ${wageData.wagePerRai} บ./ไร่)` // 👈 บันทึกเป็นหลักฐาน
-                }]);
-            
-            if (txError) console.error('Error saving transaction:', txError.message);
+                .select('id')
+                .eq('job_id', id)
+                .eq('type', 'OUT')
+                .eq('category', 'ค่าแรง')
+                .order('created_at', { ascending: true })
+                .limit(1);
+
+            if (findWageError) throw findWageError;
+
+            if (existingWages && existingWages.length > 0) {
+                // มีบิลเดิมแล้ว: แก้เฉพาะยอด/รายละเอียด ไม่แตะสถานะจ่ายเดิม
+                const { error: txError } = await supabase
+                    .from('transactions')
+                    .update({
+                        total_amount: totalWage,
+                        note: wageNote
+                    })
+                    .eq('id', existingWages[0].id);
+
+                if (txError) throw txError;
+            } else {
+                const { error: txError } = await supabase
+                    .from('transactions')
+                    .insert([{
+                        job_id: id,
+                        type: 'OUT',
+                        category: 'ค่าแรง',
+                        total_amount: totalWage,
+                        paid_amount: 0,
+                        status: 'UNPAID',
+                        note: wageNote
+                    }]);
+
+                if (txError) throw txError;
+            }
         }
 
         res.json({ message: 'อัปเดตสถานะสำเร็จ', data: updatedJob });
@@ -386,7 +412,7 @@ app.get('/api/dashboard', async (req, res) => {
         // 2. ดึงข้อมูลรายจ่าย (จาก transactions)
         const { data: expenses } = await supabase
             .from('transactions')
-            .select('total_amount')
+            .select('total_amount, category')
             .eq('type', 'OUT')
             .gte('created_at', startDate)
             .lte('created_at', endDate);
@@ -412,7 +438,11 @@ app.get('/api/dashboard', async (req, res) => {
 
         if (expenses) {
             expenses.forEach(exp => {
-                totalExpense += Number(exp.total_amount) || 0;
+                // ✅ ค่าแรงถูกบันทึกเป็นต้นทุนไปแล้วตอนปิดงาน
+                // การ 'เบิกค่าแรง' เป็นเพียงการชำระหนี้ค่าแรง จึงห้ามนับเป็นต้นทุนซ้ำอีกครั้ง
+                if (exp.category !== 'เบิกค่าแรง') {
+                    totalExpense += Number(exp.total_amount) || 0;
+                }
             });
         }
 
@@ -537,12 +567,14 @@ app.post('/api/transactions/expenses', upload.single('receipt'), async (req, res
 // เพิ่ม Route สำหรับดึงข้อมูลรายจ่าย
 app.get('/api/transactions/expenses', async (req, res) => {
   try {
-    // ดึงข้อมูลจากตาราง transactions โดยกรองเอาเฉพาะรายการที่มีการระบุ category
+    // ✅ ดึง OUT ทั้งหมด เพราะ Dashboard ต้องใช้ทั้งต้นทุน 'ค่าแรง' และรายจ่ายทั่วไป
+    // ส่วน 'เบิกค่าแรง' จะถูกแยกออกตอนคำนวณกำไร เพื่อไม่ให้นับต้นทุนซ้ำ
     const { data, error } = await supabase
       .from('transactions')
       .select('*')
-      .not('category', 'is', null) // กรองเฉพาะรายการที่เป็นค่าใช้จ่าย
-      .order('transaction_date', { ascending: false }); // เรียงจากล่าสุดไปเก่าสุด
+      .eq('type', 'OUT')
+      .not('category', 'is', null)
+      .order('transaction_date', { ascending: false });
 
     if (error) throw error;
     res.json(data || []);

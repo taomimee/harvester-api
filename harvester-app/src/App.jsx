@@ -722,6 +722,18 @@ function App() {
     } catch (err) { console.error("ดึงข้อมูลรายจ่ายไม่ได้:", err); }
   };
 
+  // ✅ สมุดค่าแรงใช้ข้อมูล 2 ชุดร่วมกันเสมอ: ค่าแรงที่ทำได้ + ประวัติการเบิก
+  const refreshWageLedger = async () => {
+    await Promise.all([fetchWages(), fetchExpenses()]);
+  };
+
+  // ✅ เปิดสมุดค่าแรงเมื่อไร ให้รีเฟรชข้อมูลทั้ง 2 ฝั่งทุกครั้ง
+  useEffect(() => {
+    if (showWageSummary) {
+      refreshWageLedger();
+    }
+  }, [showWageSummary]);
+
   const fetchDashboard = async () => {
     setIsFetchingDash(true);
     try {
@@ -736,8 +748,7 @@ function App() {
   useEffect(() => {
     if (activeTab === 'finance' && financeSubTab === 'dashboard') {
       fetchDashboard();
-      fetchExpenses();
-      fetchWages();
+      refreshWageLedger();
     }
   }, [activeTab, financeSubTab, dashMonth, dashYear]);
 
@@ -1212,7 +1223,13 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      if (response.ok) fetchJobs();
+      if (response.ok) {
+        await fetchJobs();
+        // ✅ ปิดงานแล้วมีค่าแรงใหม่ ต้องรีเฟรชทั้งยอดทำได้และยอดเบิก
+        if (newStatus === 'DONE' && extraWageData) {
+          await refreshWageLedger();
+        }
+      }
     } catch (err) { console.error(err); }
   }
 
@@ -1412,8 +1429,7 @@ function App() {
           <div 
             onClick={() => {
               setWageFilter([]); 
-              setShowWageSummary(true);
-              fetchWages(); 
+              setShowWageSummary(true); 
             }}
             className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-4 rounded-2xl mb-5 shadow-md cursor-pointer transition flex items-center justify-between group relative overflow-hidden"
           >
@@ -1869,7 +1885,7 @@ function App() {
 
                 {/* 👇 ปุ่มที่เพิ่มใหม่ สำหรับดูสรุปยอดค่าแรง 👇 */}
                 <button 
-                  onClick={() => { setShowWageSummary(true); fetchWages(); }} 
+                  onClick={() => { setShowWageSummary(true); }} 
                   className="w-full flex items-center justify-between p-4 bg-green-50 hover:bg-green-100 border border-green-200 rounded-xl transition shadow-sm"
                 >
                   <span className="font-bold text-green-800">💰 สมุดจดค่าแรงลูกจ้าง</span>
@@ -2268,11 +2284,15 @@ function App() {
             }
           });
 
-          const calcTotalExpense = periodExpenses.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
+          // ✅ 'ค่าแรง' คือการรับรู้ต้นทุนตอนปิดงานแล้ว
+          // ส่วน 'เบิกค่าแรง' คือการจ่ายหนี้ค่าแรง จึงห้ามนับเป็นต้นทุนซ้ำ
+          const accountingExpenses = periodExpenses.filter(tx => tx.category !== 'เบิกค่าแรง');
+
+          const calcTotalExpense = accountingExpenses.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
           const calcNetProfit = calcTotalIncome - calcTotalExpense;
 
           // 👇 1. เพิ่มตัวแปรดึงเฉพาะรายจ่ายหน้างาน (หักรายจ่ายที่มีคำว่า "ค่างวด" ออกทั้งหมด)
-          const operationalExpense = periodExpenses
+          const operationalExpense = accountingExpenses
             .filter(tx => !(tx.category || '').includes('ค่างวด'))
             .reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
 
@@ -2285,7 +2305,7 @@ function App() {
           const totalPotential = calcTotalIncome + calcTotalUnpaid;
           const collectionRate = totalPotential > 0 ? (calcTotalIncome / totalPotential) * 100 : 0;
           
-          const expenseByCategory = periodExpenses.reduce((acc, tx) => {
+          const expenseByCategory = accountingExpenses.reduce((acc, tx) => {
             const raw = tx.category === 'WAGE' || tx.category === 'ค่าแรง' ? 'ค่าแรง' : (tx.category || 'อื่นๆ');
             acc[raw] = (acc[raw] || 0) + (Number(tx.total_amount) || 0);
             return acc;
@@ -2328,6 +2348,20 @@ function App() {
                totalUnpaidWageAllTime += amountPerPerson * unpaidCount;
             }
           });
+
+          // ✅ ระบบเบิกแบบใหม่เก็บอยู่ใน expenseTransactions ไม่ได้เปลี่ยน status ของบิลค่าแรง
+          // จึงต้องนำยอดเบิกมาหักจากยอดรอจ่ายด้วย ไม่อย่างนั้น Dashboard จะยังโชว์ยอดก่อนเบิก
+          const wageWithdrawals = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง');
+          const allTimeWithdrawalTotal = wageWithdrawals.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
+          const periodWithdrawalTotal = wageWithdrawals.reduce((sum, tx) => {
+            const d = new Date(tx.transaction_date || tx.created_at);
+            const isPeriod = !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
+            return isPeriod ? sum + (Number(tx.total_amount) || 0) : sum;
+          }, 0);
+
+          totalUnpaidWageAllTime = Math.max(0, totalUnpaidWageAllTime - allTimeWithdrawalTotal);
+          unpaidWage = Math.max(0, unpaidWage - periodWithdrawalTotal);
+          paidWage += periodWithdrawalTotal;
           
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
@@ -2531,7 +2565,7 @@ function App() {
                     <p className="text-[10px] uppercase tracking-widest text-orange-700 font-black">LABOR COST</p>
                     <h3 className="text-lg font-black text-orange-950 mt-1">👷 ค่าแรงทีมงาน ({monthName})</h3>
                   </div>
-                  <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="px-3 py-2 bg-white rounded-xl border border-orange-200 text-orange-700 text-[10px] font-black shadow-sm">เปิดสมุดค่าแรง →</button>
+                  <button onClick={() => { setWageFilter([]); setShowWageSummary(true); }} className="px-3 py-2 bg-white rounded-xl border border-orange-200 text-orange-700 text-[10px] font-black shadow-sm">เปิดสมุดค่าแรง →</button>
                 </div>
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <div className="bg-white/80 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-700">จ่ายแล้ว</p><p className="text-2xl font-black text-green-600 mt-1">{formatMoney(paidWage)} ฿</p></div>
@@ -2553,7 +2587,7 @@ function App() {
                     </button>
                     
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime และแก้ข้อความเป็น "ยอดสะสมรวม" */}
-                    {totalUnpaidWageAllTime > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); fetchWages(); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย (ยอดสะสมรวม)</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(totalUnpaidWageAllTime)} ฿</strong></button>}
+                    {totalUnpaidWageAllTime > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย (ยอดสะสมรวม)</span><span className="block text-[10px] text-orange-600 mt-0.5">ควรเคลียร์ตามรอบ</span></span><strong className="text-orange-600">{formatMoney(totalUnpaidWageAllTime)} ฿</strong></button>}
                     
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime */}
                     {debtJobs.length === 0 && totalUnpaidWageAllTime <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
@@ -3488,8 +3522,9 @@ function App() {
                });
                if(res.ok) { 
                  alert(`✅ บันทึกการเบิกเงิน ${amount.toLocaleString()} บาท ให้ ${workerName} สำเร็จ!`); 
-                 fetchExpenses(); // รีเฟรชรายจ่าย
-                 fetchDashboard();
+                 // ✅ รีเฟรชทั้งค่าแรง + ยอดเบิก ป้องกันยอด 11,550 / 1,350 สลับกัน
+                 await refreshWageLedger();
+                 await fetchDashboard();
                } else alert('❌ บันทึกไม่สำเร็จ');
              } catch(e) { console.error(e); alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ'); }
           };
