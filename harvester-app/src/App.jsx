@@ -1774,9 +1774,17 @@ function App() {
   const [touchStartX, setTouchStartX] = useState(null); // เก็บพิกัดตอนเริ่มเอานิ้วแตะจอ
   const [touchEndX, setTouchEndX] = useState(null); // เก็บพิกัดตอนลากนิ้ว
 
-  // 💰 State สำหรับคิดค่าแรงลูกจ้างตอนปิดงาน
-  const [finishingJob, setFinishingJob] = useState(null);
-  const [wageData, setWageData] = useState({ area: '', wagePerRai: 60, workers: '' });
+  // 🌾 State ระบบ "รอบทำงาน" — งานข้าว 1 ลูกค้าอาจเกี่ยวหลายวัน/หลายแปลงย่อย
+  const [workRoundModal, setWorkRoundModal] = useState(null); // { job, mode: 'PARTIAL' | 'FINAL' }
+  const [workRoundData, setWorkRoundData] = useState({
+    measuredArea: '',
+    billingArea: '',
+    wagePerRai: 60,
+    workers: '',
+    nextWorkDate: '',
+    note: ''
+  });
+  const [isSavingWorkRound, setIsSavingWorkRound] = useState(false);
   // 💰 State สำหรับหน้าสรุปค่าแรง
   const [showWageSummary, setShowWageSummary] = useState(false);
   const [wageTab, setWageTab] = useState('UNPAID'); // 👈 เพิ่มบรรทัดนี้ สำหรับสลับแท็บค่าแรง
@@ -2573,6 +2581,126 @@ function App() {
     } catch (err) { console.error(err); }
   }
 
+  // 🌾 สรุปรอบทำงานของคิว — แยก "วัดจริง" ออกจาก "ไร่ที่ลงค่าแรง"
+  const getJobWorkSummary = (job) => {
+    const rounds = Array.isArray(job?.work_rounds) ? job.work_rounds : [];
+    const measuredArea = rounds.reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
+    const wageArea = rounds.reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
+    return { rounds, roundCount: rounds.length, measuredArea, wageArea };
+  };
+
+  const openWorkRoundModal = (job, mode = 'PARTIAL') => {
+    const summary = getJobWorkSummary(job);
+    setWorkRoundData({
+      measuredArea: '',
+      billingArea: '',
+      wagePerRai: 60,
+      workers: '',
+      nextWorkDate: '',
+      note: ''
+    });
+    setWorkRoundModal({ job, mode, summary });
+  };
+
+  const toggleRoundWorker = (name) => {
+    setWorkRoundData(prev => {
+      const current = String(prev.workers || '').split(',').map(v => v.trim()).filter(Boolean);
+      const next = current.includes(name) ? current.filter(v => v !== name) : [...current, name];
+      return { ...prev, workers: next.join(', ') };
+    });
+  };
+
+  const submitWorkRound = async () => {
+    if (!workRoundModal || isSavingWorkRound) return;
+    const { job, mode } = workRoundModal;
+    const currentSummary = getJobWorkSummary(job);
+    const measuredToday = Math.max(0, Number(workRoundData.measuredArea) || 0);
+    const billingRaw = String(workRoundData.billingArea ?? '').trim();
+    const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
+    const workers = String(workRoundData.workers || '').trim();
+    const wagePerRai = Math.max(0, Number(workRoundData.wagePerRai) || 60);
+
+    if (mode === 'PARTIAL') {
+      if (measuredToday <= 0) return alert('กรุณาระบุจำนวนไร่ที่ทำจริงวันนี้ครับ');
+      if (!workers) return alert('กรุณาระบุคนที่ลงแปลงวันนี้ครับ');
+    } else {
+      if (!Number.isFinite(billingArea) || billingArea < 0) return alert('กรุณาระบุจำนวนไร่ที่ตกลงคิดเงินกับลูกค้าครับ');
+      const finalWageArea = Math.max(0, billingArea - currentSummary.wageArea);
+      if (finalWageArea > 0 && !workers) {
+        return alert(`ยังเหลือค่าแรง ${finalWageArea.toFixed(2)} ไร่ กรุณาระบุคนที่จะรับค่าแรงรอบสุดท้ายครับ`);
+      }
+    }
+
+    setIsSavingWorkRound(true);
+    try {
+      const isPartial = mode === 'PARTIAL';
+      const url = isPartial
+        ? `https://harvester-api-server.onrender.com/api/jobs/${job.id}/rounds`
+        : `https://harvester-api-server.onrender.com/api/jobs/${job.id}/finalize`;
+
+      const payload = isPartial
+        ? {
+            measured_area: measuredToday,
+            workers,
+            wage_per_rai: wagePerRai,
+            next_work_date: workRoundData.nextWorkDate ? new Date(workRoundData.nextWorkDate).toISOString() : null,
+            note: workRoundData.note
+          }
+        : {
+            measured_area: measuredToday,
+            billing_area: billingArea,
+            workers,
+            wage_per_rai: wagePerRai,
+            note: workRoundData.note
+          };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      let result = {};
+      try { result = await res.json(); } catch (_) {}
+      if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`);
+
+      if (isPartial) {
+        const totalMeasured = currentSummary.measuredArea + measuredToday;
+        alert(
+          `✅ ปิดรอบวันนี้แล้ว\n\n` +
+          `วัดจริงวันนี้: ${measuredToday.toFixed(2)} ไร่\n` +
+          `วัดจริงสะสม: ${totalMeasured.toFixed(2)} ไร่\n` +
+          `ลงค่าแรงรอบนี้: ${measuredToday.toFixed(2)} ไร่\n` +
+          `ค่าแรง: ${(measuredToday * wagePerRai).toLocaleString()} บาท\n\n` +
+          `${workRoundData.nextWorkDate ? '📅 บันทึกวันนัดเกี่ยวต่อแล้ว' : '⏸ รอลูกค้านัดวันเกี่ยวต่อ'}`
+        );
+      } else {
+        const s = result.summary || {};
+        alert(
+          `🏁 ปิดงานทั้งหมดเรียบร้อย\n\n` +
+          `📐 วัดจริงทั้งหมด: ${Number(s.measured_area_total || 0).toFixed(2)} ไร่\n` +
+          `🤝 ตกลงลูกค้า: ${Number(s.billing_area || billingArea).toFixed(2)} ไร่\n` +
+          `👷 ลงค่าแรงก่อนหน้า: ${Number(s.prior_wage_area || 0).toFixed(2)} ไร่\n` +
+          `👷 เพิ่มค่าแรงรอบนี้: ${Number(s.final_wage_area || 0).toFixed(2)} ไร่\n` +
+          `💰 ยอดลูกค้า: ${Number(s.total_price || 0).toLocaleString()} บาท` +
+          (Number(s.wage_overage_area || 0) > 0
+            ? `\n\n⚠️ ค่าแรงที่ล็อกไว้ก่อนหน้ามากกว่ายอดตกลง ${Number(s.wage_overage_area).toFixed(2)} ไร่\nส่วนต่างถือเป็นต้นทุนกิจการ ไม่ดึงเงินลูกน้องคืน`
+            : '')
+        );
+      }
+
+      setWorkRoundModal(null);
+      await fetchJobs();
+      await refreshWageLedger();
+      await fetchDashboard();
+    } catch (err) {
+      console.error(err);
+      alert(`❌ บันทึกรอบงานไม่สำเร็จ\n${err.message}`);
+    } finally {
+      setIsSavingWorkRound(false);
+    }
+  };
+
   const getStatusDisplay = (status) => {
     switch (status) {
       case 'PENDING': return { text: 'รอคิว', color: 'bg-yellow-100 text-yellow-800 border-yellow-300' }
@@ -2898,7 +3026,7 @@ function App() {
             {/* 3. คิวงานวันนี้ */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
               <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold text-gray-800 text-sm">📅 คิวงานวันนี้ & งานค้าง</h3>
+                <h3 className="font-bold text-gray-800 text-sm">🚜 คิวงาน</h3>
                 <button onClick={() => setActiveTab('active')} className="text-xs text-orange-600 font-bold hover:underline">ดูทั้งหมด ▶</button>
               </div>
               
@@ -2948,22 +3076,36 @@ function App() {
                         <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3 flex flex-col justify-center">
                           {!isToday && <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-800'}`}>{dateText}</span>}
                           <span className={`block text-xs font-black ${isDone ? 'text-green-600' : 'text-gray-800'}`}>{timeText}</span>
-                          {!isToday && <span className="text-[9px] text-red-500 font-bold block mt-1">ค้าง!</span>}
+                          {!isToday && (
+                            <span className={`text-[9px] font-bold block mt-1 ${job.status === 'PAUSED' ? 'text-rose-600' : 'text-red-500'}`}>
+                              {job.status === 'PAUSED' ? (jobDate > new Date() ? 'นัดต่อ' : 'รอนัด') : 'ค้าง!'}
+                            </span>
+                          )}
                         </div>
                         
                         {/* 👤 ตรงกลาง: ชื่อลูกค้า จัดให้อยู่กึ่งกลาง */}
                         <div className="flex-1 text-center pr-2">
                           <p className={`text-sm font-black ${isDone ? 'text-green-800' : 'text-gray-900'}`}>{job.customers?.name}</p>
-                          <p className="text-xs text-gray-500 font-semibold mt-1"> 
-                            {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {job.area_size} ไร่ 
-                          </p>
+                          {(() => {
+                            const ws = getJobWorkSummary(job);
+                            return (
+                              <>
+                                <p className="text-xs text-gray-500 font-semibold mt-1">
+                                  {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} ลูกค้าแจ้ง ~{job.area_size || 0} ไร่
+                                </p>
+                                {ws.roundCount > 0 && (
+                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {ws.measuredArea.toFixed(2)} ไร่ • {ws.roundCount} รอบ</p>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                         
                         {/* 🏷️ ฝั่งขวา: ป้ายสถานะ */}
                         <div className="shrink-0">
                           {isDone ? <span className="text-green-600 font-bold text-[10px] bg-green-100 px-2.5 py-1.5 rounded-lg">✅ เสร็จ</span> : 
                            job.status === 'IN_PROGRESS' ? <span className="bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">กำลังเกี่ยว</span> : 
-                           job.status === 'PAUSED' ? <span className="bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">⏳ รอเกี่ยวต่อ</span> :
+                           job.status === 'PAUSED' ? <span className="bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">{new Date(job.job_date) > new Date() ? '📅 นัดเกี่ยวต่อ' : '⏸ รอลูกค้านัด'}</span> :
                            <span className="bg-gray-100 text-gray-600 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">รอคิว</span>}
                         </div>
                       </div>
@@ -3437,17 +3579,40 @@ function App() {
                       </div>
                       
                       <div className="bg-gray-50 border border-gray-200 p-2 rounded-lg">
-                        <span className="block text-gray-500 text-xs">พื้นที่</span>
-                        <span className="font-semibold text-gray-800">{job.area_size || 0} ไร่</span>
+                        <span className="block text-gray-500 text-xs">{job.status === 'DONE' ? 'พื้นที่คิดเงิน' : 'ลูกค้าแจ้ง (ประมาณ)'}</span>
+                        <span className="font-semibold text-gray-800">
+                          {job.status === 'DONE' ? Number((job.billing_area ?? job.area_size) || 0).toFixed(2) : `~${job.area_size || 0}`} ไร่
+                        </span>
                       </div>
                     </div>
                     
+                    {(() => {
+                      const ws = getJobWorkSummary(job);
+                      if (ws.roundCount === 0) return null;
+                      return (
+                        <div className="mb-3 grid grid-cols-3 gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5">
+                          <div className="text-center">
+                            <span className="block text-[10px] text-emerald-700 font-bold">วัดจริงแล้ว</span>
+                            <span className="text-sm font-black text-emerald-900">{ws.measuredArea.toFixed(2)} ไร่</span>
+                          </div>
+                          <div className="text-center border-x border-emerald-200">
+                            <span className="block text-[10px] text-emerald-700 font-bold">ลงค่าแรงแล้ว</span>
+                            <span className="text-sm font-black text-emerald-900">{ws.wageArea.toFixed(2)} ไร่</span>
+                          </div>
+                          <div className="text-center">
+                            <span className="block text-[10px] text-emerald-700 font-bold">รอบทำงาน</span>
+                            <span className="text-sm font-black text-emerald-900">{ws.roundCount} รอบ</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
-                            ยอดรวม ({job.price_per_rai || 0} บ./ไร่)
+                            {job.status === 'DONE' ? 'ยอดตกลง' : 'ยอดประเมิน'} ({job.price_per_rai || 0} บ./ไร่)
                           </span>
                           <span className="font-bold text-green-800 text-lg">
                             {job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท
@@ -3479,6 +3644,39 @@ function App() {
                         {/* 💡 ดึงหมายเหตุของคิวงานมาโชว์ */}
                         {job.address_note || job.customers?.address_note || 'ไม่มีข้อมูล'}
                       </div>
+
+                      {(() => {
+                        const ws = getJobWorkSummary(job);
+                        if (ws.roundCount === 0) return null;
+                        return (
+                          <div className="mb-4 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="font-black text-emerald-900 text-sm">🌾 ประวัติรอบทำงาน</h3>
+                              <span className="text-[10px] font-bold text-emerald-700">{ws.roundCount} รอบ • วัดจริง {ws.measuredArea.toFixed(2)} ไร่</span>
+                            </div>
+                            <div className="space-y-2">
+                              {ws.rounds.map((round, rIdx) => (
+                                <div key={round.id || rIdx} className="bg-white rounded-lg border border-emerald-100 p-2 text-xs">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-black text-gray-800">
+                                      {round.round_type === 'FINAL' ? '🏁 รอบปิดงาน' : `รอบ ${rIdx + 1}`}
+                                    </span>
+                                    <span className="text-gray-500">
+                                      {round.work_date ? new Date(round.work_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '-'}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
+                                    <span className="text-blue-700 font-bold">📐 วัดจริง {Number(round.measured_area || 0).toFixed(2)} ไร่</span>
+                                    <span className="text-orange-700 font-bold">👷 ค่าแรง {Number(round.wage_area || 0).toFixed(2)} ไร่</span>
+                                    <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
+                                  </div>
+                                  {round.note && <p className="mt-1 text-[10px] text-gray-500">📝 {round.note}</p>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* 👇 📸 ส่วนของแกลเลอรี่รูปภาพ 👇 */}
                       <div className="mb-4">
@@ -3565,51 +3763,29 @@ function App() {
                           </button>
                         )}
 
-                        {/* 👇 ปุ่มรอเกี่ยวต่อ (ใส่แทน พักคิว) 👇 */}
+                        {/* 🌾 จบเฉพาะรอบวันนี้: บันทึกพื้นที่จริง + ค่าแรงทันที แต่งานลูกค้ายังไม่จบ */}
                         {job.status === 'IN_PROGRESS' && (
-                          <button 
-                            onClick={async (e) => { 
-                              e.stopPropagation(); 
-                              const dayInput = window.prompt("งานนี้ยังไม่จบใช่ไหมครับ?\n\nระบุ 'วันที่' ที่ลูกค้านัดให้ไปเกี่ยวต่อ (เช่น นัดวันที่ 8 ให้พิมพ์เลข 8)\n* ถ้ายังไม่รู้วันนัด ปล่อยว่างไว้แล้วกด OK ได้เลยครับ");
-                              
-                              if (dayInput === null) return; // ถอยกลับถ้ากดยกเลิก
-                              
-                              // ถ้าระบุวันที่มา ให้คำนวณและบันทึกวันนัดใหม่
-                              if (dayInput.trim() !== '' && !isNaN(dayInput)) {
-                                 const d = new Date();
-                                 d.setDate(Number(dayInput));
-                                 d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-                                 const newDateStr = d.toISOString().slice(0, 16);
-                                 
-                                 const updatePayload = {
-                                     customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai, total_price: job.total_price, payment_status: job.payment_status,
-                                     job_date: newDateStr
-                                 };
-                                 await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}`, { 
-                                     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updatePayload) 
-                                 });
-                              }
-                              
-                              // แขวนป้ายสถานะเป็นรอเกี่ยวต่อ (PAUSED)
-                              updateStatus(job.id, 'PAUSED'); 
-                            }} 
-                            className={`flex-1 bg-rose-400 hover:bg-rose-500 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openWorkRoundModal(job, 'PARTIAL');
+                            }}
+                            className={`flex-1 bg-rose-500 hover:bg-rose-600 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
                           >
-                            ⏳ รอเกี่ยวต่อ
+                            🌾 จบวันนี้
                           </button>
                         )}
-                        
-                        {/* 👇 ซ่อนปุ่มปิดจ๊อบให้โชว์เฉพาะเถ้าแก่ 👇 */}
+
+                        {/* 🏁 ปิดงานทั้งหมด: เถ้าแก่กำหนดพื้นที่คิดเงินจริง แล้วระบบหาค่าแรงที่เหลือให้อัตโนมัติ */}
                         {userRole === 'BOSS' && job.status !== 'DONE' && (
-                          <button 
-                            onClick={(e) => { 
-                              e.stopPropagation(); 
-                              setWageData({ area: job.area_size || '', wagePerRai: 60, workers: '' }); 
-                              setFinishingJob(job); 
-                            }} 
-                            className="flex-1 bg-green-500 hover:bg-green-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openWorkRoundModal(job, 'FINAL');
+                            }}
+                            className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
                           >
-                            ✅ เสร็จสิ้น
+                            🏁 จบงานทั้งหมด
                           </button>
                         )}
 
@@ -3876,14 +4052,14 @@ function App() {
             }
             // ทบยอดหนี้ พื้นที่รวม และนับจำนวนคิวงาน
             groupedDebtorsMap[name].total_price += Number(j.total_price) || 0;
-            groupedDebtorsMap[name].total_area += Number(j.area_size) || 0;
+            groupedDebtorsMap[name].total_area += Number(j.billing_area ?? j.area_size) || 0;
             groupedDebtorsMap[name].job_count += 1;
             
             // 👇 ทบยอดพื้นที่ "แยกตามประเภทพืช"
             if (!groupedDebtorsMap[name].crop_areas[crop]) {
                 groupedDebtorsMap[name].crop_areas[crop] = 0;
             }
-            groupedDebtorsMap[name].crop_areas[crop] += Number(j.area_size) || 0;
+            groupedDebtorsMap[name].crop_areas[crop] += Number(j.billing_area ?? j.area_size) || 0;
           });
 
           // 👇 นำลูกค้าที่รวมยอดแล้ว มาเรียงลำดับคนที่ติดหนี้เยอะสุด 5 อันดับแรก
@@ -4363,7 +4539,7 @@ function App() {
                                       <p className="text-[11px] text-gray-500 font-bold mb-0.5">
                                         📅 {new Date(job.job_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}
                                       </p>
-                                      <p className="text-xs font-bold text-gray-800">📐 {job.area_size} ไร่ (เรท {job.price_per_rai})</p>
+                                      <p className="text-xs font-bold text-gray-800">📐 {Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่ (เรท {job.price_per_rai})</p>
                                     </div>
                                     <div className="text-right">
                                       {hasDiscount && <span className="block text-[10px] text-gray-400 line-through mb-0.5">{orig.toLocaleString()} ฿</span>}
@@ -4580,7 +4756,7 @@ function App() {
                 {selectedDayJobs.jobs.map(job => (
                   <div key={job.id} onClick={() => { setSelectedDayJobs(null); openEditForm(job); }} className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer">
                     <div className="flex justify-between items-center"><span className="font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</span></div>
-                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {job.area_size || 0} ไร่</p>
+                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่</p>
                   </div>
                 ))}
               </div>
@@ -4827,109 +5003,182 @@ function App() {
           </div>
         )}
 
-        {/* 👇 จุดที่ 3.4: Popup ยืนยันปิดงานและจดค่าแรงลูกจ้าง (มีปุ่มกดเลือกชื่อด่วน) 👇 */}
-        {finishingJob && (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[300]">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
-              <h2 className="text-xl font-bold mb-4 text-green-700 flex items-center gap-2">
-                <span>✅</span> ปิดคิวงาน & จดค่าแรง
-              </h2>
-              
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-gray-700 font-semibold mb-1 text-sm">จำนวนไร่ที่ทำจริง</label>
-                    <input 
-                      type="number" 
-                      className="w-full border border-green-300 p-2 rounded-lg bg-green-50 text-green-900 font-bold" 
-                      value={wageData.area} 
-                      onChange={(e) => setWageData({...wageData, area: e.target.value})} 
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-gray-700 font-semibold mb-1 text-sm">เรทเหมา (บาท/ไร่)</label>
-                    <input 
-                      type="number" 
-                      className="w-full border border-gray-300 p-2 rounded-lg bg-gray-50 font-bold" 
-                      value={wageData.wagePerRai} 
-                      onChange={(e) => setWageData({...wageData, wagePerRai: e.target.value})} 
-                    />
+        {/* 🌾 Popup ระบบรอบทำงาน: จบวันนี้ / จบงานทั้งหมด */}
+        {workRoundModal && (() => {
+          const job = workRoundModal.job;
+          const isFinal = workRoundModal.mode === 'FINAL';
+          const ws = getJobWorkSummary(job);
+          const todayMeasured = Math.max(0, Number(workRoundData.measuredArea) || 0);
+          const measuredTotal = ws.measuredArea + todayMeasured;
+          const billingRaw = String(workRoundData.billingArea ?? '').trim();
+          const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
+          const validBilling = Number.isFinite(billingArea) && billingArea >= 0;
+          const finalWageArea = isFinal && validBilling ? Math.max(0, billingArea - ws.wageArea) : 0;
+          const wageOverageArea = isFinal && validBilling ? Math.max(0, ws.wageArea - billingArea) : 0;
+          const customerDifference = isFinal && validBilling ? measuredTotal - billingArea : 0;
+          const workersSelected = String(workRoundData.workers || '').split(',').map(v => v.trim()).filter(Boolean);
+
+          return (
+            <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-3 z-[300]">
+              <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[94vh] overflow-y-auto">
+                <div className={`sticky top-0 z-10 px-5 py-4 border-b ${isFinal ? 'bg-green-50 border-green-200' : 'bg-rose-50 border-rose-200'} rounded-t-2xl`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className={`text-lg font-black ${isFinal ? 'text-green-800' : 'text-rose-800'}`}>
+                        {isFinal ? '🏁 จบงานทั้งหมด' : '🌾 ปิดรอบวันนี้'}
+                      </h2>
+                      <p className="text-xs text-gray-600 mt-1">{job.customers?.name || 'ไม่ระบุลูกค้า'} • {job.crop_type || 'ข้าว'}</p>
+                    </div>
+                    <button onClick={() => !isSavingWorkRound && setWorkRoundModal(null)} className="w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 font-bold">✕</button>
                   </div>
                 </div>
 
-                {/* 🧑‍🌾 กล่องเลือก/พิมพ์ ชื่อลูกจ้าง */}
-                <div className="bg-orange-50 p-4 rounded-xl border border-orange-200">
-                  <label className="block text-orange-900 font-bold mb-2">🧑‍🌾 ใครลงแปลงนี้บ้าง? (กดเลือกหรือพิมพ์)</label>
-                  
-                  {/* 👇 ปุ่มกดเลือกด่วน 👇 */}
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {/* 💡 อนาคตถ้ามีคนเพิ่ม ก็มาพิมพ์ชื่อใส่ในวงเล็บ [ ] นี้ได้เลยครับ */}
-                    {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
-                      const isSelected = wageData.workers.includes(name);
-                      return (
+                <div className="p-5 space-y-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center">
+                      <p className="text-[10px] text-amber-700 font-bold">ลูกค้าแจ้ง</p>
+                      <p className="font-black text-amber-900">{Number(job.area_size || 0).toFixed(2)} ไร่</p>
+                    </div>
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-center">
+                      <p className="text-[10px] text-blue-700 font-bold">วัดจริงก่อนหน้า</p>
+                      <p className="font-black text-blue-900">{ws.measuredArea.toFixed(2)} ไร่</p>
+                    </div>
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-center">
+                      <p className="text-[10px] text-orange-700 font-bold">ค่าแรงล็อกแล้ว</p>
+                      <p className="font-black text-orange-900">{ws.wageArea.toFixed(2)} ไร่</p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-800 font-black mb-1 text-sm">📐 วันนี้วัดจริงกี่ไร่?</label>
+                    <input
+                      type="number" min="0" step="0.01" inputMode="decimal"
+                      className="w-full border-2 border-blue-300 p-3 rounded-xl bg-blue-50 text-blue-900 font-black text-lg outline-none focus:ring-2 focus:ring-blue-400"
+                      value={workRoundData.measuredArea}
+                      onChange={(e) => setWorkRoundData(prev => ({ ...prev, measuredArea: e.target.value }))}
+                      placeholder={isFinal ? 'เช่น 27 (ถ้าวันนี้ไม่ได้เกี่ยวเพิ่ม ใส่ 0)' : 'เช่น 10'}
+                    />
+                    <p className="text-[11px] text-blue-700 mt-1 font-bold">วัดจริงสะสมหลังรอบนี้: {measuredTotal.toFixed(2)} ไร่</p>
+                  </div>
+
+                  {isFinal && (
+                    <div className="bg-green-50 border-2 border-green-300 rounded-2xl p-3">
+                      <label className="block text-green-900 font-black mb-1 text-sm">🤝 สุดท้ายตกลงคิดเงินลูกค้ากี่ไร่?</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number" min="0" step="0.01" inputMode="decimal"
+                          className="flex-1 min-w-0 border border-green-300 p-3 rounded-xl bg-white text-green-900 font-black text-lg outline-none focus:ring-2 focus:ring-green-400"
+                          value={workRoundData.billingArea}
+                          onChange={(e) => setWorkRoundData(prev => ({ ...prev, billingArea: e.target.value }))}
+                          placeholder="เช่น 35"
+                        />
                         <button
-                          key={name}
                           type="button"
-                          onClick={() => {
-                            // ระบบจัดการเพิ่ม/ลดชื่ออัตโนมัติเมื่อกดปุ่ม
-                            let currentList = wageData.workers.split(',').map(n => n.trim()).filter(n => n);
-                            if (isSelected) {
-                              currentList = currentList.filter(n => n !== name); // ถ้ามีอยู่แล้วให้เอาออก
-                            } else {
-                              currentList.push(name); // ถ้ายังไม่มีให้เพิ่มเข้าไป
-                            }
-                            setWageData({...wageData, workers: currentList.join(', ')});
-                          }}
-                          className={`px-3 py-1.5 rounded-lg text-sm font-bold border shadow-sm transition ${
-                            isSelected 
-                              ? 'bg-orange-500 text-white border-orange-600' 
-                              : 'bg-white text-orange-700 border-orange-300 hover:bg-orange-100'
-                          }`}
+                          onClick={() => setWorkRoundData(prev => ({ ...prev, billingArea: measuredTotal ? String(Number(measuredTotal.toFixed(2))) : '' }))}
+                          className="px-3 rounded-xl bg-green-600 text-white text-[10px] font-black"
                         >
-                          {isSelected ? '✅' : '➕'} {name}
+                          ใช้วัดจริง
                         </button>
-                      )
-                    })}
+                      </div>
+
+                      {validBilling && (
+                        <div className="mt-3 space-y-1.5 text-xs">
+                          <div className="flex justify-between"><span className="text-gray-600">📐 วัดจริงทั้งหมด</span><b>{measuredTotal.toFixed(2)} ไร่</b></div>
+                          <div className="flex justify-between"><span className="text-gray-600">🤝 คิดเงินลูกค้า</span><b className="text-green-800">{billingArea.toFixed(2)} ไร่</b></div>
+                          <div className="flex justify-between"><span className="text-gray-600">👷 ค่าแรงที่ล็อกก่อนหน้า</span><b>{ws.wageArea.toFixed(2)} ไร่</b></div>
+                          <div className="flex justify-between border-t border-green-200 pt-1.5"><span className="font-black text-green-900">👷 เพิ่มค่าแรงรอบนี้</span><b className="text-lg text-green-800">{finalWageArea.toFixed(2)} ไร่</b></div>
+                          <div className="flex justify-between"><span className="text-gray-600">💰 ค่าแรงรอบนี้</span><b>{(finalWageArea * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท</b></div>
+                          {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ต่อรองลดจากวัดจริง {customerDifference.toFixed(2)} ไร่</p>}
+                          {customerDifference < -0.001 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {Math.abs(customerDifference).toFixed(2)} ไร่ กรุณาตรวจอีกครั้ง</p>}
+                          {wageOverageArea > 0 && <p className="bg-red-100 text-red-800 rounded-lg p-2 font-black">⚠️ ค่าแรงที่ล็อกไปแล้วมากกว่ายอดลูกค้า {wageOverageArea.toFixed(2)} ไร่ ระบบจะไม่ติดลบและไม่ดึงเงินลูกน้องคืน ส่วนต่างเป็นต้นทุนกิจการ</p>}
+                          <div className="flex justify-between bg-white rounded-lg p-2 border border-green-200"><span className="text-gray-600">ยอดลูกค้าประมาณ</span><b className="text-green-800">{(billingArea * (Number(job.price_per_rai) || 0)).toLocaleString()} บาท</b></div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!isFinal && (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3">
+                      <label className="block text-rose-900 font-black mb-1 text-sm">📅 นัดมาเกี่ยวต่อเมื่อไร? <span className="font-normal text-gray-500">(ไม่รู้วัน ปล่อยว่าง)</span></label>
+                      <input
+                        type="datetime-local"
+                        className="w-full border border-rose-200 bg-white p-2.5 rounded-lg font-bold text-gray-800"
+                        value={workRoundData.nextWorkDate}
+                        onChange={(e) => setWorkRoundData(prev => ({ ...prev, nextWorkDate: e.target.value }))}
+                      />
+                    </div>
+                  )}
+
+                  <div className="bg-orange-50 p-3 rounded-xl border border-orange-200">
+                    <label className="block text-orange-900 font-black mb-2">👷 คนที่รับค่าแรงรอบนี้</label>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
+                        const selected = workersSelected.includes(name);
+                        return (
+                          <button
+                            key={name} type="button"
+                            onClick={() => toggleRoundWorker(name)}
+                            className={`px-3 py-2 rounded-lg text-xs font-bold border ${selected ? 'bg-orange-500 text-white border-orange-600' : 'bg-white text-orange-700 border-orange-300'}`}
+                          >
+                            {selected ? '✅' : '➕'} {name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="text"
+                      className="w-full border border-orange-300 p-2.5 rounded-lg bg-white text-orange-900 font-semibold"
+                      placeholder="พิมพ์ชื่อคนอื่นเพิ่มได้..."
+                      value={workRoundData.workers}
+                      onChange={(e) => setWorkRoundData(prev => ({ ...prev, workers: e.target.value }))}
+                    />
                   </div>
-                  {/* 👆 จบปุ่มกดเลือกด่วน 👆 */}
 
-                  <input 
-                    type="text" 
-                    placeholder="พิมพ์ชื่อคนอื่นๆ เพิ่มเติมได้ที่นี่..."
-                    className="w-full border border-orange-300 p-2 rounded-lg text-orange-900 font-semibold placeholder-orange-300 focus:ring-2 focus:ring-orange-400 outline-none bg-white" 
-                    value={wageData.workers} 
-                    onChange={(e) => setWageData({...wageData, workers: e.target.value})} 
-                  />
-                  <p className="text-xs text-orange-700 mt-2 font-semibold">
-                    * ข้อมูลจะถูกจดเข้าสมุดบัญชี เป็นยอดค้างจ่าย (รอเบิก)
-                  </p>
-                </div>
-                
-                <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 flex justify-between items-center shadow-inner">
-                   <span className="font-bold text-blue-900">💰 ยอดเข้ากระเป๋าลูกจ้าง:</span>
-                   <span className="font-black text-blue-700 text-2xl">
-                     {((Number(wageData.area) * Number(wageData.wagePerRai)) || 0).toLocaleString()} <span className="text-sm">บาท</span>
-                   </span>
-                </div>
-              </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-gray-600 font-bold mb-1 text-xs">ค่าแรง/ไร่</label>
+                      <input
+                        type="number" min="0"
+                        className="w-full border border-gray-300 p-2.5 rounded-lg bg-gray-50 font-black"
+                        value={workRoundData.wagePerRai}
+                        onChange={(e) => setWorkRoundData(prev => ({ ...prev, wagePerRai: e.target.value }))}
+                      />
+                    </div>
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5">
+                      <p className="text-[10px] text-blue-700 font-bold">💰 เข้ากระเป๋าลูกน้องรอบนี้</p>
+                      <p className="text-lg font-black text-blue-900">
+                        {((isFinal ? finalWageArea : todayMeasured) * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท
+                      </p>
+                    </div>
+                  </div>
 
-              <div className="flex gap-3 mt-6">
-                <button onClick={() => setFinishingJob(null)} className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 py-2.5 rounded-xl font-bold transition">ยกเลิก</button>
-                <button 
-                  onClick={() => {
-                    if(!wageData.workers.trim()) return alert("กรุณาพิมพ์ชื่อคนลงแปลงด้วยครับ (จดไว้กันลืม)");
-                    updateStatus(finishingJob.id, 'DONE', wageData);
-                    setFinishingJob(null);
-                  }} 
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-xl font-bold shadow-lg transition"
-                >
-                  บันทึก & ปิดงาน
-                </button>
+                  <div>
+                    <label className="block text-gray-600 font-bold mb-1 text-xs">📝 จดว่าเกี่ยวแปลงไหน / หมายเหตุ</label>
+                    <input
+                      type="text"
+                      className="w-full border border-gray-300 p-2.5 rounded-lg"
+                      placeholder="เช่น แปลงย่อย 3, 6, 7"
+                      value={workRoundData.note}
+                      onChange={(e) => setWorkRoundData(prev => ({ ...prev, note: e.target.value }))}
+                    />
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button disabled={isSavingWorkRound} onClick={() => setWorkRoundModal(null)} className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-xl font-bold disabled:opacity-50">ยกเลิก</button>
+                    <button
+                      disabled={isSavingWorkRound}
+                      onClick={submitWorkRound}
+                      className={`flex-[1.4] text-white py-3 rounded-xl font-black shadow-lg disabled:opacity-50 ${isFinal ? 'bg-green-600 hover:bg-green-700' : 'bg-rose-600 hover:bg-rose-700'}`}
+                    >
+                      {isSavingWorkRound ? '⏳ กำลังบันทึก...' : isFinal ? '🏁 ยืนยันปิดงานทั้งหมด' : '✅ บันทึกรอบวันนี้'}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-        {/* 👆 จบ Popup ปิดงานและจดค่าแรง 👆 */}
+          );
+        })()}
+        {/* 👆 จบ Popup ระบบรอบทำงาน 👆 */}
 
         {/* 💰 Popup สมุดจดค่าแรงลูกจ้าง (Hybrid System: กระเป๋าเงิน + รายงานบิล) */}
         {showWageSummary && (() => {

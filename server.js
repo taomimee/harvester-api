@@ -47,9 +47,47 @@ app.get('/api/jobs', async (req, res) => {
             customers ( name, phone, address_note ),
             vehicles ( name )
         `);
-    
+
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
+
+    // 🌾 แนบรอบทำงานของแต่ละคิว เพื่อให้หน้าเว็บรู้ว่า
+    // วัดจริงแล้วกี่ไร่ / ลงค่าแรงแล้วกี่ไร่ / ทำมากี่รอบ
+    let roundsByJob = new Map();
+    const jobIds = (data || []).map(j => Number(j.id)).filter(Number.isFinite);
+
+    if (jobIds.length > 0) {
+        const { data: rounds, error: roundsError } = await supabase
+            .from('job_work_rounds')
+            .select('*')
+            .in('job_id', jobIds)
+            .order('work_date', { ascending: true });
+
+        // ถ้ายังไม่ได้รัน migration ให้คิวเดิมยังเปิดได้ ไม่ทำหน้าเว็บล่มทั้งระบบ
+        if (roundsError) {
+            console.warn('⚠️ โหลด job_work_rounds ไม่สำเร็จ:', roundsError.message);
+        } else {
+            (rounds || []).forEach(round => {
+                const key = Number(round.job_id);
+                if (!roundsByJob.has(key)) roundsByJob.set(key, []);
+                roundsByJob.get(key).push(round);
+            });
+        }
+    }
+
+    res.json((data || []).map(job => {
+        const work_rounds = roundsByJob.get(Number(job.id)) || [];
+        const measured_area_total = work_rounds.reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
+        const wage_area_total = work_rounds.reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
+        return {
+            ...job,
+            work_rounds,
+            work_summary: {
+                round_count: work_rounds.length,
+                measured_area_total,
+                wage_area_total
+            }
+        };
+    }));
 });
 
 // API สำหรับเพิ่มคิวงานใหม่
@@ -130,6 +168,21 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
     const { status, wageData, job_date } = req.body;
 
     try {
+        // กันหน้าเว็บรุ่นเก่าปิด DONE มาทับค่าแรงของระบบรอบทำงาน
+        if (status === 'DONE' && wageData) {
+            const { data: roundRows, error: roundCheckError } = await supabase
+                .from('job_work_rounds')
+                .select('id')
+                .eq('job_id', id)
+                .limit(1);
+
+            if (!roundCheckError && roundRows && roundRows.length > 0) {
+                return res.status(409).json({
+                    error: 'งานนี้ใช้ระบบรอบทำงานแล้ว กรุณาปิดงานผ่าน /api/jobs/:id/finalize'
+                });
+            }
+        }
+
         // 💡 สร้างกล่องเก็บข้อมูลที่จะอัปเดต
         const updateData = { status };
         if (job_date) {
@@ -196,6 +249,298 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
     }
 });
 
+
+// ==========================================
+// 🌾 ระบบ "รอบทำงาน" สำหรับงานข้าวหลายวัน / หลายแปลงย่อย
+// ==========================================
+
+// ดึงรอบทำงานของคิวเดียว
+app.get('/api/jobs/:id/rounds', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('job_work_rounds')
+            .select('*')
+            .eq('job_id', req.params.id)
+            .order('work_date', { ascending: true });
+
+        if (error) throw error;
+        res.json(data || []);
+    } catch (err) {
+        console.error('Load Work Rounds Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+const safeRoundNumber = (value, fallback = 0) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+};
+
+const createRoundWageTransaction = async ({ jobId, roundId, workers, wageArea, wagePerRai, roundDate, roundType }) => {
+    const area = Math.max(0, safeRoundNumber(wageArea));
+    const rate = Math.max(0, safeRoundNumber(wagePerRai, 60));
+    if (area <= 0) return null;
+
+    const totalWage = area * rate;
+    const wageNote = `คนทำ: ${workers} (พื้นที่ ${area} ไร่, เรท ${rate} บ./ไร่) [รอบงาน:${roundId}] [${roundType === 'FINAL' ? 'รอบปิดงาน' : 'รอบรายวัน'}]`;
+
+    const { data, error } = await supabase
+        .from('transactions')
+        .insert([{
+            job_id: Number(jobId),
+            type: 'OUT',
+            category: 'ค่าแรง',
+            total_amount: totalWage,
+            paid_amount: 0,
+            status: 'UNPAID',
+            note: wageNote,
+            transaction_date: roundDate || new Date().toISOString()
+        }])
+        .select('id')
+        .single();
+
+    if (error) throw error;
+    return data?.id || null;
+};
+
+// 🌾 ปิด "รอบวันนี้" แต่ยังไม่ปิดงานลูกค้า
+// measured_area = วันนี้วัดจริงกี่ไร่
+// ค่าแรงรอบกลางทางจะล็อกตาม measured_area วันนี้ทันที
+app.post('/api/jobs/:id/rounds', async (req, res) => {
+    const jobId = Number(req.params.id);
+    const {
+        measured_area,
+        workers,
+        wage_per_rai = 60,
+        next_work_date = null,
+        note = ''
+    } = req.body || {};
+
+    const measuredArea = safeRoundNumber(measured_area, NaN);
+    const wagePerRai = safeRoundNumber(wage_per_rai, 60);
+    const workerText = String(workers || '').trim();
+
+    if (!Number.isFinite(jobId) || jobId <= 0) return res.status(400).json({ error: 'job_id ไม่ถูกต้อง' });
+    if (!Number.isFinite(measuredArea) || measuredArea <= 0) return res.status(400).json({ error: 'กรุณาระบุพื้นที่ที่ทำจริงวันนี้มากกว่า 0 ไร่' });
+    if (!workerText) return res.status(400).json({ error: 'กรุณาระบุคนที่ลงแปลงวันนี้' });
+    if (!Number.isFinite(wagePerRai) || wagePerRai < 0) return res.status(400).json({ error: 'เรทค่าแรงไม่ถูกต้อง' });
+
+    let roundId = null;
+    let wageTransactionId = null;
+    try {
+        const { data: job, error: jobError } = await supabase
+            .from('jobs')
+            .select('id, status')
+            .eq('id', jobId)
+            .single();
+
+        if (jobError) throw jobError;
+        if (!job) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
+        if (job.status === 'DONE') return res.status(400).json({ error: 'งานนี้ปิดจบแล้ว ไม่สามารถเพิ่มรอบได้' });
+
+        const nowIso = new Date().toISOString();
+        const { data: round, error: roundError } = await supabase
+            .from('job_work_rounds')
+            .insert([{
+                job_id: jobId,
+                work_date: nowIso,
+                measured_area: measuredArea,
+                wage_area: measuredArea,
+                wage_per_rai: wagePerRai,
+                workers: workerText,
+                note: String(note || '').trim() || null,
+                round_type: 'PARTIAL'
+            }])
+            .select()
+            .single();
+
+        if (roundError) throw roundError;
+        roundId = round.id;
+
+        wageTransactionId = await createRoundWageTransaction({
+            jobId,
+            roundId: round.id,
+            workers: workerText,
+            wageArea: measuredArea,
+            wagePerRai,
+            roundDate: nowIso,
+            roundType: 'PARTIAL'
+        });
+
+        if (wageTransactionId) {
+            const { error: linkError } = await supabase
+                .from('job_work_rounds')
+                .update({ wage_transaction_id: wageTransactionId })
+                .eq('id', round.id);
+            if (linkError) throw linkError;
+        }
+
+        const jobUpdate = { status: 'PAUSED' };
+        if (next_work_date) jobUpdate.job_date = next_work_date;
+
+        const { data: updatedJob, error: updateError } = await supabase
+            .from('jobs')
+            .update(jobUpdate)
+            .eq('id', jobId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        res.status(201).json({
+            success: true,
+            message: 'บันทึกรอบวันนี้และค่าแรงเรียบร้อย',
+            round: { ...round, wage_transaction_id: wageTransactionId },
+            job: updatedJob
+        });
+    } catch (err) {
+        if (wageTransactionId) {
+            try { await supabase.from('transactions').delete().eq('id', wageTransactionId); } catch (_) {}
+        }
+        if (roundId) {
+            try { await supabase.from('job_work_rounds').delete().eq('id', roundId); } catch (_) {}
+        }
+        console.error('Create Work Round Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 🏁 ปิดงานทั้งหมด
+// วัดจริงสะสม = รอบก่อน + measured_area วันนี้
+// ค่าแรงรอบสุดท้าย = max(0, พื้นที่ที่ตกลงกับลูกค้า - ค่าแรงที่ล็อกไปก่อนหน้า)
+// ตัวอย่าง: ล็อกไป 10 ไร่, วัดจริงรวม 37, ลูกค้าตกลง 35 => รอบสุดท้ายลงค่าแรง 25 ไร่
+app.post('/api/jobs/:id/finalize', async (req, res) => {
+    const jobId = Number(req.params.id);
+    const {
+        measured_area = 0,
+        billing_area,
+        workers = '',
+        wage_per_rai = 60,
+        note = ''
+    } = req.body || {};
+
+    const todayMeasured = Math.max(0, safeRoundNumber(measured_area, 0));
+    const billingArea = safeRoundNumber(billing_area, NaN);
+    const wagePerRai = Math.max(0, safeRoundNumber(wage_per_rai, 60));
+    const workerText = String(workers || '').trim();
+
+    if (!Number.isFinite(jobId) || jobId <= 0) return res.status(400).json({ error: 'job_id ไม่ถูกต้อง' });
+    if (!Number.isFinite(billingArea) || billingArea < 0) return res.status(400).json({ error: 'กรุณาระบุพื้นที่ที่ตกลงคิดเงินกับลูกค้า' });
+
+    let roundId = null;
+    let wageTransactionId = null;
+    try {
+        const { data: job, error: jobError } = await supabase
+            .from('jobs')
+            .select('id, status, price_per_rai, crop_type')
+            .eq('id', jobId)
+            .single();
+
+        if (jobError) throw jobError;
+        if (!job) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
+        if (job.status === 'DONE') return res.status(400).json({ error: 'งานนี้ปิดจบไปแล้ว' });
+
+        const { data: priorRounds, error: roundsError } = await supabase
+            .from('job_work_rounds')
+            .select('measured_area, wage_area')
+            .eq('job_id', jobId);
+
+        if (roundsError) throw roundsError;
+
+        const priorMeasuredArea = (priorRounds || []).reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
+        const priorWageArea = (priorRounds || []).reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
+
+        const measuredAreaTotal = priorMeasuredArea + todayMeasured;
+        const finalWageArea = Math.max(0, billingArea - priorWageArea);
+        const wageOverageArea = Math.max(0, priorWageArea - billingArea);
+
+        if (finalWageArea > 0 && !workerText) {
+            return res.status(400).json({ error: `ยังเหลือค่าแรง ${finalWageArea.toFixed(2)} ไร่ กรุณาระบุคนที่จะรับค่าแรงรอบสุดท้าย` });
+        }
+
+        const nowIso = new Date().toISOString();
+        const { data: round, error: roundError } = await supabase
+            .from('job_work_rounds')
+            .insert([{
+                job_id: jobId,
+                work_date: nowIso,
+                measured_area: todayMeasured,
+                wage_area: finalWageArea,
+                wage_per_rai: wagePerRai,
+                workers: workerText || 'ปรับยอดปิดงาน',
+                note: String(note || '').trim() || null,
+                round_type: 'FINAL'
+            }])
+            .select()
+            .single();
+
+        if (roundError) throw roundError;
+        roundId = round.id;
+
+        wageTransactionId = await createRoundWageTransaction({
+            jobId,
+            roundId: round.id,
+            workers: workerText || 'ปรับยอดปิดงาน',
+            wageArea: finalWageArea,
+            wagePerRai,
+            roundDate: nowIso,
+            roundType: 'FINAL'
+        });
+
+        if (wageTransactionId) {
+            const { error: linkError } = await supabase
+                .from('job_work_rounds')
+                .update({ wage_transaction_id: wageTransactionId })
+                .eq('id', round.id);
+            if (linkError) throw linkError;
+        }
+
+        const pricePerRai = Math.max(0, Number(job.price_per_rai) || 0);
+        const totalPrice = billingArea * pricePerRai;
+
+        const { data: updatedJob, error: updateError } = await supabase
+            .from('jobs')
+            .update({
+                status: 'DONE',
+                billing_area: billingArea,
+                total_price: totalPrice,
+                job_date: nowIso,
+                closed_at: nowIso
+            })
+            .eq('id', jobId)
+            .select()
+            .single();
+
+        if (updateError) throw updateError;
+
+        res.json({
+            success: true,
+            message: 'ปิดงานทั้งหมดเรียบร้อย',
+            job: updatedJob,
+            summary: {
+                prior_measured_area: priorMeasuredArea,
+                today_measured_area: todayMeasured,
+                measured_area_total: measuredAreaTotal,
+                prior_wage_area: priorWageArea,
+                final_wage_area: finalWageArea,
+                wage_area_total: priorWageArea + finalWageArea,
+                billing_area: billingArea,
+                wage_overage_area: wageOverageArea,
+                total_price: totalPrice
+            }
+        });
+    } catch (err) {
+        if (wageTransactionId) {
+            try { await supabase.from('transactions').delete().eq('id', wageTransactionId); } catch (_) {}
+        }
+        if (roundId) {
+            try { await supabase.from('job_work_rounds').delete().eq('id', roundId); } catch (_) {}
+        }
+        console.error('Finalize Job Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
 app.put('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
@@ -243,21 +588,29 @@ app.put('/api/jobs/:id', async (req, res) => {
 // API สำหรับลบคิวงาน
 app.delete('/api/jobs/:id', async (req, res) => {
     const { id } = req.params;
-    
+
     try {
+        // ลบรอบทำงานก่อน เพราะเป็นประวัติย่อยของคิวนี้
+        const { error: roundsError } = await supabase
+            .from('job_work_rounds')
+            .delete()
+            .eq('job_id', id);
+        if (roundsError) console.warn('⚠️ ลบรอบทำงานไม่สำเร็จ:', roundsError.message);
+
         const { error } = await supabase
             .from('jobs')
             .delete()
             .eq('id', id);
 
         if (error) throw error;
-        
+
         res.json({ message: 'ลบข้อมูลคิวงานสำเร็จเรียบร้อย' });
     } catch (err) {
         console.error('Error deleting job:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
+
 
 // ==========================================
 // 🚜 API สำหรับจัดการรถเกี่ยว (Vehicles)
@@ -433,7 +786,7 @@ app.get('/api/dashboard', async (req, res) => {
         // 1. ดึงข้อมูลรายรับ (จากคิวงานที่ 'DONE')
         const { data: jobs } = await supabase
             .from('jobs')
-            .select('total_price, payment_status, area_size')
+            .select('total_price, payment_status, area_size, billing_area')
             .eq('status', 'DONE')
             .gte('job_date', startDate)
             .lte('job_date', endDate);
@@ -455,7 +808,7 @@ app.get('/api/dashboard', async (req, res) => {
         if (jobs) {
             jobs.forEach(job => {
                 const price = Number(job.total_price) || 0;
-                totalArea += Number(job.area_size) || 0;
+                totalArea += Number(job.billing_area ?? job.area_size) || 0;
                 
                 if (job.payment_status === 'PAID') {
                     totalIncome += price;
