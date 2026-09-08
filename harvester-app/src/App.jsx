@@ -2314,54 +2314,119 @@ function App() {
           const expenseCategoryEntries = Object.entries(expenseByCategory).sort((a, b) => b[1] - a[1]);
           const expenseMax = expenseCategoryEntries.length > 0 ? expenseCategoryEntries[0][1] : 1;
 
-          // 👇 วางโค้ดใหม่ตรงนี้เลย (แทนที่ 3 บรรทัดเดิม) 👇
+          // ✅ ค่าแรง Dashboard ใช้สูตรเดียวกับ "กระเป๋าเงิน" ของคนงาน
+          // สำคัญ: ห้ามเอายอดเบิกของทุกคนมาหักรวมก้อนเดียว เพราะจะทำให้ยอดค้างเพี้ยนข้ามคน
           let unpaidWage = 0;
           let paidWage = 0;
           let totalUnpaidWageAllTime = 0;
 
-          // คำนวณยอดหนี้ค่าแรงใหม่แบบละเอียด (หักคนที่เบิกออกไปแล้วในแต่ละบิล)
-          wageTransactions.forEach(tx => {
-            const noteStr = tx.note || '';
+          const parseDashboardWageNote = (rawNote) => {
+            const noteStr = rawNote || '';
             const paidMatches = noteStr.match(/\[จ่ายแล้ว:([^\]]+)\]/g) || [];
             const paidWorkers = paidMatches.map(m => m.replace('[จ่ายแล้ว:', '').replace(']', '').trim());
-            
-            let wStr = noteStr.replace(/\[จ่ายแล้ว:[^\]]+\]/g, '').trim();
-            if (wStr.includes('คนทำ:') && wStr.includes('(')) wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
-            else if (wStr.includes('(')) wStr = wStr.split('(')[0].trim();
-            
-            const jobWorkers = wStr.split(',').map(w => w.trim()).filter(w => w);
-            const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
-            const amountPerPerson = Number(tx.total_amount) / divisor;
-            
-            const isPeriod = !Number.isNaN(new Date(tx.created_at).getTime()) && new Date(tx.created_at).getFullYear() === dashYear && (dashMonth === 0 || (new Date(tx.created_at).getMonth() + 1) === dashMonth);
 
-            if (tx.status === 'PAID') {
-               if (isPeriod) paidWage += Number(tx.total_amount);
-            } else {
-               const unpaidCount = jobWorkers.filter(w => !paidWorkers.includes(w)).length;
-               const paidCount = jobWorkers.length - unpaidCount;
-               
-               if (isPeriod) {
-                 unpaidWage += amountPerPerson * unpaidCount;
-                 paidWage += amountPerPerson * paidCount;
-               }
-               totalUnpaidWageAllTime += amountPerPerson * unpaidCount;
+            let wStr = noteStr.replace(/\[จ่ายแล้ว:[^\]]+\]/g, '').trim();
+            if (wStr.includes('คนทำ:') && wStr.includes('(')) {
+              wStr = wStr.split('(')[0].replace('คนทำ:', '').trim();
+            } else if (wStr.includes('(')) {
+              wStr = wStr.split('(')[0].trim();
             }
+
+            const jobWorkers = wStr.split(',').map(w => w.trim()).filter(Boolean);
+            return { jobWorkers, paidWorkers };
+          };
+
+          // 1) สร้างกระเป๋ารวมรายคนจากค่าแรงทั้งหมด เหมือน getWorkerWallet ในสมุดค่าแรง
+          const dashboardWorkerWallets = new Map();
+          const getDashboardWallet = (workerName) => {
+            if (!dashboardWorkerWallets.has(workerName)) {
+              dashboardWorkerWallets.set(workerName, { earned: 0, oldPaid: 0, withdrawn: 0 });
+            }
+            return dashboardWorkerWallets.get(workerName);
+          };
+
+          wageTransactions.forEach(tx => {
+            const { jobWorkers, paidWorkers } = parseDashboardWageNote(tx.note);
+            if (jobWorkers.length === 0) return;
+
+            const share = (Number(tx.total_amount) || 0) / jobWorkers.length;
+            jobWorkers.forEach(workerName => {
+              const wallet = getDashboardWallet(workerName);
+              wallet.earned += share;
+
+              // ระบบเก่า: บิล PAID หรือมี [จ่ายแล้ว:ชื่อ] ให้ถือว่าคนนั้นรับเงินแล้ว
+              if (tx.status === 'PAID' || paidWorkers.includes(workerName)) {
+                wallet.oldPaid += share;
+              }
+            });
           });
 
-          // ✅ ระบบเบิกแบบใหม่เก็บอยู่ใน expenseTransactions ไม่ได้เปลี่ยน status ของบิลค่าแรง
-          // จึงต้องนำยอดเบิกมาหักจากยอดรอจ่ายด้วย ไม่อย่างนั้น Dashboard จะยังโชว์ยอดก่อนเบิก
-          const wageWithdrawals = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง');
-          const allTimeWithdrawalTotal = wageWithdrawals.reduce((sum, tx) => sum + (Number(tx.total_amount) || 0), 0);
-          const periodWithdrawalTotal = wageWithdrawals.reduce((sum, tx) => {
-            const d = new Date(tx.transaction_date || tx.created_at);
-            const isPeriod = !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
-            return isPeriod ? sum + (Number(tx.total_amount) || 0) : sum;
-          }, 0);
+          // 2) ระบบใหม่: เงินเบิกต้องหักเฉพาะ "เจ้าของชื่อ" เท่านั้น
+          expenseTransactions
+            .filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name)
+            .forEach(tx => {
+              const workerName = String(tx.spender_name).trim();
+              if (!workerName) return;
+              const wallet = getDashboardWallet(workerName);
+              wallet.withdrawn += Number(tx.total_amount) || 0;
+            });
 
-          totalUnpaidWageAllTime = Math.max(0, totalUnpaidWageAllTime - allTimeWithdrawalTotal);
-          unpaidWage = Math.max(0, unpaidWage - periodWithdrawalTotal);
-          paidWage += periodWithdrawalTotal;
+          // 3) ยอด "ค่าแรงรอจ่าย (ยอดสะสมรวม)" = ผลรวมยอดคงเหลือของกระเป๋าทุกคน
+          dashboardWorkerWallets.forEach(wallet => {
+            const balance = wallet.earned - wallet.oldPaid - wallet.withdrawn;
+            totalUnpaidWageAllTime += Math.max(0, balance);
+          });
+
+          // 4) การ์ดเดือน/ปีด้านบนยังคงแสดงค่าแรงของช่วงที่เลือก
+          //    แต่หักยอดเบิกแบบใหม่เฉพาะคน เพื่อไม่ให้เงินของคนหนึ่งไปตัดยอดของอีกคน
+          const periodWallets = new Map();
+          const getPeriodWallet = (workerName) => {
+            if (!periodWallets.has(workerName)) {
+              periodWallets.set(workerName, { earned: 0, oldPaid: 0 });
+            }
+            return periodWallets.get(workerName);
+          };
+
+          periodWages.forEach(tx => {
+            const { jobWorkers, paidWorkers } = parseDashboardWageNote(tx.note);
+            if (jobWorkers.length === 0) return;
+
+            const share = (Number(tx.total_amount) || 0) / jobWorkers.length;
+            jobWorkers.forEach(workerName => {
+              const wallet = getPeriodWallet(workerName);
+              wallet.earned += share;
+              if (tx.status === 'PAID' || paidWorkers.includes(workerName)) {
+                wallet.oldPaid += share;
+              }
+            });
+          });
+
+          // ยอดเบิกในช่วงเวลาที่เลือก แยกตามคน
+          const periodWithdrawalsByWorker = new Map();
+          expenseTransactions
+            .filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name)
+            .forEach(tx => {
+              const d = new Date(tx.transaction_date || tx.created_at);
+              const isPeriod = !Number.isNaN(d.getTime()) &&
+                d.getFullYear() === dashYear &&
+                (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
+              if (!isPeriod) return;
+
+              const workerName = String(tx.spender_name).trim();
+              if (!workerName) return;
+              periodWithdrawalsByWorker.set(
+                workerName,
+                (periodWithdrawalsByWorker.get(workerName) || 0) + (Number(tx.total_amount) || 0)
+              );
+            });
+
+          periodWallets.forEach((wallet, workerName) => {
+            const withdrawn = periodWithdrawalsByWorker.get(workerName) || 0;
+            const workerUnpaid = Math.max(0, wallet.earned - wallet.oldPaid - withdrawn);
+            const workerPaid = Math.min(wallet.earned, wallet.oldPaid + withdrawn);
+            unpaidWage += workerUnpaid;
+            paidWage += workerPaid;
+          });
           
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
           const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
