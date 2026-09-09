@@ -2060,7 +2060,7 @@ function App() {
 
   const fetchWages = async () => {
     try {
-      const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/wages');
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/transactions/wages?t=${Date.now()}`, { cache: 'no-store' });
       const data = await res.json();
       setWageTransactions(data);
     } catch (err) { console.error("ดึงข้อมูลค่าแรงไม่ได้:", err); }
@@ -2070,7 +2070,7 @@ function App() {
   const [expenseTransactions, setExpenseTransactions] = useState([]);
   const fetchExpenses = async () => {
     try {
-      const res = await fetch('https://harvester-api-server.onrender.com/api/transactions/expenses');
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/transactions/expenses?t=${Date.now()}`, { cache: 'no-store' });
       const data = await res.json();
       setExpenseTransactions(data || []);
     } catch (err) { console.error("ดึงข้อมูลรายจ่ายไม่ได้:", err); }
@@ -2668,7 +2668,7 @@ function App() {
 
       let result = {};
       try { result = await res.json(); } catch (_) {}
-      if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`${result.error || `HTTP ${res.status}`}${result.code ? ` [${result.code}]` : ''}`);
 
       if (isPartial) {
         const totalMeasured = currentSummary.measuredArea + measuredToday;
@@ -2744,7 +2744,7 @@ function App() {
       });
       let result = {};
       try { result = await res.json(); } catch (_) {}
-      if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`${result.error || `HTTP ${res.status}`}${result.code ? ` [${result.code}]` : ''}`);
 
       const s = result.summary || {};
       alert(

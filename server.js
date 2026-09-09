@@ -36,7 +36,7 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
 });
 
 app.get('/', (req, res) => {
-    res.send('🚀 ระบบคิวรถเกี่ยว (Harvester API) กำลังทำงาน!');
+    res.send(`🚀 ระบบคิวรถเกี่ยว (Harvester API) กำลังทำงาน! | Supabase backend key: ${supabaseServiceRoleKey ? 'SERVICE_ROLE ✅' : 'FALLBACK/ANON ⚠️'}`);
 });
 
 app.get('/api/jobs', async (req, res) => {
@@ -409,28 +409,53 @@ const reconcileJobWageArea = async (jobId, targetArea) => {
                     txSnapshot = txData || null;
                 }
 
-                const { error: roundUpdateError } = await supabase
+                const { data: roundUpdated, error: roundUpdateError } = await supabase
                     .from('job_work_rounds')
                     .update({ wage_area: row.new_area })
-                    .eq('id', row.id);
+                    .eq('id', row.id)
+                    .select('id,wage_area')
+                    .maybeSingle();
                 if (roundUpdateError) throw roundUpdateError;
+                if (!roundUpdated) {
+                    const err = new Error('แก้ไร่ค่าแรงใน job_work_rounds ไม่สำเร็จจริง (อาจถูก RLS บล็อก)');
+                    err.code = 'WORK_ROUND_UPDATE_BLOCKED';
+                    throw err;
+                }
+
+                if (wageTxId && !txSnapshot) {
+                    // สำคัญ: ถ้ามี transaction id อยู่ แต่ server อ่านไม่เห็น ห้ามสร้างบิลซ้ำ
+                    const err = new Error(`พบบิลค่าแรง #${wageTxId} แต่ Server อ่าน/แก้ไม่ได้ (ตรวจ SUPABASE_SERVICE_ROLE_KEY ที่ Render)`);
+                    err.code = 'WAGE_TX_NOT_VISIBLE';
+                    throw err;
+                }
 
                 if (wageTxId && txSnapshot) {
-                    const { error: txUpdateError } = await supabase
+                    const nextNote = roundWageNote({
+                        workers: String(row.workers || '').trim() || 'ไม่ระบุ',
+                        area: row.new_area,
+                        rate,
+                        roundId: row.id,
+                        roundType: row.round_type,
+                        existingNote: txSnapshot.note
+                    });
+                    const nextAmount = row.new_area * rate;
+                    const { data: txUpdated, error: txUpdateError } = await supabase
                         .from('transactions')
-                        .update({
-                            total_amount: row.new_area * rate,
-                            note: roundWageNote({
-                                workers: String(row.workers || '').trim() || 'ไม่ระบุ',
-                                area: row.new_area,
-                                rate,
-                                roundId: row.id,
-                                roundType: row.round_type,
-                                existingNote: txSnapshot.note
-                            })
-                        })
-                        .eq('id', wageTxId);
+                        .update({ total_amount: nextAmount, note: nextNote })
+                        .eq('id', wageTxId)
+                        .select('id,total_amount,note')
+                        .maybeSingle();
                     if (txUpdateError) throw txUpdateError;
+                    if (!txUpdated) {
+                        const err = new Error(`แก้บิลค่าแรง #${wageTxId} ไม่สำเร็จจริง (RLS อาจบล็อก UPDATE ตาราง transactions)`);
+                        err.code = 'WAGE_TX_UPDATE_BLOCKED';
+                        throw err;
+                    }
+                    if (Math.abs(Number(txUpdated.total_amount || 0) - nextAmount) > 0.01) {
+                        const err = new Error(`ยอดบิลค่าแรง #${wageTxId} หลังบันทึกไม่ตรงกับที่คำนวณ`);
+                        err.code = 'WAGE_TX_VERIFY_FAILED';
+                        throw err;
+                    }
                 } else if (row.new_area > 0) {
                     createdTxId = await createRoundWageTransaction({
                         jobId,
@@ -542,11 +567,24 @@ const reconcileJobWageArea = async (jobId, targetArea) => {
             const paid = meta.paidMarkers ? ` ${meta.paidMarkers}` : '';
             const workerText = meta.workers || 'ไม่ระบุ';
             const note = `คนทำ: ${workerText} (พื้นที่ ${formatAreaForNote(newArea)} ไร่, เรท ${formatAreaForNote(meta.rate)} บ./ไร่) [ปรับตามไร่ลูกค้า]${paid}`;
-            const { error: updateError } = await supabase
+            const expectedAmount = newArea * meta.rate;
+            const { data: updatedTx, error: updateError } = await supabase
                 .from('transactions')
-                .update({ total_amount: newArea * meta.rate, note })
-                .eq('id', tx.id);
+                .update({ total_amount: expectedAmount, note })
+                .eq('id', tx.id)
+                .select('id,total_amount,note')
+                .maybeSingle();
             if (updateError) throw updateError;
+            if (!updatedTx) {
+                const err = new Error(`แก้บิลค่าแรงเดิม #${tx.id} ไม่สำเร็จจริง (RLS อาจบล็อก UPDATE ตาราง transactions)`);
+                err.code = 'LEGACY_WAGE_TX_UPDATE_BLOCKED';
+                throw err;
+            }
+            if (Math.abs(Number(updatedTx.total_amount || 0) - expectedAmount) > 0.01) {
+                const err = new Error(`ยอดบิลค่าแรงเดิม #${tx.id} หลังบันทึกไม่ตรงกับที่คำนวณ`);
+                err.code = 'LEGACY_WAGE_TX_VERIFY_FAILED';
+                throw err;
+            }
         }
     } catch (err) {
         for (const tx of snapshots) {
