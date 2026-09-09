@@ -323,14 +323,33 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   };
 
   const setNewQueueDraft = (plotId, patch) => {
-    setLinkNewQueueDrafts(d => ({...d,[plotId]:{...(d[plotId] || {customer_name:'',phone:''}),...patch}}));
+    setLinkNewQueueDrafts(d => ({
+      ...d,
+      [plotId]: {
+        ...(d[plotId] || { query:'', customer_name:'', phone:'', create_new:false }),
+        ...patch
+      }
+    }));
   };
 
   const selectCustomerForNewQueue = (index, customer) => {
     const plot = linkReview?.all?.[index];
     if (!plot) return;
-    setNewQueueDraft(plot.id, {customer_name: customer.name || '', phone: customer.phone || ''});
+    setNewQueueDraft(plot.id, {
+      query: customer.name || customer.phone || '',
+      customer_name: customer.name || '',
+      phone: customer.phone || '',
+      create_new: true
+    });
     setLinkReview(review => ({...review,all:review.all.map((p,i)=>i===index?{...p,job_id:null,name:`${customer.name || 'ลูกค้า'} — แปลงที่ ${index+1}`}:p)}));
+  };
+
+  const chooseNewCustomerNameForPlot = (index, typedName) => {
+    const plot = linkReview?.all?.[index];
+    const clean = String(typedName || '').trim();
+    if (!plot || !clean) return;
+    setNewQueueDraft(plot.id, { query:clean, customer_name:clean, phone:'', create_new:true });
+    setLinkReview(review => ({...review,all:review.all.map((p,i)=>i===index?{...p,job_id:null,name:`${clean} — แปลงที่ ${index+1}`}:p)}));
   };
 
   const queueDateTimeFromMapDate = () => {
@@ -352,7 +371,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       phone: String(group.phone || '').trim(),
       address_note: '',
       crop_type: 'ข้าว',
-      area_size: Number(totalArea.toFixed(6)),
+      // คิวที่เกิดจาก GPS ยังไม่มี "ลูกค้าแจ้งประมาณ" — GPS เป็นคนละข้อมูลกับ area_size
+      area_size: null,
       job_date: queueDateTimeFromMapDate(),
       latitude: center?.lat || '',
       longitude: center?.lng || '',
@@ -383,7 +403,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       const plot = review.all[index];
       const draft = linkNewQueueDrafts[plot.id];
       const name = String(draft?.customer_name || '').trim();
-      if (!name) continue;
+      if (!draft?.create_new || !name) continue;
       const phone = String(draft?.phone || '').trim();
       const key = `${name.toLocaleLowerCase('th-TH')}|${phone}`;
       if (!groups.has(key)) groups.set(key,{customer_name:name,phone,indices:[],plots:[]});
@@ -1684,68 +1704,111 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         <div className="bg-white rounded-2xl shadow-2xl w-full sm:max-w-xl max-h-[92%] flex flex-col overflow-hidden">
           <div className="p-4 border-b">
             <h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3>
-            <p className="text-xs text-slate-500">สร้างคิวใหม่จากยอดแปลงนี้ หรือเลือกเฉพาะคิวงานที่ยังไม่เสร็จ</p>
+            <p className="text-xs text-slate-500">ค้นหาคิวเดิมที่ยังไม่เสร็จ หรือสร้างคิวใหม่จากแปลงนี้</p>
           </div>
           <div className="p-3 space-y-3 overflow-y-auto">
             {linkReview.indices.map(index=>{
               const plot=linkReview.all[index];
-              const draft=linkNewQueueDrafts[plot.id] || {customer_name:'',phone:''};
-              const keyword=String(draft.customer_name || '').trim().toLowerCase();
-              const exactCustomer=customers.some(c => c.name === draft.customer_name && String(c.phone || '') === String(draft.phone || ''));
-              const matches=keyword && !exactCustomer ? customers.filter(c=>{
-                const name=String(c.name || '').toLowerCase();
-                const phone=String(c.phone || '');
-                return keyword.split(/\s+/).every(k=>name.includes(k) || phone.includes(k));
-              }).slice(0,8) : [];
+              const draft=linkNewQueueDrafts[plot.id] || {query:'',customer_name:'',phone:'',create_new:false};
+              const query=String(draft.query || '').trim();
+              const q=query.toLowerCase();
+              const currentActiveJob = plot.job_id ? activeLinkJobs.find(j=>String(j.id)===String(plot.job_id)) : null;
               const currentDoneJob = plot.job_id ? jobs.find(j=>String(j.id)===String(plot.job_id) && j.status==='DONE') : null;
+
+              const jobMatches = q ? activeLinkJobs.filter(j=>{
+                const hay = [j.customers?.name, j.customers?.phone, j.id, j.vehicles?.name, j.crop_type]
+                  .map(v=>String(v || '').toLowerCase()).join(' ');
+                return q.split(/\s+/).every(k=>hay.includes(k));
+              }).slice(0,6) : activeLinkJobs.slice(0,6);
+
+              const customerMatches = q ? customers.filter(c=>{
+                const hay = `${String(c.name || '').toLowerCase()} ${String(c.phone || '').toLowerCase()}`;
+                return q.split(/\s+/).every(k=>hay.includes(k));
+              }).slice(0,6) : [];
+
+              const canCreateTypedName = !!query && !/^[0-9+\-\s]+$/.test(query);
+              const selectedNew = !!draft.create_new && !!draft.customer_name;
+
               return <div key={plot.id} className="bg-slate-50 border rounded-2xl p-3">
                 <div className="flex justify-between gap-2 items-start">
-                  <div><strong>แปลงที่ {index+1}</strong><p className="text-[10px] text-slate-500">{plot.name || `แปลงที่ ${index+1}`}</p></div>
+                  <div>
+                    <strong>แปลงที่ {index+1}</strong>
+                    <p className="text-[10px] text-slate-500">{plot.name || `แปลงที่ ${index+1}`}</p>
+                  </div>
                   <span className="text-sm font-black text-emerald-700 text-right">{formatThaiRai(plot.area?.rawRai)}</span>
                 </div>
 
-                <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                  <p className="text-xs font-black text-emerald-900">📝 สร้างคิวใหม่จากแปลงนี้</p>
-                  <p className="text-[10px] text-emerald-700 mb-2">ยอดคิวใหม่จะเริ่มจากพื้นที่ GPS ของแปลงนี้อัตโนมัติ</p>
-                  <div className="relative">
-                    <input
-                      aria-label={`สร้างคิวใหม่จากแปลงที่ ${index+1}`}
-                      disabled={isSavingPlot || linkCreatingQueue}
-                      placeholder="พิมพ์ชื่อลูกค้า หรือเบอร์เพื่อค้นหา..."
-                      value={draft.customer_name || ''}
-                      onChange={e=>{
-                        const value=e.target.value;
-                        setNewQueueDraft(plot.id,{customer_name:value,phone:value===''?'':draft.phone});
-                        setLinkReview(r=>({...r,all:r.all.map((p,i)=>i===index?{...p,job_id:null,name:value?`${value} — แปลงที่ ${index+1}`:`แปลงที่ ${index+1}`}:p)}));
-                      }}
-                      className="w-full border border-emerald-300 bg-white rounded-xl p-3 text-sm font-semibold"
-                    />
-                    {matches.length>0 && <div className="absolute left-0 right-0 top-full mt-1 z-[30] bg-white border rounded-xl shadow-xl max-h-44 overflow-y-auto">
-                      <p className="text-[10px] text-gray-400 px-3 py-2 bg-gray-50">พบลูกค้าเก่า • แตะเพื่อใช้ข้อมูลเดิม</p>
-                      {matches.map(c=><button type="button" key={c.id || `${c.name}/${c.phone}`} onMouseDown={e=>{e.preventDefault();selectCustomerForNewQueue(index,c);}} className="w-full text-left px-3 py-2 border-t hover:bg-emerald-50">
-                        <span className="font-bold text-sm text-gray-800">{c.name}</span><span className="float-right text-xs text-gray-500">📞 {c.phone || 'ไม่มีเบอร์'}</span>
-                      </button>)}
-                    </div>}
-                  </div>
-                  {!!draft.customer_name && <div className="mt-2 grid grid-cols-[1fr_auto] gap-2 items-center">
-                    <input aria-label="เบอร์ลูกค้าคิวใหม่" disabled={isSavingPlot || linkCreatingQueue} placeholder="เบอร์โทร (เว้นว่างได้)" value={draft.phone || ''} onChange={e=>setNewQueueDraft(plot.id,{phone:e.target.value})} className="border bg-white rounded-lg p-2 text-xs"/>
-                    <span className="text-[10px] font-black text-emerald-800 whitespace-nowrap">✅ จะสร้างคิวใหม่</span>
-                  </div>}
+                <div className="mt-3">
+                  <label className="block text-xs font-black text-slate-800 mb-1">🔎 พิมพ์ชื่อลูกค้า / เบอร์ / เลขคิว</label>
+                  <input
+                    aria-label={`ค้นหาคิวหรือสร้างคิวสำหรับแปลงที่ ${index+1}`}
+                    disabled={isSavingPlot || linkCreatingQueue}
+                    placeholder="เช่น น้าเดต / 081... / 123"
+                    value={draft.query || ''}
+                    onChange={e=>{
+                      const value=e.target.value;
+                      setNewQueueDraft(plot.id,{query:value,customer_name:'',phone:'',create_new:false});
+                    }}
+                    className="w-full border-2 border-slate-300 bg-white rounded-xl p-3 text-sm font-semibold focus:border-blue-500 outline-none"
+                  />
                 </div>
 
-                <div className="my-2 flex items-center gap-2"><div className="h-px bg-slate-200 flex-1"/><span className="text-[10px] font-bold text-slate-400">หรือ</span><div className="h-px bg-slate-200 flex-1"/></div>
+                {(query || !currentActiveJob) && <div className="mt-2 space-y-2">
+                  {jobMatches.length > 0 && <div className="bg-blue-50 border border-blue-200 rounded-xl overflow-hidden">
+                    <p className="text-[10px] font-black text-blue-800 px-3 py-2">🚜 คิวงานที่ยังไม่เสร็จ</p>
+                    {jobMatches.map(j=>{
+                      const measuredArea = (Array.isArray(j.work_rounds) ? j.work_rounds : []).reduce((sum,r)=>sum+(Number(r.measured_area)||0),0);
+                      const gpsArea = Number(j.gps_summary?.area_rai || 0);
+                      return <button type="button" key={j.id} disabled={linkCreatingQueue}
+                        onClick={()=>setPlotJob(index,String(j.id))}
+                        className="w-full text-left px-3 py-2.5 border-t border-blue-100 bg-white hover:bg-blue-50">
+                        <div className="flex justify-between gap-2">
+                          <span className="font-black text-sm text-gray-900">{j.customers?.name || 'ไม่ระบุ'} • คิว #{j.id}</span>
+                          <span className="text-[10px] font-bold text-blue-700">{j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'}</span>
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-0.5">{j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} • {gpsArea>0?`GPS ${plotThaiArea(gpsArea*1600).text}`:(j.area_size?`ประมาณ ~${j.area_size} ไร่`:'ยังไม่มีพื้นที่')} • ทำแล้ว {measuredArea.toFixed(2)} ไร่</p>
+                      </button>
+                    })}
+                  </div>}
 
-                <label className="block text-xs font-black text-slate-800">🚜 คิวเจ้าของแปลง — เฉพาะงานที่ยังไม่เสร็จ
-                  {currentDoneJob && <span className="block mt-1 text-[10px] text-amber-700">คิวเดิม #{currentDoneJob.id} จบงานแล้ว • เลือกคิวใหม่ด้านล่างได้</span>}
-                  <select aria-label={`คิวแปลงที่ ${index+1}`} disabled={isSavingPlot || linkCreatingQueue} value={activeLinkJobs.some(j=>String(j.id)===String(plot.job_id)) ? plot.job_id : ''} onChange={e=>setPlotJob(index,e.target.value)} className="block w-full border bg-white rounded-xl p-3 mt-1 text-sm">
-                    <option value="">ยังไม่ผูกคิว (เก็บแปลงไว้ก่อน)</option>
-                    {activeLinkJobs.map(j=><option key={j.id} value={j.id}>{j.customers?.name || 'ไม่ระบุชื่อ'} • คิว #{j.id} • {j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'} • {j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`}</option>)}
-                  </select>
-                </label>
+                  {customerMatches.length > 0 && <div className="bg-emerald-50 border border-emerald-200 rounded-xl overflow-hidden">
+                    <p className="text-[10px] font-black text-emerald-800 px-3 py-2">👤 ลูกค้าเก่า — สร้างคิวใหม่จากแปลงนี้</p>
+                    {customerMatches.map(c=><button type="button" key={c.id || `${c.name}/${c.phone}`}
+                      onClick={()=>selectCustomerForNewQueue(index,c)}
+                      className="w-full text-left px-3 py-2.5 border-t border-emerald-100 bg-white hover:bg-emerald-50">
+                      <span className="font-bold text-sm text-gray-800">{c.name}</span>
+                      <span className="float-right text-xs text-gray-500">📞 {c.phone || 'ไม่มีเบอร์'}</span>
+                    </button>)}
+                  </div>}
 
-                {(draft.customer_name || activeLinkJobs.some(j=>String(j.id)===String(plot.job_id))) && <p className="mt-2 text-[10px] font-bold text-blue-700">
-                  {draft.customer_name ? `🆕 คิวใหม่ • เริ่มที่ ${formatThaiRai(plot.area?.rawRai)}` : `🔗 จะผูกเข้าคิว #${plot.job_id} • ยอด GPS ของคิวนั้นจะรวมแปลงนี้อัตโนมัติ`}
-                </p>}
+                  {canCreateTypedName && !selectedNew && <button type="button"
+                    onClick={()=>chooseNewCustomerNameForPlot(index,query)}
+                    className="w-full text-left bg-emerald-600 text-white rounded-xl px-3 py-3 font-black text-sm">
+                    ＋ สร้างคิวใหม่ “{query}” จากแปลงนี้
+                    <span className="block text-[10px] font-semibold opacity-90 mt-1">ไม่เอา GPS ไปปลอมเป็นยอดลูกค้าแจ้ง • GPS จะผูกเข้าคิวอัตโนมัติ</span>
+                  </button>}
+
+                  {query && !canCreateTypedName && jobMatches.length===0 && customerMatches.length===0 && <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">ไม่พบจากเบอร์นี้ • ถ้าจะสร้างลูกค้าใหม่ ให้พิมพ์ชื่อก่อน</p>}
+                </div>}
+
+                {selectedNew && <div className="mt-2 bg-emerald-100 border border-emerald-300 rounded-xl p-2.5">
+                  <p className="text-xs font-black text-emerald-900">🆕 จะสร้างคิวใหม่: {draft.customer_name}</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input aria-label="เบอร์ลูกค้าคิวใหม่" disabled={isSavingPlot || linkCreatingQueue} placeholder="เบอร์โทร (เว้นว่างได้)" value={draft.phone || ''} onChange={e=>setNewQueueDraft(plot.id,{phone:e.target.value})} className="flex-1 border bg-white rounded-lg p-2 text-xs"/>
+                    <button type="button" onClick={()=>setNewQueueDraft(plot.id,{customer_name:'',phone:'',create_new:false})} className="text-[10px] font-black text-red-600 px-2">ยกเลิก</button>
+                  </div>
+                  <p className="text-[10px] text-emerald-800 mt-1">🛰️ แปลงนี้ {formatThaiRai(plot.area?.rawRai)} จะไปอยู่ใน GPS ของคิวใหม่</p>
+                </div>}
+
+                {currentActiveJob && !selectedNew && <div className="mt-2 bg-blue-100 border border-blue-300 rounded-xl p-2.5 flex justify-between items-center gap-2">
+                  <div>
+                    <p className="text-xs font-black text-blue-900">🔗 ผูกกับ {currentActiveJob.customers?.name || 'ไม่ระบุ'} • คิว #{currentActiveJob.id}</p>
+                    <p className="text-[10px] text-blue-700">บันทึกแล้ว แปลงนี้จะเด้งไปอยู่ในคิวงานและกดดูจากคิวได้</p>
+                  </div>
+                  <button type="button" onClick={()=>setPlotJob(index,'')} className="text-[10px] font-black text-red-600">เอาออก</button>
+                </div>}
+
+                {currentDoneJob && !currentActiveJob && !selectedNew && <p className="mt-2 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">คิวเดิม #{currentDoneJob.id} ปิดงานแล้ว • เลือกคิวที่ยังไม่เสร็จหรือสร้างคิวใหม่</p>}
               </div>
             })}
           </div>
@@ -2153,6 +2216,7 @@ function App() {
   const [workRoundModal, setWorkRoundModal] = useState(null); // { job, mode: 'PARTIAL' | 'FINAL' }
   const [workRoundData, setWorkRoundData] = useState({
     measuredArea: '',
+    measuredMode: 'MANUAL', // GPS = ใช้ยอดที่ยังไม่ลงรอบ, MANUAL = ปรับเอง
     billingArea: '',
     wagePerRai: 60,
     workers: '',
@@ -2160,6 +2224,10 @@ function App() {
     note: ''
   });
   const [isSavingWorkRound, setIsSavingWorkRound] = useState(false);
+
+  // 🔍 ตรวจความสัมพันธ์ของ Job ID เดียวกัน: GPS / รอบงาน / ค่าแรง / ลูกหนี้ / audit
+  const [jobIntegrityModal, setJobIntegrityModal] = useState(null);
+  const [jobIntegrityLoading, setJobIntegrityLoading] = useState(false);
 
   // 📐 แก้ไร่ที่ลูกค้ายืนยันหลังปิดงาน — กระทบยอดลูกค้า + ค่าแรง แต่ไม่แตะวัดจริง
   const [billingAdjustModal, setBillingAdjustModal] = useState(null);
@@ -2575,6 +2643,12 @@ function App() {
 
   }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
 
+  const queueAreaRai = (job) => {
+    if (job?.status === 'DONE') return Math.max(0, Number(job?.billing_area ?? job?.area_size) || 0);
+    const gps = Math.max(0, Number(job?.gps_summary?.area_rai) || 0);
+    return gps > 0 ? gps : Math.max(0, Number(job?.area_size) || 0);
+  };
+
   const todayStr = new Date().toDateString();
   // 💡 ดึงงานของวันนี้ "หรือ" งานที่กำลังเกี่ยวอยู่ และงานที่ "รอเกี่ยวต่อ" มาโชว์ด้วย
   const todayJobs = jobs.filter(j => 
@@ -2582,11 +2656,11 @@ function App() {
   );
   
   // 👇 แยกคำนวณพื้นที่งานใหม่ของวันนี้ และ งานเก่าที่ค้างมาจากวันอื่น
-  const todayOnlyArea = todayJobs.filter(j => new Date(j.job_date).toDateString() === todayStr).reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
-  const oldJobsArea = todayJobs.filter(j => new Date(j.job_date).toDateString() !== todayStr).reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
+  const todayOnlyArea = todayJobs.filter(j => new Date(j.job_date).toDateString() === todayStr).reduce((sum, j) => sum + queueAreaRai(j), 0);
+  const oldJobsArea = todayJobs.filter(j => new Date(j.job_date).toDateString() !== todayStr).reduce((sum, j) => sum + queueAreaRai(j), 0);
   
-  const todayArea = todayJobs.reduce((sum, j) => sum + (Number(j.area_size) || 0), 0);
-  const todayIncome = todayJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  const todayArea = todayJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
+  const todayIncome = todayJobs.reduce((sum, j) => sum + (queueAreaRai(j) * Math.max(0, Number(j.price_per_rai) || 0)), 0);
   
   // 👇 คำนวณหางานผิดนัด (ละเว้นงานที่ "กำลังเกี่ยว" และ "เสร็จสิ้น" แล้ว)
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -2977,25 +3051,54 @@ function App() {
     } catch (err) { console.error(err); }
   }
 
-  // 🌾 สรุปรอบทำงานของคิว — แยก "วัดจริง" ออกจาก "ไร่ที่ลงค่าแรง"
+  // 🌾 4 ตัวเลขหลักของคิว: ประมาณ / GPS / ทำจริง / คิดเงิน
+  const getJobGpsArea = (job) => Math.max(0, Number(job?.gps_summary?.area_rai) || 0);
+  const getJobBillingArea = (job) => Math.max(0, Number(job?.billing_area ?? 0) || 0);
+  const getJobOperationalArea = (job) => {
+    if (job?.status === 'DONE') return getJobBillingArea(job) || Math.max(0, Number(job?.area_size) || 0);
+    const gps = getJobGpsArea(job);
+    return gps > 0 ? gps : Math.max(0, Number(job?.area_size) || 0);
+  };
+
+  // measuredArea = ทำจริงที่บันทึกรอบแล้ว, wageArea = ไร่ค่าแรงที่จัดสรรแล้ว
+  // postedWageArea นับเฉพาะรอบที่มี transaction แล้ว เพื่อไม่ให้คำว่า "ลงสมุด" หลอกตา
   const getJobWorkSummary = (job) => {
     const rounds = Array.isArray(job?.work_rounds) ? job.work_rounds : [];
     const measuredArea = rounds.reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
     const wageArea = rounds.reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
-    return { rounds, roundCount: rounds.length, measuredArea, wageArea };
+    const postedWageArea = rounds.reduce((sum, r) => sum + (r.wage_transaction_id ? (Number(r.wage_area) || 0) : 0), 0);
+    const pendingRoundCount = rounds.filter(r => !r.wage_transaction_id).length;
+    return { rounds, roundCount: rounds.length, measuredArea, wageArea, postedWageArea, pendingRoundCount };
   };
 
   const openWorkRoundModal = (job, mode = 'PARTIAL') => {
     const summary = getJobWorkSummary(job);
+    const gpsTotal = getJobGpsArea(job);
+    const pendingGps = Math.max(0, gpsTotal - summary.measuredArea);
+    const useGps = Number(job?.gps_summary?.plot_count || 0) > 0 && !job?.gps_summary_error && pendingGps > 0.000001;
     setWorkRoundData({
-      measuredArea: '',
-      billingArea: '',
+      measuredArea: useGps ? String(Number(pendingGps.toFixed(6))) : (mode === 'FINAL' ? '0' : ''),
+      measuredMode: useGps ? 'GPS' : 'MANUAL',
+      billingArea: mode === 'FINAL' && gpsTotal > 0 ? String(Number(gpsTotal.toFixed(6))) : '',
       wagePerRai: 60,
       workers: '',
       nextWorkDate: '',
       note: ''
     });
-    setWorkRoundModal({ job, mode, summary });
+    setWorkRoundModal({ job, mode, summary, gpsTotal, pendingGps });
+  };
+
+  const inspectJobIntegrity = async (job) => {
+    setJobIntegrityLoading(true);
+    setJobIntegrityModal({ job, loading:true });
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${job.id}/integrity`, { cache:'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'ตรวจยอดไม่สำเร็จ');
+      setJobIntegrityModal({ job, loading:false, data });
+    } catch (e) {
+      setJobIntegrityModal({ job, loading:false, error:e.message || String(e) });
+    } finally { setJobIntegrityLoading(false); }
   };
 
   const toggleRoundWorker = (name) => {
@@ -3037,6 +3140,7 @@ function App() {
       const payload = isPartial
         ? {
             measured_area: measuredToday,
+            measured_source: workRoundData.measuredMode,
             workers,
             wage_per_rai: wagePerRai,
             next_work_date: workRoundData.nextWorkDate ? new Date(workRoundData.nextWorkDate).toISOString() : null,
@@ -3044,6 +3148,7 @@ function App() {
           }
         : {
             measured_area: measuredToday,
+            measured_source: workRoundData.measuredMode,
             billing_area: billingArea,
             workers,
             wage_per_rai: wagePerRai,
@@ -3064,7 +3169,7 @@ function App() {
         const totalMeasured = currentSummary.measuredArea + measuredToday;
         alert(
           `✅ ปิดรอบวันนี้แล้ว\n\n` +
-          `📐 วัดจริงวันนี้: ${measuredToday.toFixed(2)} ไร่\n` +
+          `📐 ทำจริงรอบนี้: ${measuredToday.toFixed(2)} ไร่\n` +
           `📐 วัดจริงสะสม: ${totalMeasured.toFixed(2)} ไร่\n` +
           `👷 จำคนรับค่าแรง: ${workers}\n` +
           `💵 เรทที่จำไว้: ${wagePerRai.toLocaleString()} บาท/ไร่\n\n` +
@@ -3472,7 +3577,7 @@ function App() {
                       {activeJobNow ? `กำลังเก็บเกี่ยว${activeJobNow.crop_type || 'ข้าว'}` : 'สแตนด์บาย (ว่าง)'}
                     </span>
                     <span className="font-semibold text-gray-800 text-sm">
-                      {activeJobNow ? `ลูกค้า: ${activeJobNow.customers?.name} (${activeJobNow.area_size} ไร่)` : 'รอรับคำสั่งงานถัดไป'}
+                      {activeJobNow ? `ลูกค้า: ${activeJobNow.customers?.name} (${queueAreaRai(activeJobNow).toFixed(2)} ไร่${Number(activeJobNow.gps_summary?.area_rai || 0)>0?' GPS':' ประมาณ'})` : 'รอรับคำสั่งงานถัดไป'}
                     </span>
                   </div>
                 </div>
@@ -3547,10 +3652,12 @@ function App() {
                             return (
                               <>
                                 <p className="text-xs text-gray-500 font-semibold mt-1">
-                                  {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} ลูกค้าแจ้ง ~{job.area_size || 0} ไร่
+                                  {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {Number(job.gps_summary?.area_rai || 0) > 0
+                                    ? `🛰️ ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${plotThaiArea(Number(job.gps_summary.area_rai)*1600).text}`
+                                    : job.area_size ? `🗣️ ประมาณ ~${job.area_size} ไร่` : 'ยังไม่มีพื้นที่'}
                                 </p>
                                 {ws.roundCount > 0 && (
-                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {ws.measuredArea.toFixed(2)} ไร่ • {ws.roundCount} รอบ</p>
+                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {ws.measuredArea.toFixed(2)} ไร่ • {ws.roundCount} รอบ • 👷 จำคนไว้แล้ว</p>
                                 )}
                               </>
                             );
@@ -4018,79 +4125,51 @@ function App() {
                       </span>
                     </div>
 
-                    {job.gps_summary_error ? (
-                      <div className="bg-red-50 border border-red-200 rounded-xl p-2.5 mb-3" onClick={e=>e.stopPropagation()}>
-                        <p className="text-xs font-bold text-red-700">🛰️ โหลดพื้นที่ GPS ไม่สำเร็จ</p>
-                      </div>
-                    ) : Number(job.gps_summary?.plot_count || 0) > 0 ? (
-                      <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="w-full text-left bg-sky-50 border border-sky-200 rounded-xl p-3 mb-3 hover:bg-sky-100 transition">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-bold text-sky-800">🛰️ GPS ผูกกับคิวแล้ว • {job.gps_summary.plot_count} แปลง</p>
-                            <p className="font-black text-sky-950">{plotThaiArea(Number(job.gps_summary.area_rai || 0)*1600).text}</p>
-                            {!!job.gps_summary?.invalid_count && <p className="text-xs text-red-700">มี {job.gps_summary.invalid_count} แปลงที่ต้องตรวจขอบ</p>}
-                          </div>
-                          <span className="text-sm font-black text-blue-700 whitespace-nowrap">ดูแปลง →</span>
-                        </div>
-                      </button>
-                    ) : null}
-                    {/* 💡 กล่องประเภทพืชแบบแยกสี + ไอคอน */}
-                    <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
-                      <div className={`p-2 rounded-lg border ${
-                        job.crop_type === 'ข้าว' ? 'bg-amber-50 border-amber-200' :
-                        job.crop_type === 'ข้าวโพด' ? 'bg-orange-50 border-orange-200' :
-                        job.crop_type === 'ถั่ว' ? 'bg-emerald-50 border-emerald-200' :
-                        'bg-gray-50 border-gray-200'
-                      }`}>
-                        <span className="block text-gray-500 text-xs">ประเภทพืช</span>
-                        <span className={`font-bold ${
-                          job.crop_type === 'ข้าว' ? 'text-amber-700' :
-                          job.crop_type === 'ข้าวโพด' ? 'text-orange-700' :
-                          job.crop_type === 'ถั่ว' ? 'text-emerald-700' :
-                          'text-gray-800'
-                        }`}>
-                          {job.crop_type === 'ข้าว' ? '🌾 ' : 
-                           job.crop_type === 'ข้าวโพด' ? '🌽 ' : 
-                           job.crop_type === 'ถั่ว' ? '🥜 ' : ''}
-                          {job.crop_type}
-                        </span>
-                      </div>
-                      
-                      <div className={`${job.status !== 'DONE' && Number(job.gps_summary?.plot_count || 0) > 0 ? 'bg-sky-50 border-sky-200' : 'bg-gray-50 border-gray-200'} border p-2 rounded-lg`}>
-                        <span className="block text-gray-500 text-xs">
-                          {job.status === 'DONE' ? 'พื้นที่คิดเงิน' : Number(job.gps_summary?.plot_count || 0) > 0 ? `🛰️ วัดจาก GPS (${job.gps_summary.plot_count} แปลง)` : 'ลูกค้าแจ้ง (ประมาณ)'}
-                        </span>
-                        <span className={`font-semibold ${job.status !== 'DONE' && Number(job.gps_summary?.plot_count || 0) > 0 ? 'text-sky-900' : 'text-gray-800'}`}>
-                          {job.status === 'DONE'
-                            ? `${Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่`
-                            : Number(job.gps_summary?.plot_count || 0) > 0
-                              ? plotThaiArea(Number(job.gps_summary?.area_rai || 0) * 1600).text
-                              : `~${job.area_size || 0} ไร่`}
-                        </span>
-                      </div>
-                    </div>
-                    
                     {(() => {
                       const ws = getJobWorkSummary(job);
-                      if (ws.roundCount === 0) return null;
-                      return (
-                        <div className="mb-3 grid grid-cols-3 gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5">
-                          <div className="text-center">
-                            <span className="block text-[10px] text-emerald-700 font-bold">วัดจริงแล้ว</span>
-                            <span className="text-sm font-black text-emerald-900">{ws.measuredArea.toFixed(2)} ไร่</span>
-                          </div>
-                          <div className="text-center border-x border-emerald-200">
-                            <span className="block text-[10px] text-emerald-700 font-bold">ลงค่าแรงแล้ว</span>
-                            <span className="text-sm font-black text-emerald-900">{ws.wageArea.toFixed(2)} ไร่</span>
-                          </div>
-                          <div className="text-center">
-                            <span className="block text-[10px] text-emerald-700 font-bold">รอบทำงาน</span>
-                            <span className="text-sm font-black text-emerald-900">{ws.roundCount} รอบ</span>
-                          </div>
-                        </div>
-                      );
-                    })()}
+                      const gpsArea = getJobGpsArea(job);
+                      const gpsCount = Number(job.gps_summary?.plot_count || 0);
+                      const estimate = Math.max(0, Number(job.area_size) || 0);
+                      const billing = Math.max(0, Number(job.billing_area ?? 0) || 0);
+                      const cropIcon = job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾';
 
+                      if (job.status === 'DONE') {
+                        return <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 space-y-2">
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="font-black text-emerald-950">{cropIcon} {job.crop_type || 'งานเกี่ยว'} • ✅ จบงาน</span>
+                            {gpsCount>0 && <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="text-[10px] font-black text-blue-700 bg-white border border-blue-200 rounded-lg px-2 py-1">ดู {gpsCount} แปลง</button>}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">📐 ทำจริง</span><b>{ws.measuredArea.toFixed(2)} ไร่</b></div>
+                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">🤝 คิดเงิน</span><b className="text-emerald-800">{billing.toFixed(2)} ไร่</b></div>
+                          </div>
+                          {userRole==='BOSS' && <p className="text-xs font-black text-emerald-900">💰 ยอดบิล {Number(job.total_price || 0).toLocaleString()} บาท</p>}
+                          {gpsArea>0 && <p className="text-[10px] text-sky-700">🛰️ GPS เก็บไว้เป็นข้อเท็จจริง {plotThaiArea(gpsArea*1600).text}</p>}
+                        </div>;
+                      }
+
+                      return <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="font-black text-gray-900">{cropIcon} {job.crop_type || 'งานเกี่ยว'}</span>
+                          {gpsCount>0 ? <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="text-[10px] font-black text-blue-700 bg-sky-100 border border-sky-200 rounded-lg px-2 py-1">🛰️ {gpsCount} แปลง • ดูแปลง</button> : null}
+                        </div>
+
+                        {job.gps_summary_error ? <p className="text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">🛰️ โหลด GPS ไม่สำเร็จ</p>
+                          : gpsArea>0 ? <p className="text-sm font-black text-sky-900">🛰️ GPS {plotThaiArea(gpsArea*1600).text}</p>
+                          : estimate>0 ? <p className="text-sm font-black text-amber-900">🗣️ ลูกค้าแจ้งประมาณ ~{estimate} ไร่</p>
+                          : <p className="text-xs font-bold text-gray-500">ยังไม่มีพื้นที่ • ผูกแปลง GPS หรือใส่ยอดประมาณได้ภายหลัง</p>}
+
+                        {gpsArea>0 && estimate>0 && <p className="text-[10px] text-amber-700">🗣️ ลูกค้าแจ้งประมาณ ~{estimate} ไร่ • เก็บแยกจาก GPS</p>}
+
+                        {ws.roundCount>0 ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-gray-700">
+                          <span>✅ ทำแล้ว {ws.measuredArea.toFixed(2)} ไร่</span>
+                          <span>🗂️ {ws.roundCount} รอบ</span>
+                          <span className="text-orange-700">👷 จำคนแล้ว {ws.pendingRoundCount} รอบ</span>
+                        </div> : <p className="text-[10px] text-gray-500">ยังไม่มีรอบทำงาน</p>}
+
+                        {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {ws.postedWageArea.toFixed(2)} ไร่ • ระบบจะปรับตอนจบงาน</p>}
+                      </div>;
+                    })()}
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
@@ -4139,24 +4218,30 @@ function App() {
                               <span className="text-[10px] font-bold text-emerald-700">{ws.roundCount} รอบ • วัดจริง {ws.measuredArea.toFixed(2)} ไร่</span>
                             </div>
                             <div className="space-y-2">
-                              {ws.rounds.map((round, rIdx) => (
-                                <div key={round.id || rIdx} className="bg-white rounded-lg border border-emerald-100 p-2 text-xs">
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="font-black text-gray-800">
-                                      {round.round_type === 'FINAL' ? '🏁 รอบปิดงาน' : `รอบ ${rIdx + 1}`}
-                                    </span>
-                                    <span className="text-gray-500">
-                                      {round.work_date ? new Date(round.work_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '-'}
-                                    </span>
+                              {ws.rounds.map((round, rIdx) => {
+                                const source = /\[พื้นที่:GPS\]/.test(String(round.note || '')) ? 'GPS' : 'MANUAL';
+                                const cleanNote = String(round.note || '').replace(/\s*\[พื้นที่:(?:GPS|MANUAL)\]\s*/g, ' ').trim();
+                                return (
+                                  <div key={round.id || rIdx} className="bg-white rounded-lg border border-emerald-100 p-2 text-xs">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="font-black text-gray-800">
+                                        {round.round_type === 'FINAL' ? '🏁 รอบปิดงาน' : `รอบ ${rIdx + 1}`}
+                                      </span>
+                                      <span className="text-gray-500">
+                                        {round.work_date ? new Date(round.work_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '-'}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
+                                      <span className="text-blue-700 font-bold">📐 ทำจริง {Number(round.measured_area || 0).toFixed(2)} ไร่ {source==='GPS'?'• 🛰️ GPS':'• ✏️ ปรับเอง'}</span>
+                                      {round.wage_transaction_id
+                                        ? <span className="text-orange-700 font-bold">💰 ลงสมุดแล้ว {Number(round.wage_area || 0).toFixed(2)} ไร่</span>
+                                        : <span className="text-orange-700 font-bold">👷 จำคนไว้ • รอแบ่งตอนจบ</span>}
+                                      <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
+                                    </div>
+                                    {cleanNote && <p className="mt-1 text-[10px] text-gray-500">📝 {cleanNote}</p>}
                                   </div>
-                                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
-                                    <span className="text-blue-700 font-bold">📐 วัดจริง {Number(round.measured_area || 0).toFixed(2)} ไร่</span>
-                                    <span className="text-orange-700 font-bold">👷 ค่าแรง {Number(round.wage_area || 0).toFixed(2)} ไร่</span>
-                                    <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
-                                  </div>
-                                  {round.note && <p className="mt-1 text-[10px] text-gray-500">📝 {round.note}</p>}
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         );
@@ -4247,7 +4332,7 @@ function App() {
                           </button>
                         )}
 
-                        {/* 🌾 จบเฉพาะรอบวันนี้: บันทึกพื้นที่จริง + ค่าแรงทันที แต่งานลูกค้ายังไม่จบ */}
+                        {/* 🌾 จบเฉพาะรอบวันนี้: จำพื้นที่จริง + คนรับค่าแรงไว้ก่อน ยังไม่ลงสมุด */}
                         {job.status === 'IN_PROGRESS' && (
                           <button
                             onClick={(e) => {
@@ -4286,9 +4371,10 @@ function App() {
 
                       {/* 👇 ซ่อนกลุ่มปุ่มแก้ไข/ลบงานจากคนขับ (แถมไปให้เพื่อความสมบูรณ์ครับ) 👇 */}
                       {userRole === 'BOSS' && (
-                        <div className="flex gap-2 pt-2 mt-2">
-                          <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
+                        <div className="grid grid-cols-3 gap-2 pt-2 mt-2">
+                          <button onClick={(e) => { e.stopPropagation(); inspectJobIntegrity(job); }} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-2 rounded-lg font-bold transition">🔍 ตรวจยอดงาน</button>
+                          <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="bg-red-500 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
                         </div>
                       )}
                     </div>
@@ -5378,7 +5464,7 @@ function App() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-gray-700 mb-1 font-semibold">จำนวนไร่</label>
+                    <label className="block text-gray-700 mb-1 font-semibold">{editingId && jobs.find(j=>j.id===editingId)?.status==='DONE' ? '🤝 พื้นที่คิดเงินจริง (แก้แล้วปรับค่าแรง+ลูกหนี้)' : '🗣️ ลูกค้าแจ้งประมาณ (เว้นว่างได้)'}</label>
                     {/* 💡 เอา required ออก อนุญาตให้เว้นว่างได้ */}
                     <input type="number" step="0.01" className="w-full border p-2 rounded-lg bg-green-50 font-bold text-green-800" placeholder="ยังไม่ระบุ"
                       value={formData.area_size}
@@ -5520,13 +5606,17 @@ function App() {
         {gpsJobDetail !== null && (()=>{const job=jobs.find(j=>String(j.id)===String(gpsJobDetail));if(!job)return null;const summary=job.gps_summary;return <div className="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-3">
         <div role="dialog" aria-modal="true" aria-label="แปลงของคิวงาน" className="bg-white rounded-2xl w-full max-w-lg max-h-[90dvh] overflow-y-auto p-4">
           <div className="flex justify-between"><h3 className="text-lg font-black">🌾 {job.customers?.name} • คิว #{job.id}</h3><button aria-label="ปิดแปลงของคิว" onClick={()=>setGpsJobDetail(null)} className="p-2">✕</button></div>
-          <p className="text-xs text-gray-500">ลูกค้า 1 คน • {summary?.plot_count || 0} แปลง • นับเฉพาะคิวนี้</p>
-          <p className="mt-3 text-lg font-black text-blue-800">วัด GPS: {summary ? plotThaiArea(summary.area_rai*1600).text : 'โหลดไม่สำเร็จ'}</p>
-          <p className="text-sm text-gray-600">พื้นที่คิดเงินจริง: {plotThaiArea(Number(job.billing_area ?? job.area_size ?? 0)*1600).text}</p>
+          <p className="text-xs text-gray-500">ลูกค้า 1 คน • {summary?.plot_count || 0} แปลง • ทุกแปลงอ้างอิง Job ID #{job.id}</p>
+          <p className="mt-3 text-lg font-black text-blue-800">🛰️ GPS: {summary ? plotThaiArea(summary.area_rai*1600).text : 'โหลดไม่สำเร็จ'}</p>
+          <p className="text-sm text-gray-600">✅ ทำจริงที่ปิดรอบแล้ว: {getJobWorkSummary(job).measuredArea.toFixed(2)} ไร่</p>
+          {job.status==='DONE'
+            ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {Number(job.billing_area ?? 0).toFixed(2)} ไร่</p>
+            : <p className="text-sm text-amber-700">🗣️ ลูกค้าแจ้งประมาณ: {job.area_size ? `~${job.area_size} ไร่` : 'ไม่ระบุ'}</p>}
           {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
           <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);setTrackingMode('history');setTrackingVehicleId(String(plot.vehicle_id));setTrackingDate(plot.work_date);setGpsFocusPlot({...plot,request:Date.now()});setActiveTab('gps');setIsMapFullScreen(true);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
-          {userRole==='BOSS' && <button disabled={!summary?.plot_count || !!summary?.invalid_count || job.payment_status==='PAID'} onClick={()=>{setGpsJobDetail(null);openBillingAreaAdjust(job);setBillingAdjustArea(String(Number(summary.area_rai.toFixed(6))));}} className="w-full bg-emerald-600 text-white font-black rounded-xl py-3 disabled:opacity-40">นำยอด GPS ไปตรวจและยืนยันคิดเงิน</button>}
-          <p className="text-xs text-gray-500 mt-2">ยอด GPS เปลี่ยนตามแปลง • ต้องยืนยันอีกครั้งก่อนปรับเงินและค่าแรง งานที่ชำระครบแล้วไม่เปิดให้ใช้ปุ่มนี้</p>
+          {userRole==='BOSS' && job.status==='DONE' && <button disabled={!summary?.plot_count || !!summary?.invalid_count || job.payment_status==='PAID'} onClick={()=>{setGpsJobDetail(null);openBillingAreaAdjust(job);setBillingAdjustArea(String(Number(summary.area_rai.toFixed(6))));}} className="w-full bg-emerald-600 text-white font-black rounded-xl py-3 disabled:opacity-40">📐 ใช้ GPS เป็นตัวช่วยตรวจไร่คิดเงิน</button>}
+          {job.status!=='DONE' && <p className="text-xs text-blue-700 mt-2 font-bold">GPS เป็นข้อมูลหน้างาน • ปิดรอบวันนี้จะดึงเฉพาะยอดที่ยังไม่ลงรอบให้อัตโนมัติ</p>}
+          {job.status==='DONE' && <p className="text-xs text-gray-500 mt-2">GPS ไม่แก้ทับข้อเท็จจริงย้อนหลัง • ปรับเฉพาะ 🤝 ไร่คิดเงิน และค่าแรงตามไร่ลูกค้า</p>}
         </div>
       </div>})()}
       {billingAdjustModal && (() => {
@@ -5606,6 +5696,36 @@ function App() {
           );
         })()}
 
+        {jobIntegrityModal && (()=>{
+          const d = jobIntegrityModal.data;
+          const checks = Array.isArray(d?.checks) ? d.checks : [];
+          const audits = Array.isArray(d?.audit) ? d.audit : [];
+          const badge = d?.health === 'OK' ? 'bg-green-100 text-green-800' : d?.health === 'ERROR' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800';
+          return <div className="fixed inset-0 z-[390] bg-black/65 flex items-center justify-center p-3">
+            <div className="bg-white rounded-3xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl">
+              <div className="sticky top-0 bg-white border-b p-4 flex justify-between items-start gap-3 z-10">
+                <div><h2 className="text-lg font-black text-indigo-900">🔍 ตรวจยอดงาน • Job #{jobIntegrityModal.job?.id}</h2><p className="text-xs text-gray-500">{jobIntegrityModal.job?.customers?.name || 'ไม่ระบุลูกค้า'}</p></div>
+                <button onClick={()=>setJobIntegrityModal(null)} className="w-9 h-9 rounded-full bg-gray-100 font-bold">✕</button>
+              </div>
+              <div className="p-4 space-y-3">
+                {jobIntegrityModal.loading ? <p className="text-center py-8 font-bold text-blue-700">⏳ กำลังตรวจ GPS / รอบงาน / ค่าแรง / ลูกหนี้…</p>
+                  : jobIntegrityModal.error ? <p className="bg-red-50 border border-red-200 rounded-xl p-3 font-bold text-red-700">❌ {jobIntegrityModal.error}</p>
+                  : <>
+                    <div className="flex justify-between items-center"><span className="font-black">สถานะความสัมพันธ์ของข้อมูล</span><span className={`px-3 py-1 rounded-full text-xs font-black ${badge}`}>{d?.health || 'WARN'}</span></div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3"><span className="block text-gray-500">🛰️ GPS</span><b>{Number(d?.summary?.gps_area || 0).toFixed(2)} ไร่</b></div>
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3"><span className="block text-gray-500">✅ ทำจริง</span><b>{Number(d?.summary?.measured_area || 0).toFixed(2)} ไร่</b></div>
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-3"><span className="block text-gray-500">🤝 คิดเงิน</span><b>{d?.summary?.billing_area == null ? '-' : `${Number(d.summary.billing_area).toFixed(2)} ไร่`}</b></div>
+                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-3"><span className="block text-gray-500">👷 ค่าแรงจัดสรร</span><b>{Number(d?.summary?.wage_area || 0).toFixed(2)} ไร่</b></div>
+                    </div>
+                    <div className="space-y-2">{checks.map((c,i)=><div key={i} className={`rounded-xl border p-2.5 text-xs ${c.level==='ERROR'?'bg-red-50 border-red-200':c.level==='WARN'?'bg-amber-50 border-amber-200':'bg-green-50 border-green-200'}`}><b>{c.level==='ERROR'?'❌':c.level==='WARN'?'⚠️':'✅'} {c.title}</b><p className="text-gray-600 mt-0.5">{c.detail}</p></div>)}</div>
+                    <div className="border-t pt-3"><p className="font-black text-sm mb-2">🕘 ประวัติแก้ไขล่าสุด</p>{audits.length ? <div className="space-y-2">{audits.slice(0,12).map(a=><div key={a.id} className="bg-gray-50 border rounded-xl p-2 text-xs"><div className="flex justify-between gap-2"><b>{a.action}</b><span className="text-gray-400">{new Date(a.created_at).toLocaleString('th-TH')}</span></div><p className="text-gray-600 mt-1">{a.summary || '-'}</p></div>)}</div> : <p className="text-xs text-gray-400">ยังไม่มี Audit Log หรือยังไม่ได้รัน SQL Setup</p>}</div>
+                  </>}
+              </div>
+            </div>
+          </div>
+        })()}
+
         {workRoundModal && (() => {
           const job = workRoundModal.job;
           const isFinal = workRoundModal.mode === 'FINAL';
@@ -5671,11 +5791,11 @@ function App() {
                 <div className="p-5 space-y-4">
                   <div className="grid grid-cols-3 gap-2">
                     <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center">
-                      <p className="text-[10px] text-amber-700 font-bold">ลูกค้าแจ้ง</p>
-                      <p className="font-black text-amber-900">{Number(job.area_size || 0).toFixed(2)} ไร่</p>
+                      <p className="text-[10px] text-amber-700 font-bold">🗣️ ลูกค้าแจ้งประมาณ</p>
+                      <p className="font-black text-amber-900">{job.area_size != null && job.area_size !== '' ? `${Number(job.area_size).toFixed(2)} ไร่` : 'ไม่ระบุ'}</p>
                     </div>
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-center">
-                      <p className="text-[10px] text-blue-700 font-bold">วัดจริงก่อนหน้า</p>
+                      <p className="text-[10px] text-blue-700 font-bold">✅ ทำจริงก่อนหน้า</p>
                       <p className="font-black text-blue-900">{ws.measuredArea.toFixed(2)} ไร่</p>
                     </div>
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-center">
@@ -5684,16 +5804,44 @@ function App() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-gray-800 font-black mb-1 text-sm">📐 วันนี้วัดจริงกี่ไร่?</label>
-                    <input
-                      type="number" min="0" step="0.01" inputMode="decimal"
-                      className="w-full border-2 border-blue-300 p-3 rounded-xl bg-blue-50 text-blue-900 font-black text-lg outline-none focus:ring-2 focus:ring-blue-400"
-                      value={workRoundData.measuredArea}
-                      onChange={(e) => setWorkRoundData(prev => ({ ...prev, measuredArea: e.target.value }))}
-                      placeholder={isFinal ? 'เช่น 27 (ถ้าวันนี้ไม่ได้เกี่ยวเพิ่ม ใส่ 0)' : 'เช่น 10'}
-                    />
-                    <p className="text-[11px] text-blue-700 mt-1 font-bold">วัดจริงสะสมหลังรอบนี้: {measuredTotal.toFixed(2)} ไร่</p>
+                  <div className="space-y-2">
+                    <label className="block text-gray-800 font-black text-sm">📐 พื้นที่รอบนี้</label>
+                    {Number(job.gps_summary?.plot_count || 0) > 0 && !job.gps_summary_error && (
+                      <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-3">
+                        <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                          <div><span className="block text-sky-700 font-bold">🛰️ GPS รวม</span><b className="text-sky-950">{getJobGpsArea(job).toFixed(2)} ไร่</b></div>
+                          <div className="border-x border-sky-200"><span className="block text-sky-700 font-bold">✅ ลงรอบแล้ว</span><b className="text-sky-950">{ws.measuredArea.toFixed(2)} ไร่</b></div>
+                          <div><span className="block text-sky-700 font-bold">✨ ยังไม่ลงรอบ</span><b className="text-sky-950">{Math.max(0,getJobGpsArea(job)-ws.measuredArea).toFixed(2)} ไร่</b></div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mt-3">
+                          <button type="button" disabled={Math.max(0,getJobGpsArea(job)-ws.measuredArea)<=0}
+                            onClick={()=>setWorkRoundData(prev=>({...prev,measuredArea:String(Number(Math.max(0,getJobGpsArea(job)-ws.measuredArea).toFixed(6))),measuredMode:'GPS'}))}
+                            className={`rounded-xl py-2 text-xs font-black ${workRoundData.measuredMode==='GPS'?'bg-sky-600 text-white':'bg-white text-sky-800 border border-sky-300'} disabled:opacity-40`}>
+                            ✅ ใช้ยอด GPS
+                          </button>
+                          <button type="button" onClick={()=>setWorkRoundData(prev=>({...prev,measuredMode:'MANUAL'}))}
+                            className={`rounded-xl py-2 text-xs font-black ${workRoundData.measuredMode==='MANUAL'?'bg-amber-500 text-white':'bg-white text-amber-800 border border-amber-300'}`}>
+                            ✏️ ปรับพื้นที่เอง
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {workRoundData.measuredMode === 'GPS' ? (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex justify-between items-center">
+                        <span className="text-sm font-bold text-blue-800">🛰️ ใช้ GPS รอบนี้</span>
+                        <b className="text-xl text-blue-950">{Number(workRoundData.measuredArea || 0).toFixed(2)} ไร่</b>
+                      </div>
+                    ) : (
+                      <input
+                        type="number" min="0" step="0.01" inputMode="decimal"
+                        className="w-full border-2 border-amber-300 p-3 rounded-xl bg-amber-50 text-amber-900 font-black text-lg outline-none focus:ring-2 focus:ring-amber-400"
+                        value={workRoundData.measuredArea}
+                        onChange={(e) => setWorkRoundData(prev => ({ ...prev, measuredArea: e.target.value, measuredMode:'MANUAL' }))}
+                        placeholder={isFinal ? 'ถ้าวันนี้ไม่ได้เกี่ยวเพิ่ม ใส่ 0' : 'เช่น 10'}
+                      />
+                    )}
+                    <p className="text-[11px] text-blue-700 font-bold">ทำจริงสะสมหลังรอบนี้: {measuredTotal.toFixed(2)} ไร่</p>
                   </div>
 
                   {isFinal && (

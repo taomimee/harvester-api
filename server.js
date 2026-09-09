@@ -270,6 +270,7 @@ app.post('/api/jobs', async (req, res) => {
             .select();
 
         if (jobError) throw jobError;
+        if (newJob?.[0]?.id) await writeJobAudit(newJob[0].id, 'JOB_CREATED', `สร้างคิวใหม่${area_size == null ? ' • ยังไม่ระบุยอดประมาณ' : ` • ลูกค้าแจ้งประมาณ ${area_size} ไร่`}`, null, newJob[0]);
         res.status(201).json({ message: 'บันทึกคิวงานสำเร็จ!', data: newJob });
 
     } catch (err) {
@@ -281,7 +282,7 @@ app.post('/api/jobs', async (req, res) => {
 // API สำหรับอัปเดตเปลี่ยนสถานะงาน (เช่น กดเสร็จสิ้น หรือ กำลังเกี่ยว)
 app.patch('/api/jobs/:id/status', async (req, res) => {
     const { id } = req.params;
-    const { status, wageData, job_date } = req.body;
+    const { status, wageData, job_date, payment_status, paid_at } = req.body || {};
 
     try {
         // กันหน้าเว็บรุ่นเก่าปิด DONE มาทับค่าแรงของระบบรอบทำงาน
@@ -299,11 +300,13 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
             }
         }
 
-        // 💡 สร้างกล่องเก็บข้อมูลที่จะอัปเดต
-        const updateData = { status };
-        if (job_date) {
-            updateData.job_date = job_date; // ถ้ามีวันที่ส่งมาด้วย ให้จับใส่กล่องไปอัปเดตพร้อมกัน
-        }
+        // 💡 อัปเดตเฉพาะ field ที่ส่งมา ป้องกัน status=undefined ไปทับฐานข้อมูล
+        const updateData = {};
+        if (status) updateData.status = status;
+        if (job_date) updateData.job_date = job_date;
+        if (payment_status) updateData.payment_status = payment_status;
+        if (paid_at) updateData.paid_at = paid_at;
+        if (Object.keys(updateData).length === 0) return res.status(400).json({ error: 'ไม่มีข้อมูลสำหรับอัปเดต' });
 
         // 1. อัปเดตสถานะงาน (และเวลาถ้ามี) ให้เป็น DONE, IN_PROGRESS ฯลฯ
         const { data: updatedJob, error: jobError } = await supabase
@@ -314,6 +317,8 @@ app.patch('/api/jobs/:id/status', async (req, res) => {
             .single();
 
         if (jobError) throw jobError;
+        await writeJobAudit(id, payment_status && !status ? 'PAYMENT_STATUS_CHANGED' : 'STATUS_CHANGED',
+            `${status ? `สถานะงาน ${status}` : ''}${payment_status ? `${status ? ' • ' : ''}การเงิน ${payment_status}` : ''}${job_date ? ` • นัด ${job_date}` : ''}`, null, updatedJob);
         // 2. 💡 ถ้าสถานะคือ DONE และมีค่าแรง ให้บันทึก 1 บิลต่อ 1 job เท่านั้น
         if (status === 'DONE' && wageData) {
             const totalWage = (Number(wageData.area) * Number(wageData.wagePerRai)) || 0;
@@ -390,6 +395,17 @@ app.get('/api/jobs/:id/rounds', async (req, res) => {
 const safeRoundNumber = (value, fallback = 0) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
+};
+
+// 🕘 Audit เป็น best-effort: ถ้ายังไม่ได้รัน SQL ระบบหลักยังทำงานได้ตามปกติ
+const writeJobAudit = async (jobId, action, summary, beforeData = null, afterData = null) => {
+    try {
+        const { error } = await supabase.from('job_audit_log').insert([{
+            job_id: Number(jobId), action: String(action || 'UPDATE'), summary: String(summary || ''),
+            before_data: beforeData, after_data: afterData
+        }]);
+        if (error && !['42P01','PGRST205'].includes(error.code)) console.warn('Audit log:', error.message);
+    } catch (_) {}
 };
 
 const createRoundWageTransaction = async ({ jobId, roundId, workers, wageArea, wagePerRai, roundDate, roundType }) => {
@@ -845,6 +861,7 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
     const jobId = Number(req.params.id);
     const {
         measured_area,
+        measured_source = 'MANUAL',
         workers,
         wage_per_rai = 60,
         next_work_date = null,
@@ -879,11 +896,11 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
                 job_id: jobId,
                 work_date: nowIso,
                 measured_area: measuredArea,
-                // เก็บเป็นพื้นที่ตั้งต้นไว้สำหรับแบ่งตอนปิดงาน แต่ยังไม่สร้างบิลค่าแรง
-                wage_area: measuredArea,
+                // ยังไม่จัดสรรค่าแรงจนกว่าจะ 🏁 จบงานทั้งหมด
+                wage_area: 0,
                 wage_per_rai: wagePerRai,
                 workers: workerText,
-                note: String(note || '').trim() || null,
+                note: `${String(note || '').trim()}${String(note || '').trim() ? ' ' : ''}[พื้นที่:${String(measured_source).toUpperCase() === 'GPS' ? 'GPS' : 'MANUAL'}]`,
                 round_type: 'PARTIAL',
                 wage_transaction_id: null
             }])
@@ -904,6 +921,8 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
             .single();
 
         if (updateError) throw updateError;
+
+        await writeJobAudit(jobId, 'ROUND_SAVED', `ปิดรอบ ${measuredArea.toFixed(2)} ไร่ • ${workerText} • ${String(measured_source).toUpperCase()==='GPS'?'GPS':'ปรับเอง'}`, null, {round_id:roundId, measured_area:measuredArea, workers:workerText, source:measured_source, next_work_date});
 
         res.status(201).json({
             success: true,
@@ -930,6 +949,7 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
     const jobId = Number(req.params.id);
     const {
         measured_area = 0,
+        measured_source = 'MANUAL',
         billing_area,
         workers = '',
         wage_per_rai = 60,
@@ -967,6 +987,29 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
 
         if (roundsError) throw roundsError;
 
+        // ✅ งานระบบใหม่ที่ยังไม่เคยลง transaction ค่าแรง ใช้ Postgres RPC ตัวเดียว
+        // เพื่อให้: เพิ่มรอบสุดท้าย + แบ่งค่าแรง + สร้างสมุด + ปิด job เป็น transaction เดียวจริง ๆ
+        const hasLegacyPostedWage = (priorRounds || []).some(r => r.wage_transaction_id);
+        if (!hasLegacyPostedWage) {
+            const { data: atomicResult, error: atomicError } = await supabase.rpc('finalize_job_atomic', {
+                p_job_id: jobId,
+                p_today_measured: todayMeasured,
+                p_billing_area: billingArea,
+                p_workers: workerText,
+                p_wage_per_rai: wagePerRai,
+                p_note: String(note || '').trim(),
+                p_measured_source: String(measured_source || 'MANUAL')
+            });
+
+            if (!atomicError && atomicResult?.success) {
+                return res.json(atomicResult);
+            }
+
+            // ยังไม่ได้รัน SQL setup / ไม่มีสิทธิ์ execute => ใช้ fallback เดิมที่มี rollback ชดเชย
+            const canFallback = atomicError && ['PGRST202', '42883', '42501'].includes(atomicError.code);
+            if (atomicError && !canFallback) throw atomicError;
+        }
+
         const priorMeasuredArea = (priorRounds || []).reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
         const priorWageArea = (priorRounds || []).reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
         const measuredAreaTotal = priorMeasuredArea + todayMeasured;
@@ -987,10 +1030,10 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
                     job_id: jobId,
                     work_date: nowIso,
                     measured_area: todayMeasured,
-                    wage_area: todayMeasured,
+                    wage_area: 0,
                     wage_per_rai: wagePerRai,
                     workers: workerText || 'ไม่ระบุ',
-                    note: String(note || '').trim() || null,
+                    note: `${String(note || '').trim()}${String(note || '').trim() ? ' ' : ''}[พื้นที่:${String(measured_source).toUpperCase() === 'GPS' ? 'GPS' : 'MANUAL'}]`,
                     round_type: 'FINAL',
                     wage_transaction_id: null
                 }])
@@ -1038,6 +1081,8 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
             throw wageErr;
         }
 
+        await writeJobAudit(jobId, 'FINALIZED', `จบงาน • ทำจริง ${measuredAreaTotal.toFixed(2)} ไร่ • ลูกค้ารับ ${billingArea.toFixed(2)} ไร่ • ค่าแรง ${wageReconciliation.after_area.toFixed(2)} ไร่`, jobSnapshot, updatedJob);
+
         res.json({
             success: true,
             message: 'ปิดงานทั้งหมดและลงสมุดค่าแรงเรียบร้อย',
@@ -1076,7 +1121,6 @@ app.patch('/api/jobs/:id/billing-area', async (req, res) => {
     if (!Number.isFinite(newArea) || newArea < 0) return res.status(400).json({ error: 'กรุณาระบุจำนวนไร่ให้ถูกต้อง' });
 
     let wageResult = null;
-    let measuredResult = null;
 
     try {
         const { data: job, error: jobError } = await supabase
@@ -1107,14 +1151,12 @@ app.patch('/api/jobs/:id/billing-area', async (req, res) => {
         // 1) ค่าแรงของ job id นี้เท่านั้น
         wageResult = await reconcileJobWageArea(jobId, newArea, { postMissingTransactions: job.status === 'DONE' });
 
-        // 2) ประวัติรอบงานของ job id นี้ ให้ยอดพื้นที่รวมตรงกัน
-        measuredResult = await syncJobRoundMeasuredArea(jobId, newArea);
+        // 2) measured_area / GPS คือข้อเท็จจริงหน้างาน — ห้ามแก้ทับด้วยไร่ที่ลูกค้าตกลง
 
-        // 3) ตัวการ์ด + ยอดลูกหนี้
+        // 3) ไร่คิดเงิน + ยอดลูกหนี้
         const { data: updatedJob, error: updateError } = await supabase
             .from('jobs')
             .update({
-                area_size: newArea,
                 billing_area: newArea,
                 total_price: newDebt,
                 payment_status: nextPaymentStatus
@@ -1125,13 +1167,14 @@ app.patch('/api/jobs/:id/billing-area', async (req, res) => {
 
         if (updateError) {
             try { await reconcileJobWageArea(jobId, wageResult.before_area, { postMissingTransactions: job.status === 'DONE' }); } catch (_) {}
-            try { await restoreJobRoundMeasuredArea(measuredResult?.snapshots || []); } catch (_) {}
             throw updateError;
         }
 
+        await writeJobAudit(jobId, 'BILLING_AREA_CHANGED', `ปรับไร่คิดเงิน ${oldArea.toFixed(2)} → ${newArea.toFixed(2)} ไร่ • ค่าแรงปรับตาม • วัดจริง/GPS คงเดิม`, job, updatedJob);
+
         res.json({
             success: true,
-            message: 'ปรับจำนวนไร่ทั้งการ์ดตาม Job ID เรียบร้อย',
+            message: 'ปรับไร่คิดเงิน + ค่าแรง + ลูกหนี้เรียบร้อย (วัดจริง/GPS คงเดิม)',
             job: updatedJob,
             summary: {
                 job_id: jobId,
@@ -1145,9 +1188,9 @@ app.patch('/api/jobs/:id/billing-area', async (req, res) => {
                 wage_area_after: wageResult.after_area,
                 wage_amount_before: wageResult.amount_before,
                 wage_amount_after: wageResult.amount_after,
-                measured_area_before: measuredResult.before_area,
-                measured_area_after: measuredResult.after_area,
-                sync_mode: 'JOB_ID_CASCADE'
+                measured_area_before: null,
+                measured_area_after: null,
+                sync_mode: 'BILLING_WAGE_DEBT_ONLY'
             }
         });
     } catch (err) {
@@ -1179,7 +1222,6 @@ app.put('/api/jobs/:id', async (req, res) => {
         : 0;
 
     let wageResult = null;
-    let measuredResult = null;
 
     try {
         const { data: jobInfo, error: findError } = await supabase
@@ -1191,7 +1233,11 @@ app.put('/api/jobs/:id', async (req, res) => {
         if (findError) throw findError;
         if (!jobInfo) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
 
-        const oldCanonicalArea = Math.max(0, safeRoundNumber(jobInfo.billing_area ?? jobInfo.area_size, 0));
+        const isDone = jobInfo.status === 'DONE';
+        const oldEstimateArea = jobInfo.area_size == null ? null : Math.max(0, safeRoundNumber(jobInfo.area_size, 0));
+        const oldCanonicalArea = isDone
+            ? Math.max(0, safeRoundNumber(jobInfo.billing_area ?? jobInfo.area_size, 0))
+            : Math.max(0, safeRoundNumber(jobInfo.area_size, 0));
         const canonicalArea = hasArea ? Math.max(0, nextArea) : oldCanonicalArea;
         const rate = Number.isFinite(nextRate) ? nextRate : Math.max(0, safeRoundNumber(jobInfo.price_per_rai, 0));
 
@@ -1224,10 +1270,10 @@ app.put('/api/jobs/:id', async (req, res) => {
             if (Number.isFinite(sentTotal) && sentTotal >= 0) nextTotalPrice = sentTotal;
         }
 
-        // ถ้าแก้ "ไร่" ให้ทุกอย่างของ job id นี้ตามเลขเดียวกัน
-        if (areaChanged) {
-            wageResult = await reconcileJobWageArea(jobId, canonicalArea, { postMissingTransactions: jobInfo.status === 'DONE' });
-            measuredResult = await syncJobRoundMeasuredArea(jobId, canonicalArea);
+        // งานที่ยังไม่จบ: area_size คือ "ลูกค้าแจ้งประมาณ" เท่านั้น
+        // งาน DONE: ช่องไร่ในประวัติหมายถึง billing_area และปรับเฉพาะค่าแรง+ลูกหนี้ — measured/GPS คงเดิม
+        if (areaChanged && isDone) {
+            wageResult = await reconcileJobWageArea(jobId, canonicalArea, { postMissingTransactions: true });
         }
 
         if (jobInfo.customer_id) {
@@ -1243,8 +1289,7 @@ app.put('/api/jobs/:id', async (req, res) => {
             .update({
                 vehicle_id: vehicle_id === 0 ? null : vehicle_id,
                 crop_type,
-                area_size: canonicalArea,
-                billing_area: canonicalArea,
+                ...(isDone ? { billing_area: canonicalArea } : { area_size: hasArea ? canonicalArea : oldEstimateArea }),
                 job_date,
                 latitude,
                 longitude,
@@ -1261,15 +1306,17 @@ app.put('/api/jobs/:id', async (req, res) => {
             if (wageResult) {
                 try { await reconcileJobWageArea(jobId, wageResult.before_area, { postMissingTransactions: jobInfo.status === 'DONE' }); } catch (_) {}
             }
-            if (measuredResult) {
-                try { await restoreJobRoundMeasuredArea(measuredResult.snapshots || []); } catch (_) {}
-            }
             throw jobError;
         }
 
+        await writeJobAudit(jobId, areaChanged ? (isDone ? 'BILLING_AREA_CHANGED' : 'ESTIMATE_CHANGED') : 'JOB_EDITED',
+            areaChanged
+                ? (isDone ? `แก้ไร่คิดเงินเป็น ${canonicalArea.toFixed(2)} ไร่ • ค่าแรง+ลูกหนี้ตาม • ทำจริง/GPS คงเดิม` : `แก้ยอดลูกค้าแจ้งประมาณเป็น ${canonicalArea.toFixed(2)} ไร่`)
+                : 'แก้ข้อมูลคิวงาน', jobInfo, updatedJob);
+
         res.json({
             message: areaChanged
-                ? `อัปเดตการ์ดงาน #${jobId} และซิงก์จำนวนไร่ทั้งระบบสำเร็จ`
+                ? (isDone ? `อัปเดตไร่คิดเงินของงาน #${jobId} และปรับค่าแรง+ลูกหนี้สำเร็จ` : `อัปเดตยอดประมาณของคิว #${jobId} สำเร็จ`)
                 : 'อัปเดตข้อมูลสำเร็จ!',
             data: updatedJob,
             area_sync: areaChanged ? {
@@ -1278,15 +1325,85 @@ app.put('/api/jobs/:id', async (req, res) => {
                 new_area: canonicalArea,
                 wage_area_before: wageResult?.before_area ?? null,
                 wage_area_after: wageResult?.after_area ?? null,
-                measured_area_before: measuredResult?.before_area ?? null,
-                measured_area_after: measuredResult?.after_area ?? null,
+                measured_area_before: null,
+                measured_area_after: null,
                 total_price: nextTotalPrice,
-                mode: 'JOB_ID_CASCADE'
+                mode: isDone ? 'BILLING_WAGE_DEBT_ONLY' : 'ESTIMATE_ONLY'
             } : null
         });
     } catch (err) {
         console.error('Error updating job:', err.message);
         res.status(500).json({ error: err.message, code: err.code || 'JOB_UPDATE_FAILED' });
+    }
+});
+
+
+// 🔍 ตรวจความสัมพันธ์ของ Job ID เดียวกัน — ไม่แก้ข้อมูล แค่รายงาน
+app.get('/api/jobs/:id/integrity', async (req, res) => {
+    const jobId = Number(req.params.id);
+    if (!Number.isSafeInteger(jobId) || jobId <= 0) return res.status(400).json({error:'job_id ไม่ถูกต้อง'});
+    try {
+        const {data:job,error:jobError} = await supabase.from('jobs').select('*').eq('id',jobId).single();
+        if(jobError) throw jobError;
+        const {data:rounds,error:roundError} = await supabase.from('job_work_rounds').select('*').eq('job_id',jobId).order('work_date',{ascending:true});
+        if(roundError) throw roundError;
+        const {data:wages,error:wageError} = await supabase.from('transactions').select('id,total_amount,status,note,transaction_date').eq('job_id',jobId).eq('type','OUT').eq('category','ค่าแรง');
+        if(wageError) throw wageError;
+
+        let gps = {plot_count:0,area_rai:0,plots:[],invalid_count:0};
+        try { const map = await loadGpsJobSummary(); gps = map.get(jobId) || gps; } catch (_) {}
+
+        const measured = (rounds||[]).reduce((s,r)=>s+Math.max(0,Number(r.measured_area)||0),0);
+        const wageArea = (rounds||[]).reduce((s,r)=>s+Math.max(0,Number(r.wage_area)||0),0);
+        const expectedWage = (rounds||[]).reduce((s,r)=>s+(Math.max(0,Number(r.wage_area)||0)*Math.max(0,Number(r.wage_per_rai)||0)),0);
+        const wageAmount = (wages||[]).reduce((s,t)=>s+Math.max(0,Number(t.total_amount)||0),0);
+        const billing = job.billing_area == null ? null : Math.max(0,Number(job.billing_area)||0);
+        const checks = [];
+        const add=(level,title,detail)=>checks.push({level,title,detail});
+
+        if(gps.invalid_count>0) add('WARN','ขอบแปลง GPS ต้องตรวจ',`มี ${gps.invalid_count} แปลงที่คำนวณไม่ได้`);
+        else add('OK','GPS พร้อมใช้',`${gps.plot_count} แปลง • ${Number(gps.area_rai||0).toFixed(2)} ไร่`);
+
+        if((rounds||[]).some(r=>!String(r.workers||'').trim())) add('ERROR','มีรอบที่ไม่มีชื่อคนงาน','กรุณาแก้ชื่อคนรับค่าแรงก่อนปิดบัญชี');
+        else add('OK','ชื่อคนงานครบ',`${(rounds||[]).length} รอบ`);
+
+        if(job.status==='DONE') {
+            if(billing == null) add('ERROR','งานจบแต่ไม่มีไร่คิดเงิน','billing_area ว่าง');
+            else if(Math.abs(wageArea-billing)>0.01) add('ERROR','ไร่ค่าแรงไม่ตรงไร่คิดเงิน',`คิดเงิน ${billing.toFixed(2)} แต่ค่าแรง ${wageArea.toFixed(2)} ไร่`);
+            else add('OK','ค่าแรงตรงไร่คิดเงิน',`${wageArea.toFixed(2)} ไร่`);
+
+            const missingTx=(rounds||[]).filter(r=>(Number(r.wage_area)||0)>0.000001 && !r.wage_transaction_id);
+            if(missingTx.length) add('ERROR','มีค่าแรงที่ยังไม่ลงสมุด',`${missingTx.length} รอบ`);
+            else add('OK','สมุดค่าแรงครบ','ทุกรอบที่มีค่าแรงมี Transaction แล้ว');
+
+            if(Math.abs(expectedWage-wageAmount)>0.5) add('ERROR','ยอดบาทในสมุดค่าแรงไม่ตรง',`ควร ${expectedWage.toFixed(2)} แต่พบ ${wageAmount.toFixed(2)} บาท`);
+            else add('OK','ยอดบาทค่าแรงตรง',`${wageAmount.toFixed(2)} บาท`);
+        } else {
+            const posted=(rounds||[]).filter(r=>r.wage_transaction_id).length;
+            if(posted) add('WARN','งานยังไม่จบแต่มีค่าแรงเก่าในสมุด',`${posted} รอบ • ระบบจะปรับตอนจบงาน`);
+            else add('OK','ยังไม่ลงสมุดค่าแรง','ถูกต้องตามกติกาใหม่ — รอลงตอนจบงานทั้งหมด');
+        }
+
+        if(gps.area_rai>0 && measured>gps.area_rai+0.05) add('WARN','ทำจริงมากกว่า GPS',`ทำจริง ${measured.toFixed(2)} > GPS ${Number(gps.area_rai).toFixed(2)} ไร่ • อาจมีการปรับมือหรือขาดแปลง GPS`);
+
+        const invoice = billing == null ? null : billing * Math.max(0,Number(job.price_per_rai)||0);
+        if(job.status==='DONE' && invoice != null && Math.abs(Number(job.total_price||0)-invoice)>0.5) add('WARN','ยอดเงินต่างจากไร่ × ราคา',`อาจเป็นส่วนลด/มัดจำ: เต็ม ${invoice.toFixed(2)} • เก็บในงาน ${Number(job.total_price||0).toFixed(2)} บาท`);
+
+        let audit=[];
+        try {
+            const {data,error}=await supabase.from('job_audit_log').select('id,action,summary,created_at').eq('job_id',jobId).order('created_at',{ascending:false}).limit(30);
+            if(!error) audit=data||[];
+        } catch(_) {}
+
+        const health = checks.some(c=>c.level==='ERROR') ? 'ERROR' : checks.some(c=>c.level==='WARN') ? 'WARN' : 'OK';
+        res.set('Cache-Control','no-store').json({health,checks,audit,summary:{
+            gps_area:Number(gps.area_rai||0), measured_area:measured, billing_area:billing, wage_area:wageArea,
+            wage_amount:wageAmount, expected_wage_amount:expectedWage, plot_count:gps.plot_count, round_count:(rounds||[]).length,
+            job_status:job.status, payment_status:job.payment_status
+        }});
+    } catch(err) {
+        console.error('Integrity check:',err.message);
+        res.status(500).json({error:err.message});
     }
 });
 
@@ -1736,6 +1853,7 @@ app.patch('/api/jobs/:id/payment', async (req, res) => {
             .select();
 
         if (error) throw error;
+        await writeJobAudit(id, 'PAYMENT_STATUS_CHANGED', `สถานะการเงินเป็น ${payment_status}${paid_at ? ` • เวลา ${paid_at}` : ''}`, null, data?.[0] || null);
         res.json({ message: 'อัปเดตสถานะการเงินสำเร็จ', data });
     } catch (err) {
         res.status(500).json({ error: err.message });
