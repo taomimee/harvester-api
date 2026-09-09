@@ -5539,6 +5539,15 @@ function App() {
                           const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
                           const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
                           const totalAmount = Number(tx.total_amount);
+
+                          // 👤 ใช้ job_id ของบิลค่าแรงเป็นตัวหลัก เพื่อบอกว่าค่าแรงนี้มาจากงานของใคร
+                          const sourceJob = jobs.find(j => Number(j.id) === Number(tx.job_id));
+                          const sourceJobName = sourceJob?.customers?.name || sourceJob?.customer_name || (tx.job_id ? `งาน #${tx.job_id}` : 'ไม่พบชื่องาน');
+                          // ซ่อนเลขรอบภายในระบบ เช่น [รอบงาน:12] ไม่ให้รกสมุดค่าแรง
+                          const cleanDetailsStr = String(detailsStr || '')
+                            .replace(/\s*\[รอบงาน:[^\]]+\]/g, '')
+                            .replace(/\s{2,}/g, ' ')
+                            .trim();
                           
                           // ถ้าระบุตัวคน ให้โชว์แค่ส่วนแบ่งของเขา ถ้าไม่ได้ระบุ (ดูภาพรวม) ให้โชว์ยอดเต็มบิล
                           const displayAmount = activeWorker ? (totalAmount / divisor) : totalAmount;
@@ -5553,6 +5562,11 @@ function App() {
                                <div className={`absolute top-0 left-0 w-1.5 h-full ${isPaidInOldSystem ? 'bg-orange-400' : 'bg-blue-400'}`}></div>
                                <div className="flex justify-between items-start pl-2">
                                  <div className="flex-1 pr-2">
+                                   <div className="mb-2">
+                                     <span className="inline-flex items-center text-[11px] font-black px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                       👤 งาน: {sourceJobName}
+                                     </span>
+                                   </div>
                                    <div className="flex flex-wrap gap-1.5 mb-2">
                                      {jobWorkers.map((w, idx) => {
                                        const isMe = w === activeWorker;
@@ -5565,7 +5579,7 @@ function App() {
                                        )
                                      })}
                                    </div>
-                                   <p className="text-sm text-gray-700 font-bold mb-1">{detailsStr ? `📐 ${detailsStr}` : ''}</p>
+                                   <p className="text-sm text-gray-700 font-bold mb-1">{cleanDetailsStr ? `📐 ${cleanDetailsStr}` : ''}</p>
                                    <p className="text-[10px] text-gray-500">📅 ลงสมุด: {new Date(tx.created_at).toLocaleString('th-TH')}</p>
                                  </div>
 
