@@ -3171,8 +3171,8 @@ function App() {
           `✅ ปิดรอบวันนี้แล้ว\n\n` +
           `📐 ทำจริงรอบนี้: ${formatRaiNgan(measuredToday)}\n` +
           `📐 วัดจริงสะสม: ${formatRaiNgan(totalMeasured)}\n` +
-          `👷 จำคนรับค่าแรง: ${workers}\n` +
-          `💵 เรทที่จำไว้: ${wagePerRai.toLocaleString()} บาท/ไร่\n\n` +
+          `👷 คนทำรอบนี้: ${workers}\n` +
+          `💵 เรทค่าแรง: ${wagePerRai.toLocaleString()} บาท/ไร่\n\n` +
           `📝 ยังไม่ลงสมุดค่าแรง — จะลงพร้อมกันตอน 🏁 จบงานทั้งหมด\n` +
           `${workRoundData.nextWorkDate ? '📅 บันทึกวันนัดเกี่ยวต่อแล้ว' : '⏸ รอลูกค้านัดวันเกี่ยวต่อ'}`
         );
@@ -3657,7 +3657,7 @@ function App() {
                                     : job.area_size ? `🗣️ ประมาณ ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่'}
                                 </p>
                                 {ws.roundCount > 0 && (
-                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ • 👷 จำคนไว้แล้ว</p>
+                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ</p>
                                 )}
                               </>
                             );
@@ -4164,7 +4164,7 @@ function App() {
                         {ws.roundCount>0 ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-gray-700">
                           <span>✅ ทำแล้ว {formatRaiNgan(ws.measuredArea)}</span>
                           <span>🗂️ {ws.roundCount} รอบ</span>
-                          <span className="text-orange-700">👷 จำคนแล้ว {ws.pendingRoundCount} รอบ</span>
+                          <span className="text-orange-700">⏳ รอปิดค่าแรง {ws.pendingRoundCount} รอบ</span>
                         </div> : <p className="text-[10px] text-gray-500">ยังไม่มีรอบทำงาน</p>}
 
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
@@ -4235,7 +4235,7 @@ function App() {
                                       <span className="text-blue-700 font-bold">📐 ทำจริง {formatRaiNgan(round.measured_area)} {source==='GPS'?'• 🛰️ GPS':'• ✏️ ปรับเอง'}</span>
                                       {round.wage_transaction_id
                                         ? <span className="text-orange-700 font-bold">💰 ลงสมุดแล้ว {formatRaiNgan(round.wage_area)}</span>
-                                        : <span className="text-orange-700 font-bold">👷 จำคนไว้ • รอแบ่งตอนจบ</span>}
+                                        : <span className="text-orange-700 font-bold">⏳ รอแบ่งค่าแรงตอนจบ</span>}
                                       <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
                                     </div>
                                     {cleanNote && <p className="mt-1 text-[10px] text-gray-500">📝 {cleanNote}</p>}
@@ -5799,7 +5799,7 @@ function App() {
                       <p className="font-black text-blue-900">{formatRaiNgan(ws.measuredArea)}</p>
                     </div>
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-center">
-                      <p className="text-[10px] text-orange-700 font-bold">จำคนไว้แล้ว</p>
+                      <p className="text-[10px] text-orange-700 font-bold">รอบทำงาน</p>
                       <p className="font-black text-orange-900">{ws.roundCount} รอบ</p>
                     </div>
                   </div>
