@@ -14,12 +14,17 @@ const plotClip = (operation, a, b) => {
 
 const plotThaiArea = (sqMeters) => {
   const value = Math.max(0, Number(sqMeters) || 0);
-  const tenths = Math.round(value * 2.5);
-  const rai = Math.floor(tenths / 4000);
-  const ngan = Math.floor((tenths % 4000) / 1000);
-  const wah = (tenths % 1000) / 10;
-  return { text: `${rai} ไร่ ${ngan} งาน ${wah} ตร.ว.`, rawRai: value / 1600, sqMeters: value };
+
+  // UI แสดงแค่ "ไร่ + งาน" ให้สะอาดและอ่านง่าย
+  // เก็บความละเอียดจริงไว้ใน rawRai / sqMeters เหมือนเดิม ไม่กระทบการคำนวณ
+  const roundedTotalNgan = Math.round((value / 400) * 10) / 10; // 0.1 งาน ≈ 40 ตร.ม.
+  const rai = Math.floor(roundedTotalNgan / 4);
+  const nganValue = Math.max(0, roundedTotalNgan - (rai * 4));
+  const ngan = Number(nganValue.toFixed(1));
+  return { text: `${rai} ไร่ ${ngan} งาน`, rawRai: value / 1600, sqMeters: value };
 };
+
+const formatRaiNgan = (raiValue) => plotThaiArea(Math.max(0, Number(raiValue) || 0) * 1600).text;
 
 const plotRingFeature = (points) => {
   if (!Array.isArray(points) || points.length < 3) throw new Error('ต้องมีอย่างน้อย 3 จุด');
@@ -132,18 +137,13 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   const mapInstance = useRef(null);
   const layerGroup = useRef(null);
   const [points, setPoints] = useState([]);
-  const [areaInfo, setAreaInfo] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
+  const [areaInfo, setAreaInfo] = useState({ text: '0 ไร่ 0 งาน', rawRai: 0 });
   const [searchQuery, setSearchQuery] = useState('');
   const [foundLocation, setFoundLocation] = useState(''); 
 
   const calculateThaiArea = (sqMeters) => {
-    const rai = Math.floor(sqMeters / 1600);
-    let remain = sqMeters % 1600;
-    const ngan = Math.floor(remain / 400);
-    remain = remain % 400;
-    const sqWah = (remain / 4).toFixed(1);
-    const rawRai = (sqMeters / 1600).toFixed(2);
-    return { text: `${rai} ไร่ ${ngan} งาน ${sqWah} ตร.ว.`, rawRai };
+    const area = plotThaiArea(sqMeters);
+    return { text: area.text, rawRai: (sqMeters / 1600).toFixed(2) };
   }
 
   useEffect(() => {
@@ -502,7 +502,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const [drawMode, setDrawMode] = useState(false);
   const [points, setPoints] = useState([]);
   const [plots, setPlots] = useState([]);
-  const [currentArea, setCurrentArea] = useState({ text: '0 ไร่ 0 งาน 0 ตร.ว.', rawRai: 0 });
+  const [currentArea, setCurrentArea] = useState({ text: '0 ไร่ 0 งาน', rawRai: 0 });
   const [isSavingPlot, setIsSavingPlot] = useState(false);
   const [plotSyncStatus, setPlotSyncStatus] = useState('');
   const [autoFollow, setAutoFollow] = useState(false);
@@ -1766,7 +1766,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                           <span className="font-black text-sm text-gray-900">{j.customers?.name || 'ไม่ระบุ'} • คิว #{j.id}</span>
                           <span className="text-[10px] font-bold text-blue-700">{j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'}</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 mt-0.5">{j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} • {gpsArea>0?`GPS ${plotThaiArea(gpsArea*1600).text}`:(j.area_size?`ประมาณ ~${j.area_size} ไร่`:'ยังไม่มีพื้นที่')} • ทำแล้ว {measuredArea.toFixed(2)} ไร่</p>
+                        <p className="text-[10px] text-gray-500 mt-0.5">{j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} • {gpsArea>0?`GPS ${plotThaiArea(gpsArea*1600).text}`:(j.area_size?`ประมาณ ~${formatRaiNgan(j.area_size)}`:'ยังไม่มีพื้นที่')} • ทำแล้ว {measuredArea.toFixed(2)} ไร่</p>
                       </button>
                     })}
                   </div>}
@@ -3169,8 +3169,8 @@ function App() {
         const totalMeasured = currentSummary.measuredArea + measuredToday;
         alert(
           `✅ ปิดรอบวันนี้แล้ว\n\n` +
-          `📐 ทำจริงรอบนี้: ${measuredToday.toFixed(2)} ไร่\n` +
-          `📐 วัดจริงสะสม: ${totalMeasured.toFixed(2)} ไร่\n` +
+          `📐 ทำจริงรอบนี้: ${formatRaiNgan(measuredToday)}\n` +
+          `📐 วัดจริงสะสม: ${formatRaiNgan(totalMeasured)}\n` +
           `👷 จำคนรับค่าแรง: ${workers}\n` +
           `💵 เรทที่จำไว้: ${wagePerRai.toLocaleString()} บาท/ไร่\n\n` +
           `📝 ยังไม่ลงสมุดค่าแรง — จะลงพร้อมกันตอน 🏁 จบงานทั้งหมด\n` +
@@ -3180,9 +3180,9 @@ function App() {
         const s = result.summary || {};
         alert(
           `🏁 ปิดงานทั้งหมดเรียบร้อย\n\n` +
-          `📐 วัดจริงทั้งหมด: ${Number(s.measured_area_total || 0).toFixed(2)} ไร่\n` +
-          `🤝 ลูกค้ารับคิดเงิน: ${Number(s.billing_area ?? billingArea).toFixed(2)} ไร่\n` +
-          `👷 แบ่งเข้าค่าแรงรวม: ${Number(s.wage_area_total || 0).toFixed(2)} ไร่\n` +
+          `📐 วัดจริงทั้งหมด: ${formatRaiNgan(s.measured_area_total || 0)}\n` +
+          `🤝 ลูกค้ารับคิดเงิน: ${formatRaiNgan(s.billing_area ?? billingArea)}\n` +
+          `👷 แบ่งเข้าค่าแรงรวม: ${formatRaiNgan(s.wage_area_total || 0)}\n` +
           `💰 ลงสมุดค่าแรง: ${Number(s.wage_amount_total || 0).toLocaleString()} บาท\n` +
           `📚 จำนวนรอบค่าแรง: ${Number(s.wage_rounds_posted || 0)} รอบ\n` +
           `💵 ยอดลูกค้า: ${Number(s.total_price || 0).toLocaleString()} บาท`
@@ -3508,13 +3508,13 @@ function App() {
                 <span className="text-gray-500 text-xs font-bold mb-2">🌾 พื้นที่รวมวันนี้</span>
                 <div className="flex flex-col items-center">
                   <span className="text-2xl font-black text-emerald-600 leading-none">
-                    {todayOnlyArea} <span className="text-sm font-normal">ไร่</span>
+                    {formatRaiNgan(todayOnlyArea)}
                   </span>
                   
                   {/* 👇 ปรับป้ายงานเก่าให้ใหญ่ สีชัดขึ้น และเพิ่มไอคอน 👇 */}
                   {oldJobsArea > 0 && (
                     <span className="mt-2.5 text-[11px] sm:text-xs font-black text-red-700 bg-red-100 px-3 py-1.5 rounded-lg border border-red-300 shadow-sm flex items-center gap-1">
-                      ⚠️ + งานค้าง {oldJobsArea} ไร่
+                      ⚠️ + งานค้าง {formatRaiNgan(oldJobsArea)}
                     </span>
                   )}
                 </div>
@@ -3654,10 +3654,10 @@ function App() {
                                 <p className="text-xs text-gray-500 font-semibold mt-1">
                                   {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {Number(job.gps_summary?.area_rai || 0) > 0
                                     ? `🛰️ ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${plotThaiArea(Number(job.gps_summary.area_rai)*1600).text}`
-                                    : job.area_size ? `🗣️ ประมาณ ~${job.area_size} ไร่` : 'ยังไม่มีพื้นที่'}
+                                    : job.area_size ? `🗣️ ประมาณ ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่'}
                                 </p>
                                 {ws.roundCount > 0 && (
-                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {ws.measuredArea.toFixed(2)} ไร่ • {ws.roundCount} รอบ • 👷 จำคนไว้แล้ว</p>
+                                  <p className="text-[10px] text-emerald-700 font-black mt-0.5">✅ ทำจริง {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ • 👷 จำคนไว้แล้ว</p>
                                 )}
                               </>
                             );
@@ -4140,8 +4140,8 @@ function App() {
                             {gpsCount>0 && <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="text-[10px] font-black text-blue-700 bg-white border border-blue-200 rounded-lg px-2 py-1">ดู {gpsCount} แปลง</button>}
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">📐 ทำจริง</span><b>{ws.measuredArea.toFixed(2)} ไร่</b></div>
-                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">🤝 คิดเงิน</span><b className="text-emerald-800">{billing.toFixed(2)} ไร่</b></div>
+                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">📐 ทำจริง</span><b>{formatRaiNgan(ws.measuredArea)}</b></div>
+                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">🤝 คิดเงิน</span><b className="text-emerald-800">{formatRaiNgan(billing)}</b></div>
                           </div>
                           {userRole==='BOSS' && <p className="text-xs font-black text-emerald-900">💰 ยอดบิล {Number(job.total_price || 0).toLocaleString()} บาท</p>}
                           {gpsArea>0 && <p className="text-[10px] text-sky-700">🛰️ GPS เก็บไว้เป็นข้อเท็จจริง {plotThaiArea(gpsArea*1600).text}</p>}
@@ -4159,15 +4159,15 @@ function App() {
                           : estimate>0 ? <p className="text-sm font-black text-amber-900">🗣️ ลูกค้าแจ้งประมาณ ~{estimate} ไร่</p>
                           : <p className="text-xs font-bold text-gray-500">ยังไม่มีพื้นที่ • ผูกแปลง GPS หรือใส่ยอดประมาณได้ภายหลัง</p>}
 
-                        {gpsArea>0 && estimate>0 && <p className="text-[10px] text-amber-700">🗣️ ลูกค้าแจ้งประมาณ ~{estimate} ไร่ • เก็บแยกจาก GPS</p>}
+                        {gpsArea>0 && estimate>0 && <p className="text-[10px] text-amber-700">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)} • เก็บแยกจาก GPS</p>}
 
                         {ws.roundCount>0 ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-gray-700">
-                          <span>✅ ทำแล้ว {ws.measuredArea.toFixed(2)} ไร่</span>
+                          <span>✅ ทำแล้ว {formatRaiNgan(ws.measuredArea)}</span>
                           <span>🗂️ {ws.roundCount} รอบ</span>
                           <span className="text-orange-700">👷 จำคนแล้ว {ws.pendingRoundCount} รอบ</span>
                         </div> : <p className="text-[10px] text-gray-500">ยังไม่มีรอบทำงาน</p>}
 
-                        {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {ws.postedWageArea.toFixed(2)} ไร่ • ระบบจะปรับตอนจบงาน</p>}
+                        {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
@@ -4215,7 +4215,7 @@ function App() {
                           <div className="mb-4 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
                             <div className="flex items-center justify-between mb-2">
                               <h3 className="font-black text-emerald-900 text-sm">🌾 ประวัติรอบทำงาน</h3>
-                              <span className="text-[10px] font-bold text-emerald-700">{ws.roundCount} รอบ • วัดจริง {ws.measuredArea.toFixed(2)} ไร่</span>
+                              <span className="text-[10px] font-bold text-emerald-700">{ws.roundCount} รอบ • วัดจริง {formatRaiNgan(ws.measuredArea)}</span>
                             </div>
                             <div className="space-y-2">
                               {ws.rounds.map((round, rIdx) => {
@@ -4232,9 +4232,9 @@ function App() {
                                       </span>
                                     </div>
                                     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
-                                      <span className="text-blue-700 font-bold">📐 ทำจริง {Number(round.measured_area || 0).toFixed(2)} ไร่ {source==='GPS'?'• 🛰️ GPS':'• ✏️ ปรับเอง'}</span>
+                                      <span className="text-blue-700 font-bold">📐 ทำจริง {formatRaiNgan(round.measured_area)} {source==='GPS'?'• 🛰️ GPS':'• ✏️ ปรับเอง'}</span>
                                       {round.wage_transaction_id
-                                        ? <span className="text-orange-700 font-bold">💰 ลงสมุดแล้ว {Number(round.wage_area || 0).toFixed(2)} ไร่</span>
+                                        ? <span className="text-orange-700 font-bold">💰 ลงสมุดแล้ว {formatRaiNgan(round.wage_area)}</span>
                                         : <span className="text-orange-700 font-bold">👷 จำคนไว้ • รอแบ่งตอนจบ</span>}
                                       <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
                                     </div>
@@ -5128,7 +5128,7 @@ function App() {
                                       <p className="text-[11px] text-gray-500 font-bold mb-0.5">
                                         📅 {new Date(job.job_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}
                                       </p>
-                                      <p className="text-xs font-bold text-gray-800">📐 {Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่ (เรท {job.price_per_rai})</p>
+                                      <p className="text-xs font-bold text-gray-800">📐 {formatRaiNgan((job.billing_area ?? job.area_size) || 0)} (เรท {job.price_per_rai})</p>
                                       {userRole === 'BOSS' && (
                                         <button
                                           type="button"
@@ -5354,7 +5354,7 @@ function App() {
                 {selectedDayJobs.jobs.map(job => (
                   <div key={job.id} onClick={() => { setSelectedDayJobs(null); openEditForm(job); }} className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer">
                     <div className="flex justify-between items-center"><span className="font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</span></div>
-                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่</p>
+                    <p className="text-xs text-gray-500 mt-1">⏰ {new Date(job.job_date).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น. | พื้นที่: {formatRaiNgan((job.billing_area ?? job.area_size) || 0)}</p>
                   </div>
                 ))}
               </div>
@@ -5451,7 +5451,7 @@ function App() {
                     <input type="text" placeholder="Latitude" readOnly value={formData.latitude} className="border p-1.5 rounded bg-gray-100 w-full" />
                     <input type="text" placeholder="Longitude" readOnly value={formData.longitude} className="border p-1.5 rounded bg-gray-100 w-full" />
                   </div>
-                  <div className="text-xs text-green-700 font-bold">*{formData.area_size ? `พื้นที่คำนวณได้: ${formData.area_size} ไร่` : 'ยังไม่ได้ระบุแปลงบนแผนที่'}</div>
+                  <div className="text-xs text-green-700 font-bold">*{formData.area_size ? `พื้นที่คำนวณได้: ${formatRaiNgan(formData.area_size)}` : 'ยังไม่ได้ระบุแปลงบนแผนที่'}</div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -5608,9 +5608,9 @@ function App() {
           <div className="flex justify-between"><h3 className="text-lg font-black">🌾 {job.customers?.name} • คิว #{job.id}</h3><button aria-label="ปิดแปลงของคิว" onClick={()=>setGpsJobDetail(null)} className="p-2">✕</button></div>
           <p className="text-xs text-gray-500">ลูกค้า 1 คน • {summary?.plot_count || 0} แปลง • ทุกแปลงอ้างอิง Job ID #{job.id}</p>
           <p className="mt-3 text-lg font-black text-blue-800">🛰️ GPS: {summary ? plotThaiArea(summary.area_rai*1600).text : 'โหลดไม่สำเร็จ'}</p>
-          <p className="text-sm text-gray-600">✅ ทำจริงที่ปิดรอบแล้ว: {getJobWorkSummary(job).measuredArea.toFixed(2)} ไร่</p>
+          <p className="text-sm text-gray-600">✅ ทำจริงที่ปิดรอบแล้ว: {formatRaiNgan(getJobWorkSummary(job).measuredArea)}</p>
           {job.status==='DONE'
-            ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {Number(job.billing_area ?? 0).toFixed(2)} ไร่</p>
+            ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {formatRaiNgan(job.billing_area ?? 0)}</p>
             : <p className="text-sm text-amber-700">🗣️ ลูกค้าแจ้งประมาณ: {job.area_size ? `~${job.area_size} ไร่` : 'ไม่ระบุ'}</p>}
           {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
           <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);setTrackingMode('history');setTrackingVehicleId(String(plot.vehicle_id));setTrackingDate(plot.work_date);setGpsFocusPlot({...plot,request:Date.now()});setActiveTab('gps');setIsMapFullScreen(true);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
@@ -5645,12 +5645,12 @@ function App() {
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div className="bg-gray-50 border rounded-xl p-3">
                       <p className="text-gray-500 font-bold">📐 วัด/ข้อมูลเดิม</p>
-                      <p className="text-lg font-black text-gray-800 mt-1">{measured.toFixed(2)} ไร่</p>
+                      <p className="text-lg font-black text-gray-800 mt-1">{formatRaiNgan(measured)}</p>
                       <p className="text-[10px] text-gray-400">เก็บไว้ ไม่แก้ทับ</p>
                     </div>
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
                       <p className="text-orange-700 font-bold">👷 ค่าแรงตอนนี้</p>
-                      <p className="text-lg font-black text-orange-900 mt-1">{wageNow.toFixed(2)} ไร่</p>
+                      <p className="text-lg font-black text-orange-900 mt-1">{formatRaiNgan(wageNow)}</p>
                       <p className="text-[10px] text-orange-600">ปรับเฉพาะแปลง/บิลนี้</p>
                     </div>
                   </div>
@@ -5664,14 +5664,14 @@ function App() {
                       value={billingAdjustArea}
                       onChange={e => setBillingAdjustArea(e.target.value)}
                     />
-                    <p className="text-[11px] text-blue-700 mt-2 font-bold">เดิมคิดเงินไว้ {oldArea.toFixed(2)} ไร่</p>
+                    <p className="text-[11px] text-blue-700 mt-2 font-bold">เดิมคิดเงินไว้ {formatRaiNgan(oldArea)}</p>
                   </div>
 
                   {valid && (
                     <div className="space-y-2">
                       <div className={`rounded-xl border p-3 ${diff < -0.001 ? 'bg-amber-50 border-amber-200' : diff > 0.001 ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
                         <div className="flex justify-between text-sm"><span className="font-bold text-gray-600">ต่างจากเดิม</span><b className={diff < 0 ? 'text-amber-700' : diff > 0 ? 'text-green-700' : 'text-gray-700'}>{diff > 0 ? '+' : ''}{diff.toFixed(2)} ไร่</b></div>
-                        <div className="flex justify-between text-sm mt-1"><span className="font-bold text-gray-600">👷 ค่าแรงหลังปรับ</span><b className="text-orange-800">{newArea.toFixed(2)} ไร่</b></div>
+                        <div className="flex justify-between text-sm mt-1"><span className="font-bold text-gray-600">👷 ค่าแรงหลังปรับ</span><b className="text-orange-800">{formatRaiNgan(newArea)}</b></div>
                         <div className="flex justify-between text-sm mt-1"><span className="font-bold text-gray-600">💵 ยอดตามไร่ใหม่</span><b className="text-green-800">{newTotal.toLocaleString()} บาท</b></div>
                       </div>
 
@@ -5713,10 +5713,10 @@ function App() {
                   : <>
                     <div className="flex justify-between items-center"><span className="font-black">สถานะความสัมพันธ์ของข้อมูล</span><span className={`px-3 py-1 rounded-full text-xs font-black ${badge}`}>{d?.health || 'WARN'}</span></div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3"><span className="block text-gray-500">🛰️ GPS</span><b>{Number(d?.summary?.gps_area || 0).toFixed(2)} ไร่</b></div>
-                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3"><span className="block text-gray-500">✅ ทำจริง</span><b>{Number(d?.summary?.measured_area || 0).toFixed(2)} ไร่</b></div>
-                      <div className="bg-green-50 border border-green-200 rounded-xl p-3"><span className="block text-gray-500">🤝 คิดเงิน</span><b>{d?.summary?.billing_area == null ? '-' : `${Number(d.summary.billing_area).toFixed(2)} ไร่`}</b></div>
-                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-3"><span className="block text-gray-500">👷 ค่าแรงจัดสรร</span><b>{Number(d?.summary?.wage_area || 0).toFixed(2)} ไร่</b></div>
+                      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3"><span className="block text-gray-500">🛰️ GPS</span><b>{formatRaiNgan(d?.summary?.gps_area || 0)}</b></div>
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3"><span className="block text-gray-500">✅ ทำจริง</span><b>{formatRaiNgan(d?.summary?.measured_area || 0)}</b></div>
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-3"><span className="block text-gray-500">🤝 คิดเงิน</span><b>{d?.summary?.billing_area == null ? '-' : formatRaiNgan(d.summary.billing_area)}</b></div>
+                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-3"><span className="block text-gray-500">👷 ค่าแรงจัดสรร</span><b>{formatRaiNgan(d?.summary?.wage_area || 0)}</b></div>
                     </div>
                     <div className="space-y-2">{checks.map((c,i)=><div key={i} className={`rounded-xl border p-2.5 text-xs ${c.level==='ERROR'?'bg-red-50 border-red-200':c.level==='WARN'?'bg-amber-50 border-amber-200':'bg-green-50 border-green-200'}`}><b>{c.level==='ERROR'?'❌':c.level==='WARN'?'⚠️':'✅'} {c.title}</b><p className="text-gray-600 mt-0.5">{c.detail}</p></div>)}</div>
                     <div className="border-t pt-3"><p className="font-black text-sm mb-2">🕘 ประวัติแก้ไขล่าสุด</p>{audits.length ? <div className="space-y-2">{audits.slice(0,12).map(a=><div key={a.id} className="bg-gray-50 border rounded-xl p-2 text-xs"><div className="flex justify-between gap-2"><b>{a.action}</b><span className="text-gray-400">{new Date(a.created_at).toLocaleString('th-TH')}</span></div><p className="text-gray-600 mt-1">{a.summary || '-'}</p></div>)}</div> : <p className="text-xs text-gray-400">ยังไม่มี Audit Log หรือยังไม่ได้รัน SQL Setup</p>}</div>
@@ -5792,11 +5792,11 @@ function App() {
                   <div className="grid grid-cols-3 gap-2">
                     <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center">
                       <p className="text-[10px] text-amber-700 font-bold">🗣️ ลูกค้าแจ้งประมาณ</p>
-                      <p className="font-black text-amber-900">{job.area_size != null && job.area_size !== '' ? `${Number(job.area_size).toFixed(2)} ไร่` : 'ไม่ระบุ'}</p>
+                      <p className="font-black text-amber-900">{job.area_size != null && job.area_size !== '' ? formatRaiNgan(job.area_size) : 'ไม่ระบุ'}</p>
                     </div>
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-center">
                       <p className="text-[10px] text-blue-700 font-bold">✅ ทำจริงก่อนหน้า</p>
-                      <p className="font-black text-blue-900">{ws.measuredArea.toFixed(2)} ไร่</p>
+                      <p className="font-black text-blue-900">{formatRaiNgan(ws.measuredArea)}</p>
                     </div>
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-center">
                       <p className="text-[10px] text-orange-700 font-bold">จำคนไว้แล้ว</p>
@@ -5809,9 +5809,9 @@ function App() {
                     {Number(job.gps_summary?.plot_count || 0) > 0 && !job.gps_summary_error && (
                       <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-3">
                         <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
-                          <div><span className="block text-sky-700 font-bold">🛰️ GPS รวม</span><b className="text-sky-950">{getJobGpsArea(job).toFixed(2)} ไร่</b></div>
-                          <div className="border-x border-sky-200"><span className="block text-sky-700 font-bold">✅ ลงรอบแล้ว</span><b className="text-sky-950">{ws.measuredArea.toFixed(2)} ไร่</b></div>
-                          <div><span className="block text-sky-700 font-bold">✨ ยังไม่ลงรอบ</span><b className="text-sky-950">{Math.max(0,getJobGpsArea(job)-ws.measuredArea).toFixed(2)} ไร่</b></div>
+                          <div><span className="block text-sky-700 font-bold">🛰️ GPS รวม</span><b className="text-sky-950">{formatRaiNgan(getJobGpsArea(job))}</b></div>
+                          <div className="border-x border-sky-200"><span className="block text-sky-700 font-bold">✅ ลงรอบแล้ว</span><b className="text-sky-950">{formatRaiNgan(ws.measuredArea)}</b></div>
+                          <div><span className="block text-sky-700 font-bold">✨ ยังไม่ลงรอบ</span><b className="text-sky-950">{formatRaiNgan(Math.max(0,getJobGpsArea(job)-ws.measuredArea))}</b></div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 mt-3">
                           <button type="button" disabled={Math.max(0,getJobGpsArea(job)-ws.measuredArea)<=0}
@@ -5830,7 +5830,7 @@ function App() {
                     {workRoundData.measuredMode === 'GPS' ? (
                       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex justify-between items-center">
                         <span className="text-sm font-bold text-blue-800">🛰️ ใช้ GPS รอบนี้</span>
-                        <b className="text-xl text-blue-950">{Number(workRoundData.measuredArea || 0).toFixed(2)} ไร่</b>
+                        <b className="text-xl text-blue-950">{formatRaiNgan(workRoundData.measuredArea || 0)}</b>
                       </div>
                     ) : (
                       <input
@@ -5841,7 +5841,7 @@ function App() {
                         placeholder={isFinal ? 'ถ้าวันนี้ไม่ได้เกี่ยวเพิ่ม ใส่ 0' : 'เช่น 10'}
                       />
                     )}
-                    <p className="text-[11px] text-blue-700 font-bold">ทำจริงสะสมหลังรอบนี้: {measuredTotal.toFixed(2)} ไร่</p>
+                    <p className="text-[11px] text-blue-700 font-bold">ทำจริงสะสมหลังรอบนี้: {formatRaiNgan(measuredTotal)}</p>
                   </div>
 
                   {isFinal && (
@@ -5866,11 +5866,11 @@ function App() {
 
                       {validBilling && (
                         <div className="mt-3 space-y-2 text-xs">
-                          <div className="flex justify-between"><span className="text-gray-600">📐 วัดจริงทั้งหมด</span><b>{measuredTotal.toFixed(2)} ไร่</b></div>
-                          <div className="flex justify-between"><span className="text-gray-600">🤝 คิดเงินลูกค้า</span><b className="text-green-800">{billingArea.toFixed(2)} ไร่</b></div>
-                          <div className="flex justify-between border-t border-green-200 pt-2"><span className="font-black text-green-900">👷 ไร่ค่าแรงรวมที่จะลงสมุด</span><b className="text-lg text-orange-700">{billingArea.toFixed(2)} ไร่</b></div>
+                          <div className="flex justify-between"><span className="text-gray-600">📐 วัดจริงทั้งหมด</span><b>{formatRaiNgan(measuredTotal)}</b></div>
+                          <div className="flex justify-between"><span className="text-gray-600">🤝 คิดเงินลูกค้า</span><b className="text-green-800">{formatRaiNgan(billingArea)}</b></div>
+                          <div className="flex justify-between border-t border-green-200 pt-2"><span className="font-black text-green-900">👷 ไร่ค่าแรงรวมที่จะลงสมุด</span><b className="text-lg text-orange-700">{formatRaiNgan(billingArea)}</b></div>
                           <p className="bg-white border border-green-200 rounded-lg p-2 font-bold text-green-900">
-                            ✅ ระบบจะเอา {billingArea.toFixed(2)} ไร่ แบ่งกลับให้คนงานตามสัดส่วนพื้นที่วัดจริงของแต่ละรอบ แล้วค่อยลงสมุดค่าแรงทั้งหมดครั้งเดียว
+                            ✅ ระบบจะเอา {formatRaiNgan(billingArea)} แบ่งกลับให้คนงานตามสัดส่วนพื้นที่วัดจริงของแต่ละรอบ แล้วค่อยลงสมุดค่าแรงทั้งหมดครั้งเดียว
                           </p>
 
                           {wagePreview.length > 0 && (
@@ -5880,9 +5880,9 @@ function App() {
                                 <div key={r.key} className="flex items-start justify-between gap-3 border-b last:border-b-0 border-orange-100 pb-1.5 last:pb-0">
                                   <div className="min-w-0">
                                     <p className="font-bold text-gray-800">{r.label} • {r.workers}</p>
-                                    <p className="text-[10px] text-gray-500">วัดจริง {r.measured.toFixed(2)} ไร่ • เรท {r.rate.toLocaleString()} บ./ไร่</p>
+                                    <p className="text-[10px] text-gray-500">วัดจริง {formatRaiNgan(r.measured)} • เรท {r.rate.toLocaleString()} บ./ไร่</p>
                                   </div>
-                                  <b className="text-orange-700 whitespace-nowrap">{r.wageArea.toFixed(2)} ไร่</b>
+                                  <b className="text-orange-700 whitespace-nowrap">{formatRaiNgan(r.wageArea)}</b>
                                 </div>
                               ))}
                               <div className="flex justify-between pt-1 border-t border-orange-200">
@@ -5892,8 +5892,8 @@ function App() {
                             </div>
                           )}
 
-                          {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ลูกค้ารับน้อยกว่าวัดจริง {customerDifference.toFixed(2)} ไร่ → ส่วนต่างถูกเฉลี่ยลดจากค่าแรงทุก round ตามสัดส่วน</p>}
-                          {customerDifference < -0.001 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {Math.abs(customerDifference).toFixed(2)} ไร่ กรุณาตรวจอีกครั้ง</p>}
+                          {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ลูกค้ารับน้อยกว่าวัดจริง {formatRaiNgan(customerDifference)} → ส่วนต่างถูกเฉลี่ยลดจากค่าแรงทุก round ตามสัดส่วน</p>}
+                          {customerDifference < -0.001 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {formatRaiNgan(Math.abs(customerDifference))} กรุณาตรวจอีกครั้ง</p>}
                           <div className="flex justify-between bg-white rounded-lg p-2 border border-green-200"><span className="text-gray-600">ยอดลูกค้าประมาณ</span><b className="text-green-800">{(billingArea * (Number(job.price_per_rai) || 0)).toLocaleString()} บาท</b></div>
                         </div>
                       )}
