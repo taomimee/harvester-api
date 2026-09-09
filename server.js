@@ -9,6 +9,7 @@ const app = express();
 app.use(cors());
 // Editable GPS boundaries and reviewed exclusion rings share the existing JSON column.
 app.use('/api/plots', express.json({ limit: '2mb' }));
+app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
 app.use(express.json());
 
 // เชื่อมต่อฐานข้อมูล Supabase
@@ -38,6 +39,117 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
 app.get('/', (req, res) => {
     res.send(`🚀 ระบบคิวรถเกี่ยว (Harvester API) กำลังทำงาน! | Supabase backend key: ${supabaseServiceRoleKey ? 'SERVICE_ROLE ✅' : 'FALLBACK/ANON ⚠️'}`);
 });
+
+const turf = require('@turf/turf');
+const plotNewId = () => require('crypto').randomUUID();
+const plotClip = (operation, a, b) => {
+  if (!a || !b) return operation === 'difference' ? a : null;
+  try { return turf[operation](turf.featureCollection([a, b])); }
+  catch (_) { return turf[operation](a, b); }
+};
+
+const plotThaiArea = (sqMeters) => {
+  const value = Math.max(0, Number(sqMeters) || 0);
+  const tenths = Math.round(value * 2.5);
+  const rai = Math.floor(tenths / 4000);
+  const ngan = Math.floor((tenths % 4000) / 1000);
+  const wah = (tenths % 1000) / 10;
+  return { text: `${rai} ไร่ ${ngan} งาน ${wah} ตร.ว.`, rawRai: value / 1600, sqMeters: value };
+};
+
+const plotRingFeature = (points) => {
+  if (!Array.isArray(points) || points.length < 3) throw new Error('ต้องมีอย่างน้อย 3 จุด');
+  const coords = [];
+  for (const p of points) {
+    if (p?.lng == null || p?.lat == null || p.lng === '' || p.lat === '') throw new Error('พิกัดไม่ถูกต้อง');
+    const xy = [Number(p.lng), Number(p.lat)];
+    if (!xy.every(Number.isFinite) || Math.abs(xy[0]) > 180 || Math.abs(xy[1]) > 90) throw new Error('พิกัดไม่ถูกต้อง');
+    const last = coords[coords.length - 1];
+    if (!last || last[0] !== xy[0] || last[1] !== xy[1]) coords.push(xy);
+  }
+  if (coords.length > 1 && coords[0][0] === coords[coords.length - 1][0] && coords[0][1] === coords[coords.length - 1][1]) coords.pop();
+  if (coords.length < 3) throw new Error('ต้องมีอย่างน้อย 3 มุมที่ไม่ซ้ำกัน');
+  const feature = turf.polygon([[...coords, coords[0]]]);
+  if (turf.kinks(feature).features.length) throw new Error('เส้นตัดกันเอง กรุณาลากจุดแก้ให้เป็นวง');
+  if (turf.area(feature) < 1) throw new Error('พื้นที่ต้องมีอย่างน้อย 1 ตร.ม.');
+  return feature;
+};
+
+// Exclusions are editable rings, not negative area numbers. Sequential clipping
+// counts overlaps once, clips outside edges, and supports split MultiPolygons.
+const plotGeometry = (plot) => {
+  const outer = plotRingFeature(plot.points);
+  let net = outer;
+  for (const hole of (plot.holes || [])) {
+    const cut = plotRingFeature(hole.points);
+    net = plotClip('difference', net, cut);
+    if (!net) break;
+  }
+  const grossSqM = turf.area(outer);
+  const netSqM = net ? Math.min(grossSqM, Math.max(0, turf.area(net))) : 0;
+  return { outer, net, grossSqM, netSqM, excludedSqM: Math.max(0, grossSqM - netSqM) };
+};
+
+const plotCenter = (feature) => {
+  if (!feature) return null;
+  let center = turf.centerOfMass(feature);
+  if (!turf.booleanPointInPolygon(center, feature)) center = turf.pointOnFeature(feature);
+  const [lng, lat] = center.geometry.coordinates;
+  return { lat, lng, text: `${lat.toFixed(6)}, ${lng.toFixed(6)}` };
+};
+
+const refreshPlotMetrics = (plot) => {
+  const geometry = plotGeometry(plot);
+  if (geometry.netSqM < 1) throw new Error('พื้นที่หักครอบคลุมทั้งแปลง กรุณาปรับวงหักให้เล็กลง');
+  return {
+    ...plot, schema_version: 3,
+    holes: plot.holes || [], holeSuggestions: plot.holeSuggestions || [],
+    area: plotThaiArea(geometry.netSqM), grossArea: plotThaiArea(geometry.grossSqM),
+    excludedArea: plotThaiArea(geometry.excludedSqM), center: plotCenter(geometry.net),
+    geometryError: undefined
+  };
+};
+
+
+const normalizeJobPlots = (plots, vehicle, date) => {
+  const ids = new Set();
+  return plots.map((plot, index) => {
+    const id = plot.id || `legacy-${vehicle}-${date}-${index}`;
+    if (typeof id !== 'string' || id.length > 120 || ids.has(id)) throw new Error('รหัสแปลงซ้ำหรือไม่ถูกต้อง');
+    ids.add(id);
+    if (plot.job_id != null && (!Number.isSafeInteger(Number(plot.job_id)) || Number(plot.job_id) <= 0)) throw new Error('คิวงานไม่ถูกต้อง');
+    return refreshPlotMetrics({...plot, id, job_id: plot.job_id == null ? null : Number(plot.job_id), name: String(plot.name || `แปลงที่ ${index+1}`).slice(0,120)});
+  });
+};
+const loadGpsJobSummary = async () => {
+  const byJob = new Map(), scopes = new Set();
+  for (let offset=0; ; offset+=500) {
+    const {data,error} = await supabase.from('harvest_plots').select('id,vehicle_id,work_date,plots_data,created_at')
+      .order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+499);
+    if(error) throw error;
+    for (const row of data || []) {
+      const scope = `${row.vehicle_id}/${row.work_date}`;
+      if(scopes.has(scope)) continue;
+      scopes.add(scope);
+      const ids = new Set();
+      for(const [index,plot] of (Array.isArray(row.plots_data) ? row.plots_data : []).entries()) {
+        if(!plot.job_id) continue;
+        const id=plot.id || `legacy-${row.vehicle_id}-${row.work_date}-${index}`;
+        if(ids.has(id)) continue;
+        ids.add(id);
+        const jobId=Number(plot.job_id);
+        if(!byJob.has(jobId)) byJob.set(jobId,{plot_count:0,area_rai:0,plots:[],invalid_count:0});
+        const group=byJob.get(jobId);
+        try {
+          const geometry=plotGeometry(plot), area=geometry.netSqM/1600;
+          group.plot_count++;group.area_rai+=area;
+          group.plots.push({id,name:plot.name || `แปลงที่ ${index+1}`,area_rai:area,vehicle_id:row.vehicle_id,work_date:row.work_date,center:plotCenter(geometry.net || geometry.outer)});
+        } catch (_) { group.invalid_count++; }
+      }
+    }
+    if(!data || data.length<500) return byJob;
+  }
+};
 
 app.get('/api/jobs', async (req, res) => {
     const { data, error } = await supabase
@@ -74,12 +186,16 @@ app.get('/api/jobs', async (req, res) => {
         }
     }
 
+    let gpsSummary = new Map(), gpsSummaryError = false;
+    try { gpsSummary = await loadGpsJobSummary(); } catch (e) { gpsSummaryError = true; console.error('GPS job summary:', e.message); }
     res.json((data || []).map(job => {
         const work_rounds = roundsByJob.get(Number(job.id)) || [];
         const measured_area_total = work_rounds.reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
         const wage_area_total = work_rounds.reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
         return {
             ...job,
+            gps_summary: gpsSummaryError ? null : (gpsSummary.get(Number(job.id)) || {plot_count:0,area_rai:0,plots:[],invalid_count:0}),
+            gps_summary_error: gpsSummaryError,
             work_rounds,
             work_summary: {
                 round_count: work_rounds.length,
@@ -1221,6 +1337,37 @@ app.delete('/api/vehicles/:id', async (req, res) => {
 // ==========================================
 
 // ใน server.js บรรทัดประมาณ 215
+// GPS edge exclusions are independent of raw logs and saved plot geometry.
+const validRouteScope = (vehicle, date) => Number.isSafeInteger(Number(vehicle)) && Number(vehicle) > 0 &&
+    typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0,10) === date;
+app.get('/api/gps-route-edits/:vehicle_id', async (req, res) => {
+    if (!validRouteScope(req.params.vehicle_id, req.query.date)) return res.status(400).json({error:'รถหรือวันที่ไม่ถูกต้อง'});
+    try {
+        const {data,error} = await supabase.from('gps_route_edits').select('excluded_edges,revision')
+            .eq('vehicle_id', Number(req.params.vehicle_id)).eq('work_date',req.query.date).maybeSingle();
+        if(error) throw error;
+        res.set('Cache-Control','no-store').json(data || {excluded_edges:[],revision:0});
+    } catch(error) { res.status(500).json({error:'โหลดการตัดเส้นไม่ได้ กรุณาตรวจว่าติดตั้งตาราง gps_route_edits แล้ว'}); }
+});
+app.put('/api/gps-route-edits/:vehicle_id', async (req,res) => {
+    const {work_date,excluded_edges,revision} = req.body || {};
+    if(!validRouteScope(req.params.vehicle_id,work_date) || !Number.isSafeInteger(revision) || revision < 0 ||
+        !Array.isArray(excluded_edges) || excluded_edges.length > 30000 ||
+        excluded_edges.some(k => typeof k !== 'string' || k.length < 3 || k.length > 240 || !k.includes('>')) ||
+        new Set(excluded_edges).size !== excluded_edges.length) return res.status(400).json({error:'ข้อมูลช่วงเส้นไม่ถูกต้อง หรือเกิน 30,000 ช่วง'});
+    try {
+        // Compare-and-swap prevents another PC/phone from silently overwriting changes.
+        const row = {vehicle_id:Number(req.params.vehicle_id),work_date,excluded_edges,revision:revision+1,updated_at:new Date().toISOString()};
+        const query = revision === 0 ? supabase.from('gps_route_edits').insert(row) :
+            supabase.from('gps_route_edits').update(row).eq('vehicle_id',row.vehicle_id).eq('work_date',work_date).eq('revision',revision);
+        const {data,error} = await query.select('excluded_edges,revision').maybeSingle();
+        if(error?.code === '23505' || (!error && !data)) return res.status(409).json({error:'มีการแก้ไขจากหน้าจออื่น กรุณาโหลดใหม่แล้วเลือกเส้นอีกครั้ง'});
+        if(error) throw error;
+        res.json(data);
+    } catch(error) { res.status(500).json({error:'บันทึกไม่สำเร็จ กรุณาตรวจตารางและสิทธิ์ฐานข้อมูล แล้วโหลดใหม่'}); }
+});
+
 app.get('/api/gps/:vehicle_id', async (req, res) => {
     const { vehicle_id } = req.params;
     let { date } = req.query;
@@ -1244,16 +1391,17 @@ app.get('/api/gps/:vehicle_id', async (req, res) => {
         const startDate = new Date(`${date}T00:00:00+07:00`);
         const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000);
 
-        const { data, error } = await supabase
-            .from('gps_logs')
-            .select('*')
-            .eq('vehicle_id', vehicle_id)
-            .gte('created_at', startDate.toISOString())
-            .lt('created_at', endDate.toISOString())
-            .order('created_at', { ascending: true });
-
-        if (error) throw error;
-        res.json(data || []);
+        // Supabase defaults to a page limit; retrieve the full day in stable order.
+        const allPoints = [];
+        for (let offset = 0; offset < 100000; offset += 1000) {
+            const {data,error} = await supabase.from('gps_logs').select('*')
+                .eq('vehicle_id',vehicle_id).gte('created_at',startDate.toISOString()).lt('created_at',endDate.toISOString())
+                .order('created_at',{ascending:true}).order('id',{ascending:true}).range(offset,offset+999);
+            if(error) throw error;
+            allPoints.push(...(data || []));
+            if(!data || data.length < 1000) return res.json(allPoints);
+        }
+        return res.status(422).json({error:'ข้อมูลเกิน 100,000 จุดต่อวัน กรุณาแบ่งช่วงข้อมูลก่อนคำนวณ'});
     } catch (err) {
         console.error('GPS API Error:', err.message);
         res.status(500).json({ error: err.message });
@@ -1713,6 +1861,15 @@ const validatePlotsData = (plots) => {
 };
 
 // 💾 ดึงแปลงตามรถ + วันที่
+app.get('/api/plots-snapshot/:vehicle_id', async (req,res) => {
+    if(!validRouteScope(req.params.vehicle_id,req.query.date)) return res.status(400).json({error:'รถหรือวันที่ไม่ถูกต้อง'});
+    try {
+      const {data,error}=await supabase.from('harvest_plots').select('plots_data,revision').eq('vehicle_id',Number(req.params.vehicle_id)).eq('work_date',req.query.date).order('created_at',{ascending:false}).order('id',{ascending:false}).limit(1).maybeSingle();
+      if(error) throw error;
+      res.set('Cache-Control','no-store').json({plots_data:data?.plots_data || [],revision:data?.revision || 0});
+    } catch(e) { res.status(500).json({error:'โหลดแปลงไม่สำเร็จ ตรวจ migration GPS_JOB_LINK.sql'}); }
+});
+
 app.get('/api/plots/:vehicle_id', async (req, res) => {
     const { vehicle_id } = req.params;
     const { date } = req.query;
@@ -1739,74 +1896,22 @@ app.get('/api/plots/:vehicle_id', async (req, res) => {
 });
 
 // 💾 บันทึกแบบปลอดภัย: ถ้ามีแถวเดิมให้อัปเดต ไม่ลบก่อน insert
-app.post('/api/plots', async (req, res) => {
-    const { vehicle_id, work_date, plots_data } = req.body;
-    const numericVehicleId = Number(vehicle_id);
-
-    if (!Number.isFinite(numericVehicleId) || numericVehicleId <= 0) {
-        return res.status(400).json({ error: 'vehicle_id ไม่ถูกต้อง' });
-    }
-    if (!work_date || !/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {
-        return res.status(400).json({ error: 'work_date ต้องเป็น YYYY-MM-DD' });
-    }
-    const validationError = validatePlotsData(plots_data);
-    if (validationError) return res.status(400).json({ error: validationError });
-
+app.post('/api/plots', async (req,res) => {
+    const {vehicle_id,work_date,plots_data,expected_revision}=req.body || {};
+    if(!validRouteScope(vehicle_id,work_date) || !Number.isSafeInteger(expected_revision) || expected_revision<0) return res.status(400).json({error:'กรุณาอัปเดตหน้าแอปและโหลดแปลงล่าสุดก่อนบันทึก'});
+    const invalid=validatePlotsData(plots_data);
+    if(invalid) return res.status(400).json({error:invalid});
+    let normalized;
+    try { normalized=normalizeJobPlots(plots_data,vehicle_id,work_date); } catch(e) {return res.status(400).json({error:e.message});}
     try {
-        const { data: existingRows, error: findError } = await supabase
-            .from('harvest_plots')
-            .select('id')
-            .eq('vehicle_id', numericVehicleId)
-            .eq('work_date', work_date)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        if (findError) throw findError;
-
-        let savedRow;
-        if (existingRows && existingRows.length > 0) {
-            const { data, error } = await supabase
-                .from('harvest_plots')
-                .update({ plots_data })
-                .eq('id', existingRows[0].id)
-                .select('plots_data')
-                .single();
-            if (error) throw error;
-            savedRow = data;
-        } else {
-            const { data, error } = await supabase
-                .from('harvest_plots')
-                .insert([{
-                    vehicle_id: numericVehicleId,
-                    work_date,
-                    plots_data
-                }])
-                .select('plots_data')
-                .single();
-            if (error) throw error;
-            savedRow = data;
-        }
-
-        res.json({
-            success: true,
-            vehicle_id: numericVehicleId,
-            work_date,
-            plots_data: Array.isArray(savedRow?.plots_data) ? savedRow.plots_data : plots_data
-        });
-    } catch (err) {
-        console.error('Save Plots API Error:', err.message);
-
-        const isRlsError = String(err.message || '').toLowerCase().includes('row-level security');
-        if (isRlsError) {
-            return res.status(500).json({
-                error: err.message,
-                code: 'HARVEST_PLOTS_RLS',
-                hint: 'ตั้ง SUPABASE_SERVICE_ROLE_KEY ใน Vercel Environment Variables แล้ว Redeploy'
-            });
-        }
-
-        res.status(500).json({ error: err.message });
-    }
+      const {data,error}=await supabase.rpc('save_gps_job_plots',{p_vehicle_id:Number(vehicle_id),p_work_date:work_date,p_plots:normalized,p_expected_revision:expected_revision});
+      if(error) {
+        if(String(error.message).includes('GPS_REVISION_CONFLICT')) return res.status(409).json({error:'อีกหน้าจอแก้แปลงแล้ว กรุณาโหลดแปลงล่าสุด แล้วเลือกคิวใหม่'});
+        if(String(error.message).includes('GPS_JOB_NOT_FOUND')) return res.status(400).json({error:'คิวที่เลือกถูกลบแล้ว กรุณาเลือกคิวใหม่'});
+        throw error;
+      }
+      res.json({success:true,...data});
+    } catch(e) {res.status(500).json({error:'บันทึกแปลงไม่ได้ กรุณาตรวจ GPS_JOB_LINK.sql และสิทธิ์เซิร์ฟเวอร์'});}
 });
 
 // หมายเหตุ: แปลงที่วาดจะเก็บถาวร ไม่ถูกลบตามระบบล้าง GPS 7 วัน

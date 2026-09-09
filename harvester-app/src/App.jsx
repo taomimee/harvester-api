@@ -279,8 +279,99 @@ function LingStyleMap({ initialCenter, onConfirm, onCancel }) {
   );
 }
 
+// Stable edge identities preserve gaps: excluded edges are never joined again.
+const gpsPointKey = p => p?.id != null ? String(p.id) : `${p?.created_at}|${p?.latitude}|${p?.longitude}`;
+const gpsEdgeKey = (a, b) => `${gpsPointKey(a)}>${gpsPointKey(b)}`;
+const gpsEdgeInBox = (a, b, bounds) => {
+  let lo = 0, hi = 1;
+  for (const [field, min, max] of [['latitude', bounds.south, bounds.north], ['longitude', bounds.west, bounds.east]]) {
+    const start = Number(a[field]), delta = Number(b[field]) - start;
+    if (!Number.isFinite(start) || !Number.isFinite(delta)) return false;
+    if (delta === 0) { if (start < min || start > max) return false; }
+    else { const t1 = (min - start) / delta, t2 = (max - start) / delta;
+      lo = Math.max(lo, Math.min(t1, t2)); hi = Math.min(hi, Math.max(t1, t2)); if (lo > hi) return false; }
+  }
+  return true;
+};
+
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
-function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest, isMapFullScreen, setIsMapFullScreen, isFetchingGps }) {
+function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest, isMapFullScreen, setIsMapFullScreen, isFetchingGps, jobs = [], onPlotsSaved, onOpenJob, focusPlot }) {
+  const [linkReview, setLinkReview] = useState(null);
+  const [linkSearch, setLinkSearch] = useState('');
+  const [plotRevision, setPlotRevision] = useState(null);
+  const [plotReload, setPlotReload] = useState(0);
+  const openLinkReview = (all, indices, after = null) => {
+    setLinkSearch(''); setAutoFollow(false); setMobileToolsOpen(false);
+    setLinkReview({all:all.map(p => ({...p,id:p.id || plotNewId()})),indices,after,scope:plotScopeRef.current});
+  };
+  const setPlotJob = (index, value) => {
+    const job=jobs.find(j => String(j.id) === value);
+    setLinkReview(review => ({...review,all:review.all.map((p,i) => i!==index ? p : {...p,job_id:job ? Number(job.id) : null,name:job ? `${job.customers?.name || 'ลูกค้า'} — แปลงที่ ${index+1}` : `แปลงที่ ${index+1}`})}));
+  };
+  const confirmPlotLinks = async () => {
+    const review=linkReview;
+    if(!review || review.scope!==plotScopeRef.current) return;
+    if(await savePlotsToServer(review.all)) {setLinkReview(null);review.after?.();}
+  };
+  const [routeEdit, setRouteEdit] = useState(false);
+  const [cutMode, setCutMode] = useState('range');
+  const [cutAnchor, setCutAnchor] = useState(null);
+  const [cutSelection, setCutSelection] = useState([]);
+  const [routeState, setRouteState] = useState({ keys: [], revision: 0 });
+  const [routeReady, setRouteReady] = useState(false);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [routeMessage, setRouteMessage] = useState('');
+  const [showExcluded, setShowExcluded] = useState(false);
+  const [routeHistory, setRouteHistory] = useState([]);
+  const [reloadRoute, setReloadRoute] = useState(0);
+  const excludedEdges = useMemo(() => new Set(routeState.keys), [routeState.keys]);
+  const selectedEdges = useMemo(() => new Set(cutSelection), [cutSelection]);
+  const routeScope = `${vehicleId}/${workDate}`;
+  const routeScopeRef = useRef(routeScope);
+  routeScopeRef.current = routeScope;
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    setRouteReady(false); setRouteState({ keys: [], revision: 0 }); setRouteHistory([]);
+    setRouteEdit(false); setCutSelection([]); setCutAnchor(null); setRouteBusy(false);
+    setRouteMessage('กำลังโหลดการตัดเส้น…');
+    const timer = setTimeout(() => controller.abort(), 15000);
+    fetch(`https://harvester-api-server.onrender.com/api/gps-route-edits/${vehicleId}?date=${workDate}`, { signal: controller.signal })
+      .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error || 'โหลดไม่สำเร็จ'); return data; })
+      .then(data => { if (routeScopeRef.current !== routeScope || controller.signal.aborted) return;
+        setRouteState({ keys: data.excluded_edges || [], revision: data.revision || 0 }); setRouteReady(true); setRouteMessage(''); })
+      .catch(() => { if (active && routeScopeRef.current === routeScope) setRouteMessage('โหลดการตัดเส้นไม่สำเร็จ • ตรวจเซิร์ฟเวอร์และตาราง GPS'); })
+      .finally(() => clearTimeout(timer));
+    return () => { active = false; controller.abort(); clearTimeout(timer); };
+  }, [routeScope, reloadRoute]);
+  const saveRouteEdges = async (keys, undo = false) => {
+    if (!routeReady || routeBusy) return;
+    const scope = routeScope; const previous = routeState.keys;
+    setRouteBusy(true); setRouteMessage('กำลังบันทึก…');
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/gps-route-edits/${vehicleId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ work_date: workDate, excluded_edges: keys, revision: routeState.revision })
+      });
+      const data = await res.json(); if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+      if (routeScopeRef.current !== scope) return;
+      setRouteState({ keys: data.excluded_edges, revision: data.revision });
+      setRouteHistory(h => undo ? h.slice(0, -1) : [...h.slice(-19), previous]);
+      setCutSelection([]); setCutAnchor(null);
+      setRouteMessage('บันทึกแล้ว • ถ้ามีแปลงเดิม ให้กดวาดออโต้ใหม่เพื่อปรับขอบแปลง');
+    } catch (e) { if (routeScopeRef.current === scope) setRouteMessage(`${e.message} • ลองโหลดใหม่ก่อนบันทึกอีกครั้ง`); }
+    finally { clearTimeout(timer); if (routeScopeRef.current === scope) setRouteBusy(false); }
+  };
+  const selectRouteEdge = i => {
+    if (routeBusy || cutMode !== 'range') return;
+    if (cutAnchor === null) { setCutAnchor(i); setCutSelection([gpsEdgeKey(pathData[i-1], pathData[i])]); }
+    else {
+      const keys = [];
+      for (let j = Math.min(i, cutAnchor); j <= Math.max(i, cutAnchor); j++) keys.push(gpsEdgeKey(pathData[j-1], pathData[j]));
+      setCutSelection(keys); setCutAnchor(null);
+    }
+  };
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
@@ -399,100 +490,40 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 
   // Save snapshots for their original vehicle/date. Late GET/POST responses must
   // never replace a newer edit or the data for a newly selected vehicle/date.
-  const savePlotsToServer = async (newPlots, { silent = false } = {}) => {
-    if (!vehicleId || !workDate) { alert('กรุณาเลือกรถและวันที่ก่อนบันทึกครับ'); return false; }
-    const scope = plotStorageKey;
-    if (savingScopes.current.has(scope)) return false;
+  const savePlotsToServer = async (newPlots) => {
+    if (!vehicleId || !workDate || plotRevision === null || savingScopes.current.has(plotStorageKey)) return false;
+    const scope=plotStorageKey, revision=plotRevision;
     let normalized;
-    try { normalized = newPlots.map(refreshPlotMetrics); }
-    catch (error) { alert(error.message); return false; }
-    const seq = ++plotLoadSeq.current;
-    const isCurrent = () => plotScopeRef.current === scope && plotLoadSeq.current === seq;
-    savingScopes.current.add(scope);
-    setPlots(normalized);
-    const backedUp = writePlotBackup(normalized, true);
-    setIsSavingPlot(true);
-    setPlotSyncStatus('⏳ กำลังบันทึก...');
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
+    try { normalized=newPlots.map(p => refreshPlotMetrics({...p,id:p.id || plotNewId()})); }
+    catch(e) {setPlotSyncStatus(e.message);return false;}
+    savingScopes.current.add(scope);setIsSavingPlot(true);setPlotSyncStatus('กำลังบันทึกแปลงและคิว…');
+    writePlotBackup(normalized,true);
+    const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),15000);
     try {
-      const res = await fetch('https://harvester-api-server.onrender.com/api/plots', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vehicle_id: Number(vehicleId), work_date: workDate, plots_data: normalized }),
-        signal: controller.signal
-      });
-      let result = {};
-      try { result = await res.json(); } catch (_) {}
-      if (!res.ok) throw Object.assign(new Error(result.error || `HTTP ${res.status}`), { status: res.status });
-      const confirmed = hydratePlots(Array.isArray(result.plots_data) ? result.plots_data : normalized);
-      writePlotBackup(confirmed, false);
-      if (isCurrent()) { setPlots(confirmed); setPlotSyncStatus('✅ บันทึกแล้ว'); }
-      return plotScopeRef.current === scope;
-    } catch (error) {
-      if (isCurrent()) setPlotSyncStatus(backedUp ? (error.status >= 400 && error.status < 500 ? `📱 เก็บในเครื่องแล้ว • เซิร์ฟเวอร์ไม่รับข้อมูล: ${error.message}` : '📱 บันทึกในเครื่องแล้ว • รอซิงก์') : '⚠️ ยังบันทึกไม่ได้ กรุณาลองใหม่');
-      if (!backedUp && !silent && isCurrent()) alert('ยังบันทึกไม่ได้ทั้งในเครื่องและเซิร์ฟเวอร์ กรุณาลองใหม่ก่อนปิดหน้านี้');
-      return backedUp && plotScopeRef.current === scope;
-    } finally {
-      clearTimeout(timer);
-      savingScopes.current.delete(scope);
-      if (plotScopeRef.current === scope) setIsSavingPlot(false);
-    }
+      const res=await fetch('https://harvester-api-server.onrender.com/api/plots',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+        body:JSON.stringify({vehicle_id:Number(vehicleId),work_date:workDate,plots_data:normalized,expected_revision:revision})});
+      const data=await res.json();if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if(plotScopeRef.current!==scope) return false;
+      setPlots(hydratePlots(data.plots_data));setPlotRevision(data.revision);writePlotBackup(data.plots_data,false);
+      setPlotSyncStatus('✅ บันทึกแล้ว • ยอดพื้นที่ GPS ในคิวอัปเดตแล้ว');onPlotsSaved?.();return true;
+    } catch(e) {if(plotScopeRef.current===scope) setPlotSyncStatus(`ยังไม่เข้าคิว: ${e.message} • ฉบับแก้ไขสำรองในเครื่อง ถ้าบันทึกขัดข้องให้โหลดล่าสุดก่อน`);return false;}
+    finally {clearTimeout(timer);savingScopes.current.delete(scope);if(plotScopeRef.current===scope)setIsSavingPlot(false);}
   };
-
   useEffect(() => {
-    const seq = ++plotLoadSeq.current;
-    exitPlotEditor();
-    setExclusionPanelIndex(null);
-    setMobileToolsOpen(false);
-    setIsSavingPlot(savingScopes.current.has(plotStorageKey));
-    const stored = readPlotBackup();
-    const backup = { ...stored, plots: hydratePlots(stored.plots) };
-    if (!vehicleId || !workDate) { setPlots([]); setPlotSyncStatus(''); return; }
-    setPlots(backup.plots);
-    setPlotSyncStatus(backup.pending ? '📱 มีข้อมูลสำรองรอซิงก์' : backup.plots.length ? '📱 โหลดสำรองในเครื่อง' : '⏳ กำลังโหลดแปลง...');
-    // A save for this scope may still be finishing after switching away/back.
-    if (savingScopes.current.has(plotStorageKey)) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
-    const current = () => seq === plotLoadSeq.current && !controller.signal.aborted;
-    const syncPlots = async () => {
-      try {
-        if (backup.pending) {
-          savingScopes.current.add(plotStorageKey);
-          setIsSavingPlot(true);
-          const syncRes = await fetch('https://harvester-api-server.onrender.com/api/plots', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ vehicle_id: Number(vehicleId), work_date: workDate, plots_data: backup.plots }),
-            signal: controller.signal
-          });
-          if (!syncRes.ok) throw new Error(`HTTP ${syncRes.status}`);
-          if (!current()) return;
-          writePlotBackup(backup.plots, false);
-          setPlotSyncStatus('✅ แปลงซิงก์แล้ว');
-          return; // Never overwrite pending local changes with an older server GET.
-        }
-        const res = await fetch(`https://harvester-api-server.onrender.com/api/plots/${vehicleId}?date=${encodeURIComponent(workDate)}`, { signal: controller.signal });
-        const data = await res.json();
-        if (!res.ok || !Array.isArray(data)) throw new Error(data?.error || `HTTP ${res.status}`);
-        if (!current()) return;
-        const loaded = data.length ? hydratePlots(data) : backup.plots;
-        setPlots(loaded);
-        writePlotBackup(loaded, false);
-        setPlotSyncStatus(loaded.some(p => p.geometryError) ? '⚠️ มีแปลงที่ต้องแก้เส้นขอบ' : '✅ แปลงซิงก์แล้ว');
-      } catch (_) {
-        if (seq !== plotLoadSeq.current) return;
-        setPlotSyncStatus(backup.pending ? '📱 ใช้ข้อมูลในเครื่อง • ยังรอซิงก์' : backup.plots.length ? '📱 ใช้แปลงสำรองในเครื่อง' : '⚠️ โหลดแปลงจากเซิร์ฟเวอร์ไม่ได้');
-      } finally {
-        clearTimeout(timer);
-        if (backup.pending) {
-          savingScopes.current.delete(plotStorageKey);
-          if (plotScopeRef.current === plotStorageKey) setIsSavingPlot(false);
-        }
-      }
-    };
-    syncPlots();
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [vehicleId, workDate]);
+    let active=true;
+    setLinkReview(null);setPlotRevision(null);exitPlotEditor();setExclusionPanelIndex(null);setMobileToolsOpen(false);setPlots([]);
+    setIsSavingPlot(false);setPlotSyncStatus('กำลังโหลดแปลงล่าสุด…');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+    fetch(`https://harvester-api-server.onrender.com/api/plots-snapshot/${vehicleId}?date=${encodeURIComponent(workDate)}`,{signal:controller.signal})
+      .then(async res => {const data=await res.json();if(!res.ok || !Array.isArray(data.plots_data))throw new Error(data.error || 'โหลดแปลงไม่สำเร็จ');return data;})
+      .then(data => {if(!active)return;const loaded=hydratePlots(data.plots_data.map((p,i)=>({...p,id:p.id || `legacy-${vehicleId}-${workDate}-${i}`})));
+        setPlots(loaded);setPlotRevision(data.revision);setPlotSyncStatus('✅ โหลดแปลงล่าสุดแล้ว');
+        if(!readPlotBackup().pending)writePlotBackup(loaded,false);
+      })
+      .catch(e=>{if(active)setPlotSyncStatus(`โหลดไม่สำเร็จ: ${e.message} • กดโหลดแปลงล่าสุดอีกครั้ง`);})
+      .finally(()=>clearTimeout(timer));
+    return ()=>{active=false;controller.abort();clearTimeout(timer);};
+  },[vehicleId,workDate,plotReload]);
 
   // 🧠 วิเคราะห์แต่ละช่วงทาง: ใช้ธงจาก server ก่อน และมี fallback คำนวณความเร็วจากระยะ/เวลา
   // ช่วยแยกช่วงเกี่ยวได้แม้ ST-901 บางจุดรายงาน speed=0 หรือข้อมูลเก่า is_harvesting=false
@@ -553,6 +584,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     for (let i = 1; i < pathData.length; i++) {
       const a = pathData[i - 1];
       const b = pathData[i];
+      if (excludedEdges.has(gpsEdgeKey(a, b))) continue;
       const segment = getSegmentInfo(a, b);
       if (segment.km > 0) {
         totalKm += segment.km;
@@ -582,11 +614,13 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   // 3) ตัดเฉพาะพื้นที่ที่อยู่ภายในขอบแปลงที่บันทึก
   // ผลที่ได้จึงเป็นค่าประมาณพื้นที่ที่หัวเกี่ยวผ่านแล้วจริง
   const harvestCoverage = useMemo(() => {
+    if (!routeReady) return null;
     try {
       const segments = [];
       for (let i = 1; i < pathData.length; i++) {
         const a = pathData[i - 1];
         const b = pathData[i];
+      if (excludedEdges.has(gpsEdgeKey(a, b))) continue;
         const info = getSegmentInfo(a, b);
         if (!info.harvesting || info.km <= 0 || info.km > 0.25) continue;
 
@@ -606,7 +640,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       console.warn('คำนวณพื้นที่เกี่ยวไม่ได้:', err);
       return null;
     }
-  }, [pathData, headWidthMeters]);
+  }, [pathData, headWidthMeters, excludedEdges, routeReady]);
 
   const plotGeometries = useMemo(() => plots.map(plot => {
     try { return plotGeometry(plot); } catch (_) { return null; }
@@ -731,6 +765,9 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       const draft = refreshPlotMetrics(buildDraftPlot(points));
       const backTo = editingPlotIndex;
       const next = backTo === null ? [...plots, draft] : plots.map((p, i) => i === backTo ? draft : p);
+      if (!isHoleDraft && backTo === null) {
+        openLinkReview(next,[next.length-1],()=>exitPlotEditor());return;
+      }
       const ok = await savePlotsToServer(next);
       if (ok) {
         exitPlotEditor();
@@ -786,6 +823,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   // วิเคราะห์รอยเกี่ยวที่หนาแน่น แล้วแยก Polygon ที่ไม่ติดกันเป็นหลายแปลงอัตโนมัติ
   // กรองก้อนเล็ก/สัญญาณรบกวนออก และบันทึกในเครื่องทันที จากนั้นแก้แต่ละแปลงได้ด้วย ✏️
   const generateAutoPlot = async () => {
+    if (plotRevision === null) return alert('กรุณาโหลดแปลงล่าสุดให้สำเร็จก่อน');
+    if (!routeReady || routeEdit) return alert('กรุณาโหลดการตัดเส้นให้สำเร็จและออกจากโหมดตัดเส้นก่อนครับ');
     if (isSavingPlot || isAutoPlotting) return;
     const autoScope = plotStorageKey;
     if (pathData.length < 8) return alert('ข้อมูล GPS ยังน้อยเกินไปสำหรับวาดแปลงอัตโนมัติครับ');
@@ -802,6 +841,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       for (let i = 1; i < pathData.length; i++) {
         const a = pathData[i - 1];
         const b = pathData[i];
+      if (excludedEdges.has(gpsEdgeKey(a, b))) continue;
         const info = getSegmentInfo(a, b);
         if (!info.harvesting || info.km <= 0 || info.km > 0.25) continue;
 
@@ -979,20 +1019,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       const startIndex = basePlots.length;
       const nextPlots = [...basePlots, ...autoPlots];
 
-      // บันทึก localStorage ก่อนเสมอ; Server เป็น sync เสริมเท่านั้น
-      const ok = await savePlotsToServer(nextPlots, { silent: true });
-      if (!ok || plotScopeRef.current !== autoScope) return;
-
-      setEditingPlotIndex(null);
-      setPoints([]);
-      setDraftKind('manual');
-      setDrawMode(false);
-
-      const pendingIndex = autoPlots.findIndex(p => p.holeSuggestions.some(h => h.status === 'pending'));
-      const selectedIndex = Math.max(0, pendingIndex);
-      setExclusionPanelIndex(startIndex + selectedIndex);
-      fitPlotForReview(autoPlots[selectedIndex].points);
-      setMobileToolsOpen(false);
+      openLinkReview(nextPlots, autoPlots.map((_,i)=>startIndex+i), () => {
+        exitPlotEditor();setMobileToolsOpen(true);
+        fitPlotForReview(autoPlots[0].points);
+      });
     } catch (err) {
       console.error('Auto Multi-Plot Error:', err);
       alert(`สร้างแปลงอัตโนมัติไม่สำเร็จครับ\n${err.message || err}`);
@@ -1005,6 +1035,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     setAutoFollow(false); // ผู้ใช้กำลังดูภาพรวม ห้ามรีเฟรชแล้วดึงกล้องกลับไปที่รถ
     if (!mapInstance.current || pathData.length === 0) return;
     const latlngs = pathData
+      .filter((p, i) => showExcluded || routeEdit || (i > 0 && !excludedEdges.has(gpsEdgeKey(pathData[i-1], p))) || (i < pathData.length-1 && !excludedEdges.has(gpsEdgeKey(p, pathData[i+1]))))
       .map(p => [Number(p.latitude), Number(p.longitude)])
       .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
     if (latlngs.length === 0) return;
@@ -1031,7 +1062,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     }
 
     return () => {
-      // TrackingMap ปกติไม่ถูก unmount ตอนสลับข้อมูล แต่ป้องกัน memory leak ไว้
+      mapInstance.current?.remove();
+      mapInstance.current = null;
     };
   }, []);
 
@@ -1070,6 +1102,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       for (let i = 1; i < pathData.length; i++) {
         const a = pathData[i - 1];
         const b = pathData[i];
+        const edgeKey = gpsEdgeKey(a, b);
+        const excluded = excludedEdges.has(edgeKey);
+        const selected = selectedEdges.has(edgeKey);
+        if (excluded && !routeEdit && !showExcluded) continue;
         const aLat = Number(a.latitude), aLng = Number(a.longitude);
         const bLat = Number(b.latitude), bLng = Number(b.longitude);
         if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
@@ -1077,10 +1113,16 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         const harvesting = segment.harvesting;
         L.polyline([[aLat, aLng], [bLat, bLng]], {
           // กำลังเกี่ยวให้เด่นชัด ส่วนวิ่งทั่วไปทำบาง/โปร่งเพื่อลดตาลาย
-          color: harvesting ? '#2563EB' : '#D946EF',
-          weight: harvesting ? 5 : 2,
-          opacity: harvesting ? 0.90 : 0.38
+          color: selected ? '#F97316' : excluded ? '#94A3B8' : harvesting ? '#2563EB' : '#D946EF',
+          weight: selected ? 9 : harvesting ? 4 : 2,
+          dashArray: excluded ? '5 7' : undefined,
+          opacity: selected ? 1 : excluded ? 0.45 : 0.8,
+          bubblingMouseEvents: cutMode === 'box'
         }).addTo(routeGroup);
+        if (routeEdit && cutMode === 'range') {
+          L.polyline([[aLat, aLng], [bLat, bLng]], { weight: 18, opacity: 0, bubblingMouseEvents: false })
+            .addTo(routeGroup).on('click', () => selectRouteEdge(i));
+        }
       }
 
       const firstPoint = pathData[0];
@@ -1110,7 +1152,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       polylineLayer.current = routeGroup;
       markerLayer.current = markerGroup;
     }
-  }, [pathData]);
+  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded]);
 
   // 🎯 เมื่อผู้ใช้กด "ค้นหาเส้นทาง" ให้พาไปหารถล่าสุด 1 ครั้ง
   // Auto-refresh หลังจากนั้นจะอัปเดตข้อมูลอย่างเดียว ไม่แย่งกล้อง
@@ -1257,14 +1299,37 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       const center = plot.center || plotCenter(geometry.net);
       if (center && !drawMode) {
         L.marker([center.lat, center.lng], {
-          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="bg-amber-600/95 text-white px-2 py-1 rounded-lg text-[10px] font-black shadow-lg border border-white whitespace-nowrap" style="width:max-content;transform:translate(-50%,-50%)">📍 แปลง ${index + 1} • ${plotThaiArea(geometry.netSqM).text}</div>`, iconSize: [0, 0] }),
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="bg-amber-600/95 text-white px-2 py-1 rounded-lg text-[10px] font-black shadow-lg border border-white whitespace-nowrap" style="width:max-content;transform:translate(-50%,-50%)">📍 ${String(plot.name || `แปลงที่ ${index+1}`).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))} • ${plotThaiArea(geometry.netSqM).text}</div>`, iconSize: [0, 0] }),
           bubblingMouseEvents: false
-        }).bindTooltip(`สุทธิ • ${center.text} • แตะเพื่อคัดลอกพิกัด`).on('click', () => copyPlotCenter(center)).addTo(plotsLayer.current);
+        }).bindTooltip(plot.job_id ? `คิว #${plot.job_id} • แตะเพื่อเปิดคิว` : `สุทธิ • ${center.text} • แตะเพื่อคัดลอกพิกัด`).on('click', () => plot.job_id ? onOpenJob?.(plot.job_id) : copyPlotCenter(center)).addTo(plotsLayer.current);
       }
     });
   }, [plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting]);
 
   const totalPendingHoles = plots.reduce((sum, p) => sum + (p.holeSuggestions || []).filter(h => h.status === 'pending').length, 0);
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !routeEdit || cutMode !== 'box' || routeBusy) return;
+    const layer = L.layerGroup().addTo(map);
+    let corner = null;
+    const click = event => {
+      if (!corner) { corner = event.latlng; L.circleMarker(corner, {radius:6,color:'#F97316'}).addTo(layer); return; }
+      const bounds = L.latLngBounds(corner, event.latlng);
+      layer.clearLayers(); L.rectangle(bounds, {color:'#F97316',weight:2,fillOpacity:0.08,interactive:false}).addTo(layer);
+      const box = {south:bounds.getSouth(),north:bounds.getNorth(),west:bounds.getWest(),east:bounds.getEast()};
+      const keys = [];
+      for(let i=1;i<pathData.length;i++) if(gpsEdgeInBox(pathData[i-1],pathData[i],box)) keys.push(gpsEdgeKey(pathData[i-1],pathData[i]));
+      setCutSelection(keys); corner = null;
+    };
+    map.on('click', click);
+    return () => {map.off('click',click);map.removeLayer(layer);};
+  }, [routeEdit, cutMode, pathData, routeBusy]);
+
+  useEffect(()=>{
+    if(!focusPlot || String(focusPlot.vehicle_id)!==String(vehicleId) || focusPlot.work_date!==workDate) return;
+    const plot=plots.find(p=>p.id===focusPlot.id);
+    if(plot){fitPlotForReview(plot.points);setMobileToolsOpen(true);}
+  },[focusPlot,plots]);
   const panelPlot = exclusionPanelIndex === null ? null : plots[exclusionPanelIndex];
   const panelPendingHoles = (panelPlot?.holeSuggestions || []).filter(h => h.status === 'pending');
 
@@ -1274,16 +1339,65 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     : `${gpsStats.durationMin} นาที`;
 
   return (
-    <div className="relative w-full h-full flex flex-col">
-      <div ref={mapRef} className="flex-1 w-full z-0" />
-      {!drawMode && !mobileToolsOpen && exclusionPanelIndex === null && plots.length > 0 && (
-        <button
-          onClick={() => openExclusionPanel(Math.max(0, plots.findIndex(p => (p.holeSuggestions || []).some(h => h.status === 'pending'))))}
-          className="sm:hidden absolute top-3 left-3 z-[430] max-w-[calc(100%-5rem)] px-3 py-2.5 rounded-xl bg-white/95 border border-red-200 text-red-700 shadow-lg text-xs font-black"
-        >{totalPendingHoles ? `🕳️ พบพื้นที่ว่าง ${totalPendingHoles} จุด` : '✂️ จัดการพื้นที่หัก'}</button>
-      )}
+    <div className={`gps-workspace relative w-full h-full flex flex-col ${routeEdit ? 'gps-cutting' : ''}`}>
 
-      {!drawMode && panelPlot && (
+      <style>{`
+        .gps-workspace button { min-height:44px; touch-action:manipulation; }
+        .gps-workspace button:focus-visible { outline:3px solid #f59e0b; outline-offset:2px; }
+        .gps-workspace button:disabled { opacity:.45; }
+        .gps-workspace [class*="text-[9px]"], .gps-workspace [class*="text-[10px]"] { font-size:12px; font-weight:600; }
+        .gps-workspace .leaflet-control-zoom { margin-bottom:170px; }
+        .gps-cutting .leaflet-container { cursor:crosshair; }
+      `}</style>
+      {!drawMode && !routeEdit && !mobileToolsOpen && exclusionPanelIndex === null && (
+        <button onClick={() => { setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300); setAutoFollow(false); setMobileToolsOpen(false); }}
+          className="absolute top-3 left-3 z-[431] rounded-2xl bg-slate-900 text-white shadow-xl px-4 py-3 text-sm font-black">✂ ตัดเส้นเดินรถ</button>
+      )}
+      {routeEdit && <>
+        <div className="absolute top-3 left-3 right-16 sm:right-auto sm:w-80 z-[440] bg-slate-900 text-white rounded-2xl shadow-xl p-3">
+          <div className="flex justify-between items-center"><strong>✂ ตัดเส้นเดินรถ</strong><button disabled={routeBusy} aria-label="ปิดโหมดตัดเส้น" onClick={() => {if(cutSelection.length && !window.confirm('ออกโดยไม่บันทึกสิ่งที่เลือก?')) return;setRouteEdit(false);setCutSelection([]);setCutAnchor(null);}}>✕</button></div>
+          <p className="text-xs text-slate-300">รถ {vehicleId} • {workDate} • ตัดแล้ว {routeState.keys.length} ช่วง</p>
+          <div className="flex gap-2 mt-2">{[['range','เลือกช่วงเวลา'],['box','เลือกบริเวณ']].map(([value,label]) => <button key={value} disabled={routeBusy} onClick={() => {setCutMode(value);setCutAnchor(null);setCutSelection([]);}} className={`flex-1 rounded-xl text-xs font-bold ${cutMode === value ? 'bg-blue-600' : 'bg-slate-700'}`}>{label}</button>)}</div>
+          <p className="text-xs mt-2">{cutMode === 'range' ? (cutAnchor === null ? 'แตะเส้นเริ่มต้น แล้วแตะเส้นปลายทาง • เลือกทุกช่วงเวลาระหว่างสองเส้น' : 'แตะเส้นปลายทางของช่วงที่ต้องการตัด') : 'แตะมุม 2 จุดให้เป็นกรอบ • เลือกทุกเส้นที่ผ่านกรอบ'}</p>
+          <p className="text-xs mt-1 text-orange-300">สีส้ม = ตัวอย่างที่จะตัด • สีเทา = ตัดไว้แล้ว</p>
+        </div>
+        <div className="absolute bottom-3 left-3 right-3 sm:right-auto sm:w-96 z-[460] rounded-2xl bg-white shadow-2xl border border-slate-200 p-3 max-h-[42%] overflow-y-auto">
+          <strong className="text-sm">เลือก {cutSelection.length} ช่วงเส้น</strong>
+          <p className="text-xs text-slate-500">ตัดออกจากแผนที่และการคำนวณ เก็บพิกัดต้นฉบับไว้</p>
+          <p role="status" className="text-xs font-semibold text-blue-800 my-2">{routeMessage}</p>
+          <div className="grid grid-cols-3 gap-2">
+            <button disabled={routeBusy || !cutSelection.length} onClick={() => {setCutSelection([]);setCutAnchor(null);}} className="bg-slate-100 rounded-xl text-xs font-bold">ล้างที่เลือก</button>
+            <button disabled={routeBusy || !routeReady || !cutSelection.length} onClick={() => saveRouteEdges([...new Set([...routeState.keys,...cutSelection])])} className="bg-orange-600 text-white rounded-xl text-xs font-black">บันทึกตัดเส้น</button>
+            <button disabled={routeBusy || !routeReady || !cutSelection.some(k => excludedEdges.has(k))} onClick={() => saveRouteEdges(routeState.keys.filter(k => !selectedEdges.has(k)))} className="bg-blue-100 text-blue-800 rounded-xl text-xs font-bold">คืนที่เลือก</button>
+            <button disabled={routeBusy || !routeHistory.length} onClick={() => saveRouteEdges(routeHistory[routeHistory.length-1], true)} className="bg-slate-100 rounded-xl text-xs">↶ ย้อนครั้งก่อน</button>
+            <button disabled={routeBusy || !routeReady || !routeState.keys.length} onClick={() => { if(window.confirm('คืนเส้นทั้งหมดของรถและวันนี้?')) saveRouteEdges([]); }} className="bg-slate-100 rounded-xl text-xs">คืนทั้งวัน</button>
+            <button disabled={routeBusy} onClick={() => setReloadRoute(n => n+1)} className="bg-slate-100 rounded-xl text-xs">โหลดใหม่</button>
+          </div>
+        </div>
+      </>}
+      {linkReview && <div role="dialog" aria-modal="true" aria-label="เลือกคิวเจ้าของแปลง" className="absolute inset-0 z-[700] bg-slate-950/50 flex items-end sm:items-center justify-center p-2">
+        <div className="bg-white rounded-2xl shadow-2xl w-full sm:max-w-xl max-h-[90%] flex flex-col overflow-hidden">
+          <div className="p-4 border-b"><h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3><p className="text-xs text-slate-500">เลือกคิวแยกแต่ละแปลง • รวมพื้นที่สุทธิ • ยอดคิดเงินจริงยังไม่เปลี่ยน</p>
+            <input aria-label="ค้นหาคิว" placeholder="ค้นชื่อลูกค้า / เลขคิว" value={linkSearch} onChange={e=>setLinkSearch(e.target.value)} className="mt-2 w-full border rounded-xl p-2 text-sm"/>
+          </div>
+          <div className="p-3 space-y-3 overflow-y-auto">
+            {linkReview.indices.map(index=>{const plot=linkReview.all[index];return <div key={plot.id} className="bg-slate-50 border rounded-xl p-3">
+              <div className="flex justify-between gap-2"><strong>แปลงที่ {index+1}</strong><span className="text-sm font-bold text-emerald-700">{formatThaiRai(plot.area?.rawRai)}</span></div>
+              <label className="block text-xs font-bold mt-2">คิวเจ้าของแปลง<select aria-label={`คิวแปลงที่ ${index+1}`} disabled={isSavingPlot} value={plot.job_id || ''} onChange={e=>setPlotJob(index,e.target.value)} className="block w-full border bg-white rounded-xl p-3 mt-1 text-sm">
+                <option value="">ยังไม่ผูกคิว (เก็บแปลงไว้ก่อน)</option>
+                {jobs.filter(j=>String(j.id)===String(plot.job_id) || `${j.id} ${j.customers?.name || ''}`.toLowerCase().includes(linkSearch.toLowerCase())).map(j=><option key={j.id} value={j.id}>{j.customers?.name || 'ไม่ระบุชื่อ'} • คิว #{j.id} • {String(j.job_date || '').slice(0,10)} • {j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} {j.status==='DONE'?'• จบงานแล้ว':''}</option>)}
+              </select></label>
+              <label className="block text-xs font-bold mt-2">ชื่อแปลง<input aria-label={`ชื่อแปลงที่ ${index+1}`} disabled={isSavingPlot} maxLength={120} value={plot.name || ''} onChange={e=>{const name=e.target.value;setLinkReview(r=>({...r,all:r.all.map((p,i)=>i===index?{...p,name}:p)}));}} className="block w-full border rounded-xl p-2 mt-1 text-sm"/></label>
+            </div>})}
+          </div>
+          <div className="border-t p-3"><p role="status" className="text-xs text-blue-800 mb-2">{plotSyncStatus}</p><div className="flex gap-2">
+            <button disabled={isSavingPlot} onClick={()=>setLinkReview(null)} className="flex-1 bg-slate-100 rounded-xl font-bold">ยกเลิก</button>
+            <button disabled={isSavingPlot || plotRevision===null} onClick={confirmPlotLinks} className="flex-1 bg-emerald-600 text-white rounded-xl font-black">{isSavingPlot?'กำลังบันทึก…':'บันทึกแปลงและคิว'}</button>
+          </div></div>
+        </div>
+      </div>}
+      <div ref={mapRef} className="flex-1 w-full z-0" />
+      {!drawMode && !routeEdit && panelPlot && (
         <div className="absolute left-3 right-3 sm:right-auto sm:w-80 bottom-20 sm:bottom-auto sm:top-4 z-[450] bg-white/95 backdrop-blur rounded-2xl border border-red-200 shadow-xl flex flex-col overflow-hidden max-h-[48%] sm:max-h-[82%]">
           <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-red-100 shrink-0">
             <label className="text-xs font-black text-red-800 flex items-center gap-1">🕳️ พื้นที่หัก
@@ -1300,6 +1414,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               <div className="bg-green-50 rounded-lg p-1.5"><p className="text-gray-500">พื้นที่สุทธิ</p><p className="font-black text-green-800">{panelPlot.area?.text}</p></div>
             </div>
             <div className="grid grid-cols-2 gap-2">
+
               <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openHoleEditor(exclusionPanelIndex)} className="col-span-2 py-2 rounded-lg bg-red-600 text-white text-xs font-black disabled:opacity-40">✂️ วาดพื้นที่หักเอง</button>
               <button disabled={isSavingPlot || isAutoPlotting} onClick={() => scanPlotHoles(exclusionPanelIndex)} className="py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold disabled:opacity-40">{isAutoPlotting ? '⏳ กำลังค้นหา...' : '🔎 ค้นหาพื้นที่ว่าง'}</button>
               <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openPlotEditor(exclusionPanelIndex)} className="py-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-700 text-[10px] font-bold disabled:opacity-40">✏️ แก้ขอบแปลง</button>
@@ -1395,127 +1510,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         )}
       </div>
 
-      {/* เครื่องมือวาด + รายการแปลง */}
-      <div className={`absolute top-4 left-4 z-[400] ${drawMode || exclusionPanelIndex !== null ? 'hidden' : 'hidden sm:flex'} flex-col gap-2 pointer-events-none`}>
-        <button
-          onClick={() => {
-            setAutoFollow(false);
-            if (drawMode) {
-              exitPlotEditor();
-            } else {
-              setEditingPlotIndex(null);
-              setDraftKind('manual');
-              setHoleEditor(null);
-              setDraftHistory([]);
-              setExclusionPanelIndex(null);
-              setPoints([]);
-              setDrawMode(true);
-            }
-          }}
-          className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-bold text-xs border transition flex items-center gap-1 w-max ${drawMode ? 'bg-red-500 hover:bg-red-600 text-white border-red-600' : 'bg-white hover:bg-gray-50 text-gray-800 border-gray-300'}`}
-        >
-          {drawMode ? '❌ ยกเลิกแก้แปลง' : '📏 วาดแปลง'}
-        </button>
-
-        {!drawMode && pathData.length > 0 && (
-          <>
-            <button
-              onClick={generateAutoPlot}
-              disabled={isAutoPlotting || isSavingPlot}
-              className={`pointer-events-auto px-3 py-2 rounded-lg shadow-lg font-black text-xs border transition w-max ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'}`}
-            >
-              {isAutoPlotting ? '⏳ กำลังแยกแปลง...' : '✨ วาดแปลงออโต้'}
-            </button>
-            <button
-              onClick={() => {
-                const value = window.prompt('ความกว้างหัวเกี่ยว (เมตร)', String(headWidthMeters));
-                if (value === null) return;
-                const n = Number(value);
-                if (!Number.isFinite(n) || n < 1 || n > 15) return alert('กรุณาใส่ความกว้าง 1 - 15 เมตรครับ');
-                setHeadWidthMeters(n);
-              }}
-              className="pointer-events-auto bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 px-3 py-1.5 rounded-lg shadow font-bold text-[10px] w-max"
-            >
-              ⚙️ หัวเกี่ยว {headWidthMeters.toFixed(1)} ม.
-            </button>
-          </>
-        )}
-
-        {plotSyncStatus && (
-          <div className="pointer-events-auto bg-white/95 px-2 py-1 rounded-lg shadow border border-gray-200 text-[9px] font-bold text-gray-600 w-max max-w-52">
-            {plotSyncStatus}
-          </div>
-        )}
-
-        {plots.length > 0 && (
-          <div className="pointer-events-auto bg-white/95 backdrop-blur border border-amber-200 p-2 rounded-lg shadow-lg w-52 mt-1">
-            <h4 className="text-[10px] font-black text-amber-800 border-b border-amber-100 pb-1 mb-1">🌾 แปลงที่บันทึกไว้ ({workDate || '-'})</h4>
-            <div className="max-h-32 overflow-y-auto space-y-1">
-              {plots.map((plot, i) => {
-                const progress = plotProgressList[i] || { percent: 0, coveredRai: 0, totalRai: Number(plot.area?.rawRai || 0) };
-                return (
-                  <div key={i} className="text-[10px] bg-amber-50 p-1.5 rounded">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <span className="font-bold text-amber-700">แปลง {i + 1}</span>
-                        <span className="ml-1 text-blue-700 font-black">• {progress.percent.toFixed(0)}%</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-gray-600 font-semibold">{plot.area?.text || formatThaiRai(progress.totalRai || 0)}</span>
-                        <button disabled={isSavingPlot} onClick={() => openPlotEditor(i)} className="text-blue-600 hover:bg-blue-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40" title="แก้ไขขอบแปลง">✏️</button>
-                        <button disabled={isSavingPlot} onClick={() => savePlotsToServer(plots.filter((_, idx) => idx !== i))} className="text-red-500 hover:bg-red-100 rounded px-1.5 py-0.5 font-bold disabled:opacity-40">✕</button>
-                      </div>
-                    </div>
-                    <button disabled={isSavingPlot || isAutoPlotting} onClick={() => openExclusionPanel(i)} className="mt-1 w-full py-1.5 rounded border border-red-200 bg-white text-red-700 text-[10px] font-bold disabled:opacity-40">🕳️ พื้นที่หัก {(plot.holes || []).length} วง{(plot.holeSuggestions || []).some(h => h.status === 'pending') ? ' • รอยืนยัน' : ''}</button>
-                    <div className="mt-1 h-1.5 bg-white rounded-full overflow-hidden border border-blue-100">
-                      <div className="h-full bg-blue-600 rounded-full transition-all duration-300" style={{ width: `${progress.percent}%` }}></div>
-                    </div>
-                    <div className="mt-0.5 flex justify-between text-[8px] text-gray-500">
-                      <span>เกี่ยวแล้ว ~{formatThaiRai(progress.coveredRai)}</span>
-                      <span>เหลือ {Math.max(0, 100 - progress.percent).toFixed(0)}%</span>
-                    </div>
-                    {(() => {
-                      const center = plot.center || centerFromPoints(plot.points);
-                      if (!center) return null;
-                      const centerText = center.text || `${Number(center.lat).toFixed(6)}, ${Number(center.lng).toFixed(6)}`;
-                      return (
-                        <button
-                          onClick={() => copyPlotCenter({ ...center, text: centerText })}
-                          className="mt-1 w-full text-left bg-white/80 hover:bg-sky-50 border border-sky-100 rounded px-1.5 py-1 text-[8px] font-bold text-sky-700"
-                          title="คัดลอกพิกัดกลางแปลง"
-                        >
-                          📍 {centerText} <span className="float-right">📋</span>
-                        </button>
-                      );
-                    })()}
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-1 pt-1.5 border-t border-amber-200 text-[11px] font-black text-gray-800 text-right">
-              รวม: {formatThaiRai(overallProgress.totalRai)}
-            </div>
-            <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-2">
-              <div className="flex items-center justify-between text-[10px] font-black">
-                <span className="text-blue-900">📈 ความคืบหน้าการเกี่ยว</span>
-                <span className="text-blue-700 text-sm">{overallProgress.percent.toFixed(0)}%</span>
-              </div>
-              <div className="mt-1 h-2 bg-white rounded-full overflow-hidden border border-blue-100">
-                <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${overallProgress.percent}%` }}></div>
-              </div>
-              <div className="mt-1 flex justify-between text-[8px] font-bold text-gray-600">
-                <span>✅ ~{formatThaiRai(overallProgress.coveredRai)} / {formatThaiRai(overallProgress.totalRai)}</span>
-                <span>เหลือ ~{formatThaiRai(overallProgress.remainingRai)}</span>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* 📱 แถบเครื่องมือย่อด้านล่างบนมือถือ */}
-      {!drawMode && (
+      {!drawMode && !routeEdit && (
         <div
-          className="sm:hidden absolute left-3 right-3 z-[430] flex items-center gap-2 pointer-events-none"
+          className="absolute left-3 right-3 sm:right-auto z-[430] flex items-center gap-2 pointer-events-none"
           style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
         >
           <button
@@ -1547,16 +1545,16 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       )}
 
       {/* 📱 Bottom sheet เครื่องมือ — เปิดเฉพาะเมื่อผู้ใช้ต้องการ */}
-      {mobileToolsOpen && !drawMode && (
+      {mobileToolsOpen && !drawMode && !routeEdit && (
         <>
           <button
             aria-label="ปิดเครื่องมือ"
             onClick={() => setMobileToolsOpen(false)}
-            className="sm:hidden absolute inset-0 z-[435] bg-black/10"
+            className="absolute inset-0 z-[435] bg-black/10"
           />
           <div
-            className="sm:hidden absolute left-2 right-2 z-[450] bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-gray-200 overflow-hidden"
-            style={{ bottom: 'calc(4.25rem + env(safe-area-inset-bottom))', maxHeight: '68%' }}
+            className="absolute left-2 right-2 sm:right-auto sm:w-96 z-[450] bg-white backdrop-blur-xl rounded-2xl shadow-2xl border border-gray-200 overflow-hidden"
+            style={{ bottom: 'calc(4.25rem + env(safe-area-inset-bottom))', maxHeight: '58%' }}
           >
             <div className="px-3 py-2.5 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white z-10">
               <div>
@@ -1566,8 +1564,15 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               <button onClick={() => setMobileToolsOpen(false)} className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 font-black">✕</button>
             </div>
 
-            <div className="p-3 overflow-y-auto" style={{ maxHeight: 'calc(68dvh - 3.25rem)' }}>
+            <div className="p-3 overflow-y-auto" style={{ maxHeight: 'calc(48dvh - 3.25rem)' }}>
+              <div className="flex gap-2 mb-2">
+                <button disabled={isSavingPlot} onClick={()=>setPlotReload(n=>n+1)} className="bg-blue-50 text-blue-800 rounded-xl px-3 text-xs font-bold">โหลดแปลงล่าสุด</button>
+                <button disabled={isSavingPlot || plotRevision===null} onClick={()=>{const backup=readPlotBackup();if(!backup.pending)return alert('ไม่มีฉบับแก้ไขรอบันทึก');if(window.confirm('เปิดฉบับสำรองเพื่อตรวจคิวก่อนบันทึกแทนแปลงของรถและวันนี้?'))openLinkReview(hydratePlots(backup.plots),backup.plots.map((_,i)=>i));}} className="bg-slate-100 rounded-xl px-3 text-xs">กู้ฉบับในเครื่อง</button>
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => {setMobileToolsOpen(false);setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300);setAutoFollow(false);}} className="bg-slate-900 text-white rounded-xl font-black text-sm">✂ ตัดเส้นเดินรถ</button>
+                <button onClick={() => setShowExcluded(v => !v)} className="bg-slate-100 rounded-xl font-bold text-xs">{showExcluded ? 'ซ่อนเส้นที่ตัด' : 'ดูเส้นที่ตัด'}</button>
                 <button
                   onClick={() => {
                     setAutoFollow(false);
@@ -1632,6 +1637,11 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
                       const centerText = center ? (center.text || `${Number(center.lat).toFixed(6)}, ${Number(center.lng).toFixed(6)}`) : '';
                       return (
                         <div key={`mobile-plot-${i}`} className="bg-amber-50 border border-amber-100 rounded-xl p-2.5">
+                          <p className="font-black text-sm text-slate-900">{plot.name || `แปลงที่ ${i+1}`}</p>
+                          <div className="flex gap-2 my-2">
+                            <button disabled={isSavingPlot || plotRevision===null} onClick={()=>openLinkReview(plots,[i])} className="bg-white border rounded-xl px-2 text-xs font-bold">{plot.job_id ? `เปลี่ยนคิว #${plot.job_id}` : 'เลือกคิวเจ้าของแปลง'}</button>
+                            {plot.job_id && <button onClick={()=>onOpenJob?.(plot.job_id)} className="bg-blue-100 text-blue-800 rounded-xl px-2 text-xs font-bold">เปิดคิวงาน ↗</button>}
+                          </div>
                           <div className="flex items-center justify-between gap-2">
                             <div>
                               <p className="font-black text-xs text-amber-800">แปลง {i + 1} <span className="text-blue-700">• {progress.percent.toFixed(0)}%</span></p>
@@ -1688,9 +1698,10 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         </>
       )}
 
+      {!routeReady && !routeEdit && !drawMode && <div role="status" className="absolute top-16 left-3 right-16 sm:right-auto sm:max-w-xs z-[420] bg-amber-50 text-amber-900 rounded-xl shadow p-2 text-xs font-bold">{routeMessage}<button onClick={() => setReloadRoute(n => n+1)} className="ml-2 underline">ลองใหม่</button></div>}
       {/* GPS mini dashboard */}
-      {pathData.length > 0 && !drawMode && (
-        <div className="hidden sm:block absolute bottom-4 left-4 z-[390] bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-200 p-2.5 max-w-[calc(100%-90px)]">
+      {pathData.length > 0 && !drawMode && !routeEdit && !mobileToolsOpen && (
+        <div className="hidden sm:block absolute bottom-20 left-4 z-[390] bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-200 p-2.5 max-w-[calc(100%-90px)]">
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold text-gray-700">
             <span className={trackingMode === 'realtime' ? (statusOnline ? 'text-green-600' : 'text-orange-600') : 'text-purple-600'}>
               {trackingMode === 'realtime' ? (statusOnline ? '● ออนไลน์' : '● สัญญาณเงียบ') : '🕒 ประวัติ'}
@@ -1709,7 +1720,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       )}
 
       {/* 📱 สถานะย่อบนมือถือ ไม่บังแผนที่ */}
-      {pathData.length > 0 && !drawMode && !mobileToolsOpen && exclusionPanelIndex === null && (
+      {pathData.length > 0 && !drawMode && !routeEdit && !mobileToolsOpen && exclusionPanelIndex === null && (
         <div
           className="sm:hidden absolute left-3 z-[410] bg-white/90 backdrop-blur rounded-full shadow-lg border border-gray-200 px-3 py-1.5 max-w-[calc(100%-5.5rem)]"
           style={{ bottom: 'calc(4.25rem + env(safe-area-inset-bottom))' }}
@@ -1743,7 +1754,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               const center = mapInstance.current?.getCenter();
               if (center) changeDraftPoints([...points, { lat: center.lat, lng: center.lng }]);
             }} disabled={isSavingPlot} className="sm:hidden px-3 py-2.5 rounded-xl bg-blue-100 text-blue-800 font-bold text-xs disabled:opacity-40">+ จุด</button>}
-            <button onClick={saveDraft} disabled={points.length < 3 || !!draftError || isSavingPlot || !vehicleId || !workDate} className="px-3 sm:px-5 py-2.5 rounded-xl bg-green-600 text-white font-black text-xs whitespace-nowrap disabled:bg-gray-200 disabled:text-gray-400">
+            <button onClick={saveDraft} disabled={points.length < 3 || !!draftError || isSavingPlot || plotRevision===null || !vehicleId || !workDate} className="px-3 sm:px-5 py-2.5 rounded-xl bg-green-600 text-white font-black text-xs whitespace-nowrap disabled:bg-gray-200 disabled:text-gray-400">
               {isSavingPlot ? '⏳ บันทึก...' : isHoleDraft ? '✅ บันทึกหักพื้นที่' : '💾 บันทึกแปลง'}
             </button>
           </div>
@@ -1754,6 +1765,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
 }
 
 function App() {
+  const [gpsFocusPlot, setGpsFocusPlot] = useState(null);
+  const [gpsJobDetail, setGpsJobDetail] = useState(null);
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
@@ -1857,6 +1870,8 @@ function App() {
   const [trackingMode, setTrackingMode] = useState('realtime');
   const [trackingDate, setTrackingDate] = useState(new Date().toISOString().slice(0, 10));
   const [gpsPathData, setGpsPathData] = useState([]);
+  const [gpsDataScope, setGpsDataScope] = useState('');
+  const gpsRequestSeq = useRef(0);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
   const [gpsFocusRequest, setGpsFocusRequest] = useState(0); // เพิ่มเมื่อกดค้นหา เพื่อพาแผนที่ไปหารถ 1 ครั้ง
   const [showGpsMobilePanel, setShowGpsMobilePanel] = useState(false); // 📱 ตั้งค่าค้นหา GPS แบบ bottom sheet
@@ -1869,6 +1884,10 @@ function App() {
   };
   const effectiveTrackingDate = trackingMode === 'realtime' ? getLocalDateString() : trackingDate;
 
+  const gpsViewScope = `${trackingVehicleId}/${effectiveTrackingDate}`;
+  const gpsViewScopeRef = useRef(gpsViewScope);
+  gpsViewScopeRef.current = gpsViewScope;
+  const visibleGpsPath = gpsDataScope === gpsViewScope ? gpsPathData : [];
   // 🔍 ใช้ฟังก์ชันเดียวกันทั้งคอมและมือถือ
   const searchGpsRoute = async () => {
     if (!trackingVehicleId) {
@@ -1876,12 +1895,18 @@ function App() {
       return false;
     }
 
+    const requestScope = gpsViewScope;
+    const requestSeq = ++gpsRequestSeq.current;
     setIsFetchingGps(true);
     try {
       const dateToSend = effectiveTrackingDate;
       const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
       const data = await res.json();
 
+      if (gpsViewScopeRef.current !== requestScope || gpsRequestSeq.current !== requestSeq) return false;
+      if (!res.ok) throw new Error(data.error || 'โหลด GPS ไม่สำเร็จ');
+      setGpsDataScope(requestScope);
+      setGpsPathData(Array.isArray(data) ? data : []);
       if (!Array.isArray(data) || data.length === 0) {
         alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
         return false;
@@ -1895,7 +1920,7 @@ function App() {
       alert('ดึงข้อมูล GPS ไม่สำเร็จครับ');
       return false;
     } finally {
-      setIsFetchingGps(false);
+      if (gpsRequestSeq.current === requestSeq) setIsFetchingGps(false);
     }
   };
   // 👆 จบการวาง State 👆
@@ -2023,7 +2048,8 @@ function App() {
           const data = await res.json();
           
           // อัปเดตเส้นทางบนแผนที่
-          if (data && data.length > 0) {
+          if (res.ok && Array.isArray(data) && gpsViewScopeRef.current === `${trackingVehicleId}/${dateToSend}`) {
+            setGpsDataScope(`${trackingVehicleId}/${dateToSend}`);
             setGpsPathData(data);
           }
         } catch (e) {
@@ -2293,7 +2319,7 @@ function App() {
   const fetchJobs = () => {
     fetch('https://harvester-api-server.onrender.com/api/jobs')
       .then(res => res.json())
-      .then(data => { setJobs(data); })
+      .then(data => { if(Array.isArray(data))setJobs(data); })
       .catch(err => console.error("ดึงข้อมูลงานไม่ได้:", err))
   }
 
@@ -3479,8 +3505,10 @@ function App() {
 
             {/* ส่วนแสดงแผนที่อัจฉริยะแบบใหม่ */}
             <div className="flex-1 relative bg-gray-200 min-h-0 sm:min-h-[300px]">
-              <TrackingMap 
-                pathData={gpsPathData}
+              <TrackingMap
+                jobs={jobs} onPlotsSaved={fetchJobs} focusPlot={gpsFocusPlot}
+                onOpenJob={id=>{setIsMapFullScreen(false);setActiveTab('active');setGpsJobDetail(id);fetchJobs();}}
+                pathData={visibleGpsPath}
                 vehicleId={trackingVehicleId}
                 workDate={effectiveTrackingDate}
                 trackingMode={trackingMode}
@@ -3491,7 +3519,7 @@ function App() {
               />
               
               {/* ข้อความแจ้งเตือนตอนยังไม่มีข้อมูล */}
-              {gpsPathData.length === 0 && (
+              {visibleGpsPath.length === 0 && !(gpsFocusPlot && String(gpsFocusPlot.vehicle_id)===String(trackingVehicleId) && gpsFocusPlot.work_date===effectiveTrackingDate) && (
                 <div className="absolute inset-0 flex items-center justify-center z-[400] pointer-events-none">
                   <button onClick={() => setShowGpsMobilePanel(true)} className="bg-white/90 backdrop-blur border border-gray-300 px-4 py-3 rounded-xl shadow-sm text-center text-gray-500 text-xs sm:text-sm font-bold pointer-events-auto">
                     🔍 กรุณากดค้นหาเพื่อดูเส้นทาง
@@ -3626,6 +3654,14 @@ function App() {
                       </span>
                     </div>
 
+                    <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-3" onClick={e=>e.stopPropagation()}>
+                      <p className="text-xs font-bold text-sky-800">🛰️ พื้นที่วัดจาก GPS</p>
+                      {job.gps_summary_error ? <p className="text-xs text-red-700">โหลดพื้นที่ GPS ไม่สำเร็จ</p> : <>
+                        <p className="font-black text-sky-950">{job.gps_summary?.plot_count || 0} แปลง • {plotThaiArea(Number(job.gps_summary?.area_rai || 0)*1600).text}</p>
+                        {!!job.gps_summary?.invalid_count && <p className="text-xs text-red-700">มี {job.gps_summary.invalid_count} แปลงที่ต้องตรวจขอบ ยอดยังไม่ครบ</p>}
+                      </>}
+                      <button onClick={()=>setGpsJobDetail(job.id)} className="mt-2 text-sm font-bold text-blue-700 underline">ดูแปลง / ใช้ยอดวัดเข้าคิว →</button>
+                    </div>
                     {/* 💡 กล่องประเภทพืชแบบแยกสี + ไอคอน */}
                     <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
                       <div className={`p-2 rounded-lg border ${
@@ -5084,7 +5120,19 @@ function App() {
 
         {/* 🌾 Popup ระบบรอบทำงาน: จบวันนี้ / จบงานทั้งหมด */}
         {/* 📐 Popup แก้ไร่ที่ลูกค้ายืนยันหลังปิดงาน */}
-        {billingAdjustModal && (() => {
+        {gpsJobDetail !== null && (()=>{const job=jobs.find(j=>String(j.id)===String(gpsJobDetail));if(!job)return null;const summary=job.gps_summary;return <div className="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-3">
+        <div role="dialog" aria-modal="true" aria-label="แปลงของคิวงาน" className="bg-white rounded-2xl w-full max-w-lg max-h-[90dvh] overflow-y-auto p-4">
+          <div className="flex justify-between"><h3 className="text-lg font-black">🌾 {job.customers?.name} • คิว #{job.id}</h3><button aria-label="ปิดแปลงของคิว" onClick={()=>setGpsJobDetail(null)} className="p-2">✕</button></div>
+          <p className="text-xs text-gray-500">ลูกค้า 1 คน • {summary?.plot_count || 0} แปลง • นับเฉพาะคิวนี้</p>
+          <p className="mt-3 text-lg font-black text-blue-800">วัด GPS: {summary ? plotThaiArea(summary.area_rai*1600).text : 'โหลดไม่สำเร็จ'}</p>
+          <p className="text-sm text-gray-600">พื้นที่คิดเงินจริง: {plotThaiArea(Number(job.billing_area ?? job.area_size ?? 0)*1600).text}</p>
+          {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
+          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);setTrackingMode('history');setTrackingVehicleId(String(plot.vehicle_id));setTrackingDate(plot.work_date);setGpsFocusPlot({...plot,request:Date.now()});setActiveTab('gps');setIsMapFullScreen(true);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
+          {userRole==='BOSS' && <button disabled={!summary?.plot_count || !!summary?.invalid_count || job.payment_status==='PAID'} onClick={()=>{setGpsJobDetail(null);openBillingAreaAdjust(job);setBillingAdjustArea(String(Number(summary.area_rai.toFixed(6))));}} className="w-full bg-emerald-600 text-white font-black rounded-xl py-3 disabled:opacity-40">นำยอด GPS ไปตรวจและยืนยันคิดเงิน</button>}
+          <p className="text-xs text-gray-500 mt-2">ยอด GPS เปลี่ยนตามแปลง • ต้องยืนยันอีกครั้งก่อนปรับเงินและค่าแรง งานที่ชำระครบแล้วไม่เปิดให้ใช้ปุ่มนี้</p>
+        </div>
+      </div>})()}
+      {billingAdjustModal && (() => {
           const job = billingAdjustModal;
           const oldArea = Number((job.billing_area ?? job.area_size) || 0);
           const newArea = Number(billingAdjustArea);
