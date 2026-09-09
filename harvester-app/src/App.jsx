@@ -4,6 +4,7 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
 // 🛰️ GPS V3.4 — reviewed exclusions; all areas/progress use the same net geometry.
+// 🧽 Route Eraser — tap individual route segments to erase/restore; no start/end range selection.
 // Turf 6/7 compatibility: https://turfjs.org/docs/api/difference
 const plotClip = (operation, a, b) => {
   if (!a || !b) return operation === 'difference' ? a : null;
@@ -314,7 +315,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     if(await savePlotsToServer(review.all)) {setLinkReview(null);review.after?.();}
   };
   const [routeEdit, setRouteEdit] = useState(false);
-  const [cutMode, setCutMode] = useState('range');
+  const [cutMode, setCutMode] = useState('erase');
   const [cutAnchor, setCutAnchor] = useState(null);
   const [cutSelection, setCutSelection] = useState([]);
   const [routeState, setRouteState] = useState({ keys: [], revision: 0 });
@@ -333,7 +334,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     let active = true;
     const controller = new AbortController();
     setRouteReady(false); setRouteState({ keys: [], revision: 0 }); setRouteHistory([]);
-    setRouteEdit(false); setCutSelection([]); setCutAnchor(null); setRouteBusy(false);
+    setRouteEdit(false); setCutMode('erase'); setCutSelection([]); setCutAnchor(null); setRouteBusy(false);
     setRouteMessage('กำลังโหลดการตัดเส้น…');
     const timer = setTimeout(() => controller.abort(), 15000);
     fetch(`https://harvester-api-server.onrender.com/api/gps-route-edits/${vehicleId}?date=${workDate}`, { signal: controller.signal })
@@ -363,14 +364,16 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     } catch (e) { if (routeScopeRef.current === scope) setRouteMessage(`${e.message} • ลองโหลดใหม่ก่อนบันทึกอีกครั้ง`); }
     finally { clearTimeout(timer); if (routeScopeRef.current === scope) setRouteBusy(false); }
   };
+  // 🧽 ยางลบเส้นเดินรถ: แตะเส้นทีละช่วง ไม่ต้องเลือกจุดเริ่ม/จุดปลาย
+  // erase = เลือกเส้นปกติเพื่อตัด, restore = เลือกเส้นที่ตัดไว้เพื่อคืน
   const selectRouteEdge = i => {
-    if (routeBusy || cutMode !== 'range') return;
-    if (cutAnchor === null) { setCutAnchor(i); setCutSelection([gpsEdgeKey(pathData[i-1], pathData[i])]); }
-    else {
-      const keys = [];
-      for (let j = Math.min(i, cutAnchor); j <= Math.max(i, cutAnchor); j++) keys.push(gpsEdgeKey(pathData[j-1], pathData[j]));
-      setCutSelection(keys); setCutAnchor(null);
-    }
+    if (routeBusy || !routeEdit || i <= 0 || i >= pathData.length) return;
+    const key = gpsEdgeKey(pathData[i-1], pathData[i]);
+    const isExcluded = excludedEdges.has(key);
+    if (cutMode === 'erase' && isExcluded) return;
+    if (cutMode === 'restore' && !isExcluded) return;
+    setCutSelection(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+    setCutAnchor(null);
   };
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -1113,15 +1116,23 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         const harvesting = segment.harvesting;
         L.polyline([[aLat, aLng], [bLat, bLng]], {
           // กำลังเกี่ยวให้เด่นชัด ส่วนวิ่งทั่วไปทำบาง/โปร่งเพื่อลดตาลาย
-          color: selected ? '#F97316' : excluded ? '#94A3B8' : harvesting ? '#2563EB' : '#D946EF',
+          // โหมดยางลบ: สีส้ม = กำลังจะลบ, สีเขียว = กำลังจะคืน, สีเทา = ตัดไว้แล้ว
+          color: selected ? (cutMode === 'restore' ? '#22C55E' : '#F97316') : excluded ? '#94A3B8' : harvesting ? '#2563EB' : '#D946EF',
           weight: selected ? 9 : harvesting ? 4 : 2,
-          dashArray: excluded ? '5 7' : undefined,
+          dashArray: excluded && !selected ? '5 7' : undefined,
           opacity: selected ? 1 : excluded ? 0.45 : 0.8,
-          bubblingMouseEvents: cutMode === 'box'
+          bubblingMouseEvents: false
         }).addTo(routeGroup);
-        if (routeEdit && cutMode === 'range') {
-          L.polyline([[aLat, aLng], [bLat, bLng]], { weight: 18, opacity: 0, bubblingMouseEvents: false })
-            .addTo(routeGroup).on('click', () => selectRouteEdge(i));
+
+        // ทำ hit area ให้กว้างกว่าตัวเส้นจริง จิ้มบนมือถือได้ง่ายเหมือนใช้ยางลบ
+        const canTapThisEdge = routeEdit && (
+          (cutMode === 'erase' && !excluded) ||
+          (cutMode === 'restore' && excluded)
+        );
+        if (canTapThisEdge) {
+          L.polyline([[aLat, aLng], [bLat, bLng]], { weight: 26, opacity: 0, bubblingMouseEvents: false })
+            .addTo(routeGroup)
+            .on('click', () => selectRouteEdge(i));
         }
       }
 
@@ -1347,28 +1358,36 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         .gps-workspace button:disabled { opacity:.45; }
         .gps-workspace [class*="text-[9px]"], .gps-workspace [class*="text-[10px]"] { font-size:12px; font-weight:600; }
         .gps-workspace .leaflet-control-zoom { margin-bottom:170px; }
-        .gps-cutting .leaflet-container { cursor:crosshair; }
+        .gps-cutting .leaflet-container { cursor:pointer; }
       `}</style>
       {!drawMode && !routeEdit && !mobileToolsOpen && exclusionPanelIndex === null && (
-        <button onClick={() => { setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300); setAutoFollow(false); setMobileToolsOpen(false); }}
+        <button onClick={() => { setCutMode('erase'); setCutSelection([]); setCutAnchor(null); setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300); setAutoFollow(false); setMobileToolsOpen(false); }}
           className="absolute top-3 left-3 z-[431] rounded-2xl bg-slate-900 text-white shadow-xl px-4 py-3 text-sm font-black">✂ ตัดเส้นเดินรถ</button>
       )}
       {routeEdit && <>
         <div className="absolute top-3 left-3 right-16 sm:right-auto sm:w-80 z-[440] bg-slate-900 text-white rounded-2xl shadow-xl p-3">
-          <div className="flex justify-between items-center"><strong>✂ ตัดเส้นเดินรถ</strong><button disabled={routeBusy} aria-label="ปิดโหมดตัดเส้น" onClick={() => {if(cutSelection.length && !window.confirm('ออกโดยไม่บันทึกสิ่งที่เลือก?')) return;setRouteEdit(false);setCutSelection([]);setCutAnchor(null);}}>✕</button></div>
-          <p className="text-xs text-slate-300">รถ {vehicleId} • {workDate} • ตัดแล้ว {routeState.keys.length} ช่วง</p>
-          <div className="flex gap-2 mt-2">{[['range','เลือกช่วงเวลา'],['box','เลือกบริเวณ']].map(([value,label]) => <button key={value} disabled={routeBusy} onClick={() => {setCutMode(value);setCutAnchor(null);setCutSelection([]);}} className={`flex-1 rounded-xl text-xs font-bold ${cutMode === value ? 'bg-blue-600' : 'bg-slate-700'}`}>{label}</button>)}</div>
-          <p className="text-xs mt-2">{cutMode === 'range' ? (cutAnchor === null ? 'แตะเส้นเริ่มต้น แล้วแตะเส้นปลายทาง • เลือกทุกช่วงเวลาระหว่างสองเส้น' : 'แตะเส้นปลายทางของช่วงที่ต้องการตัด') : 'แตะมุม 2 จุดให้เป็นกรอบ • เลือกทุกเส้นที่ผ่านกรอบ'}</p>
-          <p className="text-xs mt-1 text-orange-300">สีส้ม = ตัวอย่างที่จะตัด • สีเทา = ตัดไว้แล้ว</p>
+          <div className="flex justify-between items-center"><strong>🧽 ยางลบเส้นเดินรถ</strong><button disabled={routeBusy} aria-label="ปิดโหมดยางลบ" onClick={() => {if(cutSelection.length && !window.confirm('ออกโดยไม่บันทึกสิ่งที่จิ้มไว้?')) return;setRouteEdit(false);setCutSelection([]);setCutAnchor(null);}}>✕</button></div>
+          <p className="text-xs text-slate-300">รถ {vehicleId} • {workDate} • ตัดไว้แล้ว {routeState.keys.length} ช่วง</p>
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <button disabled={routeBusy} onClick={() => {setCutMode('erase');setCutSelection([]);setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'erase' ? 'bg-orange-600 text-white' : 'bg-slate-700'}`}>🧽 จิ้มลบ</button>
+            <button disabled={routeBusy || !routeState.keys.length} onClick={() => {setCutMode('restore');setCutSelection([]);setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'restore' ? 'bg-emerald-600 text-white' : 'bg-slate-700'}`}>↩ จิ้มคืน</button>
+          </div>
+          <p className="text-xs mt-2">{cutMode === 'erase' ? 'แตะเส้นที่ไม่ต้องการทีละช่วงได้เลย • แตะซ้ำเพื่อยกเลิกก่อนบันทึก' : 'แตะเส้นสีเทาที่ต้องการเอากลับ • แตะซ้ำเพื่อยกเลิกก่อนบันทึก'}</p>
+          <p className={`text-xs mt-1 ${cutMode === 'erase' ? 'text-orange-300' : 'text-emerald-300'}`}>{cutMode === 'erase' ? 'สีส้ม = จิ้มรอลบ • สีเทา = ลบไปแล้ว' : 'สีเขียว = จิ้มรอคืน • สีเทา = ลบไปแล้ว'}</p>
         </div>
         <div className="absolute bottom-3 left-3 right-3 sm:right-auto sm:w-96 z-[460] rounded-2xl bg-white shadow-2xl border border-slate-200 p-3 max-h-[42%] overflow-y-auto">
-          <strong className="text-sm">เลือก {cutSelection.length} ช่วงเส้น</strong>
-          <p className="text-xs text-slate-500">ตัดออกจากแผนที่และการคำนวณ เก็บพิกัดต้นฉบับไว้</p>
+          <strong className="text-sm">{cutMode === 'erase' ? '🧽 จิ้มรอลบ' : '↩ จิ้มรอคืน'} {cutSelection.length} ช่วง</strong>
+          <p className="text-xs text-slate-500">จิ้มทีละเส้นบนแผนที่ • พิกัดต้นฉบับยังอยู่เสมอ</p>
           <p role="status" className="text-xs font-semibold text-blue-800 my-2">{routeMessage}</p>
           <div className="grid grid-cols-3 gap-2">
-            <button disabled={routeBusy || !cutSelection.length} onClick={() => {setCutSelection([]);setCutAnchor(null);}} className="bg-slate-100 rounded-xl text-xs font-bold">ล้างที่เลือก</button>
-            <button disabled={routeBusy || !routeReady || !cutSelection.length} onClick={() => saveRouteEdges([...new Set([...routeState.keys,...cutSelection])])} className="bg-orange-600 text-white rounded-xl text-xs font-black">บันทึกตัดเส้น</button>
-            <button disabled={routeBusy || !routeReady || !cutSelection.some(k => excludedEdges.has(k))} onClick={() => saveRouteEdges(routeState.keys.filter(k => !selectedEdges.has(k)))} className="bg-blue-100 text-blue-800 rounded-xl text-xs font-bold">คืนที่เลือก</button>
+            <button disabled={routeBusy || !cutSelection.length} onClick={() => {setCutSelection([]);setCutAnchor(null);}} className="bg-slate-100 rounded-xl text-xs font-bold">ล้างที่จิ้ม</button>
+            <button
+              disabled={routeBusy || !routeReady || !cutSelection.length}
+              onClick={() => cutMode === 'erase'
+                ? saveRouteEdges([...new Set([...routeState.keys, ...cutSelection])])
+                : saveRouteEdges(routeState.keys.filter(k => !selectedEdges.has(k)))}
+              className={`${cutMode === 'erase' ? 'bg-orange-600' : 'bg-emerald-600'} text-white rounded-xl text-xs font-black col-span-2`}
+            >{cutMode === 'erase' ? `✅ บันทึกลบ ${cutSelection.length}` : `✅ คืนเส้น ${cutSelection.length}`}</button>
             <button disabled={routeBusy || !routeHistory.length} onClick={() => saveRouteEdges(routeHistory[routeHistory.length-1], true)} className="bg-slate-100 rounded-xl text-xs">↶ ย้อนครั้งก่อน</button>
             <button disabled={routeBusy || !routeReady || !routeState.keys.length} onClick={() => { if(window.confirm('คืนเส้นทั้งหมดของรถและวันนี้?')) saveRouteEdges([]); }} className="bg-slate-100 rounded-xl text-xs">คืนทั้งวัน</button>
             <button disabled={routeBusy} onClick={() => setReloadRoute(n => n+1)} className="bg-slate-100 rounded-xl text-xs">โหลดใหม่</button>
@@ -1571,7 +1590,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => {setMobileToolsOpen(false);setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300);setAutoFollow(false);}} className="bg-slate-900 text-white rounded-xl font-black text-sm">✂ ตัดเส้นเดินรถ</button>
+                <button onClick={() => {setMobileToolsOpen(false);setCutMode('erase');setCutSelection([]);setCutAnchor(null);setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300);setAutoFollow(false);}} className="bg-slate-900 text-white rounded-xl font-black text-sm">✂ ตัดเส้นเดินรถ</button>
                 <button onClick={() => setShowExcluded(v => !v)} className="bg-slate-100 rounded-xl font-bold text-xs">{showExcluded ? 'ซ่อนเส้นที่ตัด' : 'ดูเส้นที่ตัด'}</button>
                 <button
                   onClick={() => {
