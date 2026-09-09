@@ -4637,6 +4637,25 @@ function App() {
           
           const totalDebtAll = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
 
+          // 🆕 เรียง "เจ้าลูกหนี้" ตามงานล่าสุดของแต่ละเจ้า: ใหม่สุดอยู่บนสุด
+          // ไม่เปลี่ยนลำดับ group.jobs ภายใน เพื่อไม่กระทบ logic รับชำระ/ส่วนลดเดิม
+          const debtCustomerNamesNewestFirst = Object.keys(groupedDebts).sort((nameA, nameB) => {
+             const newestTime = (group) => Math.max(
+               0,
+               ...group.jobs.map(job => {
+                 const raw = job.closed_at || job.job_date || job.created_at;
+                 const t = raw ? new Date(raw).getTime() : 0;
+                 return Number.isFinite(t) ? t : 0;
+               })
+             );
+             const diff = newestTime(groupedDebts[nameB]) - newestTime(groupedDebts[nameA]);
+             if (diff !== 0) return diff;
+
+             // ถ้าวัน/เวลาชนกัน ใช้ Job ID ล่าสุดเป็นตัวตัดสิน
+             const newestId = (group) => Math.max(0, ...group.jobs.map(job => Number(job.id) || 0));
+             return newestId(groupedDebts[nameB]) - newestId(groupedDebts[nameA]);
+          });
+
           // ✅ 1. ฟังก์ชันรับชำระแบบเหมาปิดบิล (หักส่วนลดอัตโนมัติจากบิลสุดท้าย)
           const handleBulkPay = async (customerName, customerJobs, totalDebt) => {
              const amountStr = window.prompt(`ยอดหนี้รวมของ [ ${customerName} ] (ค้าง ${customerJobs.length} แปลง)\nคือยอด: ${totalDebt.toLocaleString()} บาท\n\n💰 ลูกค้าจ่ายมาเท่าไหร่? (พิมพ์ยอดเงินสดที่รับจริง):`, totalDebt);
@@ -4776,7 +4795,7 @@ function App() {
                    <p className="font-bold">ไม่มีลูกหนี้ค้างชำระ ยอดเยี่ยมมาก!</p>
                 </div>
               ) : (
-                 Object.keys(groupedDebts).map(customerName => {
+                 debtCustomerNamesNewestFirst.map(customerName => {
                     const group = groupedDebts[customerName];
                     return (
                       <div key={customerName} className="bg-white border border-red-200 rounded-2xl shadow-sm overflow-hidden mb-4">
