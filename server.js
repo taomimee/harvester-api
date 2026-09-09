@@ -303,6 +303,269 @@ const createRoundWageTransaction = async ({ jobId, roundId, workers, wageArea, w
     return data?.id || null;
 };
 
+
+// 🤝 ปรับค่าแรงของ 'งาน/แปลงที่เลือก' ให้ตรงกับไร่ที่ลูกค้ายืนยัน
+// หลักการ: ไม่แตะ measured_area และไม่แตะค่าแรงของ job/แปลงอื่น
+// ถ้างานนี้มีหลายรอบ จะปรับทุก round ของงานนี้ตามสัดส่วนเดิม เพื่อให้ส่วนแบ่งคนงานยังยุติธรรม
+// ตัวอย่าง: แปลงนี้ลงค่าแรง 15 ไร่ ลูกค้ายืนยัน 12 ไร่ => ค่าแรงของแปลงนี้ทั้งก้อนเหลือ 12 ไร่
+const formatAreaForNote = (value) => {
+    const n = Math.max(0, safeRoundNumber(value));
+    return Number(n.toFixed(4)).toString();
+};
+
+const preservePaidMarkers = (note) => ((String(note || '').match(/\[จ่ายแล้ว:[^\]]+\]/g) || []).join(' '));
+
+const roundWageNote = ({ workers, area, rate, roundId, roundType, existingNote = '' }) => {
+    const paid = preservePaidMarkers(existingNote);
+    return `คนทำ: ${workers} (พื้นที่ ${formatAreaForNote(area)} ไร่, เรท ${formatAreaForNote(rate)} บ./ไร่) [รอบงาน:${roundId}] [${roundType === 'FINAL' ? 'รอบปิดงาน' : 'รอบรายวัน'}] [ปรับตามไร่ลูกค้า]${paid ? ` ${paid}` : ''}`;
+};
+
+const parseLegacyWageMeta = (tx) => {
+    const note = String(tx?.note || '');
+    const areaMatch = note.match(/พื้นที่\s*([0-9.]+)\s*ไร่/i);
+    const rateMatch = note.match(/เรท\s*([0-9.]+)\s*บ\.?\s*\/\s*ไร่/i);
+    const workersMatch = note.match(/คนทำ:\s*([^\(\[]+)/i);
+    const rate = Math.max(0, safeRoundNumber(rateMatch?.[1], 60));
+    const fallbackArea = rate > 0 ? Math.max(0, safeRoundNumber(tx?.total_amount) / rate) : 0;
+    return {
+        area: Math.max(0, safeRoundNumber(areaMatch?.[1], fallbackArea)),
+        rate,
+        workers: String(workersMatch?.[1] || '').trim(),
+        paidMarkers: preservePaidMarkers(note)
+    };
+};
+
+const reconcileJobWageArea = async (jobId, targetArea) => {
+    const target = Math.max(0, safeRoundNumber(targetArea));
+
+    const { data: rounds, error: roundsError } = await supabase
+        .from('job_work_rounds')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('work_date', { ascending: true });
+
+    if (roundsError) throw roundsError;
+
+    // ===== ระบบรอบงานใหม่ =====
+    if (rounds && rounds.length > 0) {
+        const rows = rounds.map(r => ({ ...r, old_area: Math.max(0, safeRoundNumber(r.wage_area)), new_area: Math.max(0, safeRoundNumber(r.wage_area)) }));
+        const beforeArea = rows.reduce((sum, r) => sum + r.old_area, 0);
+
+        // ✅ ปรับตรงที่ "งาน/แปลงนี้" เท่านั้น
+        // ถ้ามีหลายรอบใน job เดียวกัน ให้รักษาสัดส่วนเดิมของแต่ละรอบ/คนงาน
+        if (beforeArea > 1e-9) {
+            const ratio = target / beforeArea;
+            rows.forEach(row => {
+                row.new_area = Math.max(0, row.old_area * ratio);
+            });
+
+            // ชดเชยเศษ floating point ให้ยอดรวมสุดท้ายตรง target จริง
+            const current = rows.reduce((sum, r) => sum + r.new_area, 0);
+            const remainder = target - current;
+            if (Math.abs(remainder) > 1e-9) {
+                let idx = -1;
+                for (let i = rows.length - 1; i >= 0; i--) {
+                    if (rows[i].old_area > 0 || String(rows[i].workers || '').trim()) { idx = i; break; }
+                }
+                if (idx >= 0) rows[idx].new_area = Math.max(0, rows[idx].new_area + remainder);
+            }
+        } else if (target > 1e-9) {
+            // งานเก่าบางรายการอาจมี round แต่ wage_area เดิมเป็น 0
+            let idx = -1;
+            for (let i = rows.length - 1; i >= 0; i--) {
+                if (String(rows[i].workers || '').trim()) { idx = i; break; }
+            }
+            if (idx === -1) {
+                const err = new Error(`ต้องเพิ่มค่าแรง ${target.toFixed(2)} ไร่ แต่ไม่พบชื่อคนงานในรอบเดิม`);
+                err.code = 'NO_WORKER_FOR_WAGE_INCREASE';
+                throw err;
+            }
+            rows[idx].new_area = target;
+        } else {
+            rows.forEach(row => { row.new_area = 0; });
+        }
+
+        const changed = [];
+        let amountBefore = 0;
+        let amountAfter = 0;
+        try {
+            for (const row of rows) {
+                const rate = Math.max(0, safeRoundNumber(row.wage_per_rai, 60));
+                amountBefore += row.old_area * rate;
+                amountAfter += row.new_area * rate;
+                if (Math.abs(row.new_area - row.old_area) < 1e-9) continue;
+
+                let txSnapshot = null;
+                let createdTxId = null;
+                let wageTxId = row.wage_transaction_id || null;
+
+                if (wageTxId) {
+                    const { data: txData, error: txFindError } = await supabase
+                        .from('transactions')
+                        .select('id,total_amount,note,status')
+                        .eq('id', wageTxId)
+                        .maybeSingle();
+                    if (txFindError) throw txFindError;
+                    txSnapshot = txData || null;
+                }
+
+                const { error: roundUpdateError } = await supabase
+                    .from('job_work_rounds')
+                    .update({ wage_area: row.new_area })
+                    .eq('id', row.id);
+                if (roundUpdateError) throw roundUpdateError;
+
+                if (wageTxId && txSnapshot) {
+                    const { error: txUpdateError } = await supabase
+                        .from('transactions')
+                        .update({
+                            total_amount: row.new_area * rate,
+                            note: roundWageNote({
+                                workers: String(row.workers || '').trim() || 'ไม่ระบุ',
+                                area: row.new_area,
+                                rate,
+                                roundId: row.id,
+                                roundType: row.round_type,
+                                existingNote: txSnapshot.note
+                            })
+                        })
+                        .eq('id', wageTxId);
+                    if (txUpdateError) throw txUpdateError;
+                } else if (row.new_area > 0) {
+                    createdTxId = await createRoundWageTransaction({
+                        jobId,
+                        roundId: row.id,
+                        workers: String(row.workers || '').trim() || 'ไม่ระบุ',
+                        wageArea: row.new_area,
+                        wagePerRai: rate,
+                        roundDate: row.work_date,
+                        roundType: row.round_type
+                    });
+                    if (createdTxId) {
+                        const { error: linkError } = await supabase
+                            .from('job_work_rounds')
+                            .update({ wage_transaction_id: createdTxId })
+                            .eq('id', row.id);
+                        if (linkError) throw linkError;
+                        wageTxId = createdTxId;
+                    }
+                }
+
+                changed.push({
+                    roundId: row.id,
+                    oldArea: row.old_area,
+                    oldWageTxId: row.wage_transaction_id || null,
+                    txSnapshot,
+                    createdTxId
+                });
+            }
+        } catch (err) {
+            // พยายามย้อนคืนเฉพาะสิ่งที่แก้ใน helper นี้
+            for (const item of [...changed].reverse()) {
+                try { await supabase.from('job_work_rounds').update({ wage_area: item.oldArea, wage_transaction_id: item.oldWageTxId }).eq('id', item.roundId); } catch (_) {}
+                if (item.createdTxId) {
+                    try { await supabase.from('transactions').delete().eq('id', item.createdTxId); } catch (_) {}
+                }
+                if (item.txSnapshot) {
+                    try {
+                        await supabase.from('transactions').update({
+                            total_amount: item.txSnapshot.total_amount,
+                            note: item.txSnapshot.note,
+                            status: item.txSnapshot.status
+                        }).eq('id', item.txSnapshot.id);
+                    } catch (_) {}
+                }
+            }
+            throw err;
+        }
+
+        return {
+            mode: 'ROUNDS',
+            before_area: beforeArea,
+            after_area: target,
+            area_delta: target - beforeArea,
+            amount_before: amountBefore,
+            amount_after: amountAfter,
+            amount_delta: amountAfter - amountBefore,
+            allocation_mode: 'SAME_JOB_PROPORTIONAL'
+        };
+    }
+
+    // ===== งานเก่า: ไม่มี job_work_rounds แต่มีบิลค่าแรงเดิม =====
+    const { data: legacyTxs, error: legacyError } = await supabase
+        .from('transactions')
+        .select('id,total_amount,note,status,created_at')
+        .eq('job_id', jobId)
+        .eq('type', 'OUT')
+        .eq('category', 'ค่าแรง')
+        .order('created_at', { ascending: true });
+
+    if (legacyError) throw legacyError;
+    if (!legacyTxs || legacyTxs.length === 0) {
+        return {
+            mode: 'NO_WAGE', before_area: 0, after_area: 0, area_delta: 0,
+            amount_before: 0, amount_after: 0, amount_delta: 0,
+            warning: 'ไม่พบบิลค่าแรงเดิมของงานนี้ จึงปรับเฉพาะไร่ลูกค้า'
+        };
+    }
+
+    const rows = legacyTxs.map(tx => ({ tx, meta: parseLegacyWageMeta(tx) }));
+    const beforeArea = rows.reduce((sum, r) => sum + r.meta.area, 0);
+
+    // งานระบบเก่า: ปรับเฉพาะบิลค่าแรงที่ผูกกับ job นี้ และรักษาสัดส่วนของบิลเดิม
+    let newAreas;
+    if (beforeArea > 1e-9) {
+        const ratio = target / beforeArea;
+        newAreas = rows.map(r => Math.max(0, r.meta.area * ratio));
+        const current = newAreas.reduce((sum, area) => sum + area, 0);
+        const remainder = target - current;
+        if (newAreas.length && Math.abs(remainder) > 1e-9) {
+            newAreas[newAreas.length - 1] = Math.max(0, newAreas[newAreas.length - 1] + remainder);
+        }
+    } else {
+        newAreas = rows.map(() => 0);
+        if (target > 1e-9 && newAreas.length) newAreas[newAreas.length - 1] = target;
+    }
+
+    let amountBefore = 0;
+    let amountAfter = 0;
+    const snapshots = [];
+    try {
+        for (let i = 0; i < rows.length; i++) {
+            const { tx, meta } = rows[i];
+            const newArea = newAreas[i];
+            amountBefore += meta.area * meta.rate;
+            amountAfter += newArea * meta.rate;
+            if (Math.abs(newArea - meta.area) < 1e-9) continue;
+
+            snapshots.push({ ...tx });
+            const paid = meta.paidMarkers ? ` ${meta.paidMarkers}` : '';
+            const workerText = meta.workers || 'ไม่ระบุ';
+            const note = `คนทำ: ${workerText} (พื้นที่ ${formatAreaForNote(newArea)} ไร่, เรท ${formatAreaForNote(meta.rate)} บ./ไร่) [ปรับตามไร่ลูกค้า]${paid}`;
+            const { error: updateError } = await supabase
+                .from('transactions')
+                .update({ total_amount: newArea * meta.rate, note })
+                .eq('id', tx.id);
+            if (updateError) throw updateError;
+        }
+    } catch (err) {
+        for (const tx of snapshots) {
+            try { await supabase.from('transactions').update({ total_amount: tx.total_amount, note: tx.note, status: tx.status }).eq('id', tx.id); } catch (_) {}
+        }
+        throw err;
+    }
+
+    return {
+        mode: 'LEGACY',
+        before_area: beforeArea,
+        after_area: target,
+        area_delta: target - beforeArea,
+        amount_before: amountBefore,
+        amount_after: amountAfter,
+        amount_delta: amountAfter - amountBefore
+    };
+};
+
 // 🌾 ปิด "รอบวันนี้" แต่ยังไม่ปิดงานลูกค้า
 // measured_area = วันนี้วัดจริงกี่ไร่
 // ค่าแรงรอบกลางทางจะล็อกตาม measured_area วันนี้ทันที
@@ -452,7 +715,8 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
 
         const measuredAreaTotal = priorMeasuredArea + todayMeasured;
         const finalWageArea = Math.max(0, billingArea - priorWageArea);
-        const wageOverageArea = Math.max(0, priorWageArea - billingArea);
+        // ถ้ายอดลูกค้าต่ำกว่าค่าแรงที่ล็อกก่อนหน้า หลังสร้างรอบสุดท้ายจะปรับค่าแรงย้อนหลังให้ตรงยอดลูกค้า
+        const wageOverageAreaBeforeAdjust = Math.max(0, priorWageArea - billingArea);
 
         if (finalWageArea > 0 && !workerText) {
             return res.status(400).json({ error: `ยังเหลือค่าแรง ${finalWageArea.toFixed(2)} ไร่ กรุณาระบุคนที่จะรับค่าแรงรอบสุดท้าย` });
@@ -495,6 +759,10 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
             if (linkError) throw linkError;
         }
 
+        // ✅ กฎใหม่: ไร่ค่าแรงสุดท้ายต้องตรงกับไร่ที่ลูกค้ายืนยัน
+        // วัดจริงยังเก็บเท่าเดิม แต่ wage_area / บิลค่าแรงจะถูกปรับให้รวม = billingArea
+        const wageReconciliation = await reconcileJobWageArea(jobId, billingArea);
+
         const pricePerRai = Math.max(0, Number(job.price_per_rai) || 0);
         const totalPrice = billingArea * pricePerRai;
 
@@ -523,9 +791,11 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
                 measured_area_total: measuredAreaTotal,
                 prior_wage_area: priorWageArea,
                 final_wage_area: finalWageArea,
-                wage_area_total: priorWageArea + finalWageArea,
+                wage_area_total: wageReconciliation.after_area,
                 billing_area: billingArea,
-                wage_overage_area: wageOverageArea,
+                wage_overage_area_before_adjust: wageOverageAreaBeforeAdjust,
+                wage_adjustment_area: wageReconciliation.area_delta,
+                wage_adjustment_amount: wageReconciliation.amount_delta,
                 total_price: totalPrice
             }
         });
@@ -538,6 +808,102 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         }
         console.error('Finalize Job Error:', err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+
+// 📐 แก้ "ไร่ที่ลูกค้ายืนยัน" หลังปิดงาน แต่ก่อนรับเงินเสร็จ
+// - measured_area / area_size ไม่แก้ทับ: เก็บเป็นหลักฐานวัดจริง/ข้อมูลเดิม
+// - billing_area + total_price ปรับตามลูกค้า
+// - ค่าแรงทั้งงานถูก reconcile ให้จำนวนไร่รวมตรง billing_area
+// - ส่วนลดเป็น "จำนวนเงิน" ยังเป็นระบบเดิมและไม่กระทบค่าแรง
+app.patch('/api/jobs/:id/billing-area', async (req, res) => {
+    const jobId = Number(req.params.id);
+    const billingArea = safeRoundNumber(req.body?.billing_area, NaN);
+
+    if (!Number.isFinite(jobId) || jobId <= 0) return res.status(400).json({ error: 'job_id ไม่ถูกต้อง' });
+    if (!Number.isFinite(billingArea) || billingArea < 0) return res.status(400).json({ error: 'กรุณาระบุไร่ที่ลูกค้ายืนยันให้ถูกต้อง' });
+
+    let wageResult = null;
+    let oldJobSnapshot = null;
+    try {
+        const { data: job, error: jobError } = await supabase
+            .from('jobs')
+            .select('id,status,payment_status,area_size,billing_area,price_per_rai,total_price')
+            .eq('id', jobId)
+            .single();
+
+        if (jobError) throw jobError;
+        if (!job) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
+        if (job.status !== 'DONE') return res.status(400).json({ error: 'แก้ไร่ลูกค้าได้หลังปิดงานแล้วเท่านั้น' });
+        if (job.payment_status === 'PAID') return res.status(400).json({ error: 'งานนี้รับเงินและปิดบิลแล้ว กรุณาอย่าแก้ไร่ย้อนหลังจากหน้าลูกหนี้' });
+
+        const oldBillingArea = Math.max(0, safeRoundNumber(job.billing_area ?? job.area_size, 0));
+        const rate = Math.max(0, safeRoundNumber(job.price_per_rai, 0));
+        const oldInvoice = oldBillingArea * rate;
+        const currentDebt = Math.max(0, safeRoundNumber(job.total_price, 0));
+        const alreadyPaid = job.payment_status === 'DEPOSIT'
+            ? Math.max(0, oldInvoice - currentDebt)
+            : 0;
+
+        const newInvoice = billingArea * rate;
+        const newDebt = Math.max(0, newInvoice - alreadyPaid);
+        const newPaymentStatus = alreadyPaid > 0
+            ? (newDebt <= 0.000001 ? 'PAID' : 'DEPOSIT')
+            : (job.payment_status || 'UNPAID');
+
+        // ปรับค่าแรงก่อน ถ้าล้มเหลวจะยังไม่แตะยอดลูกค้า
+        wageResult = await reconcileJobWageArea(jobId, billingArea);
+
+        oldJobSnapshot = {
+            billing_area: job.billing_area,
+            total_price: job.total_price,
+            payment_status: job.payment_status
+        };
+
+        const { data: updatedJob, error: updateError } = await supabase
+            .from('jobs')
+            .update({
+                billing_area: billingArea,
+                total_price: newDebt,
+                payment_status: newPaymentStatus
+            })
+            .eq('id', jobId)
+            .select()
+            .single();
+
+        if (updateError) {
+            // ค่าแรงถูกปรับแล้ว แต่ยอดลูกค้าอัปเดตไม่ได้: พยายามย้อนค่าแรงกลับ
+            try { await reconcileJobWageArea(jobId, wageResult.before_area); } catch (_) {}
+            throw updateError;
+        }
+
+        res.json({
+            success: true,
+            message: 'ปรับไร่ลูกค้าและค่าแรงเรียบร้อย',
+            job: updatedJob,
+            summary: {
+                measured_or_original_area: Math.max(0, safeRoundNumber(job.area_size, 0)),
+                old_billing_area: oldBillingArea,
+                new_billing_area: billingArea,
+                billing_area_delta: billingArea - oldBillingArea,
+                old_invoice: oldInvoice,
+                new_invoice: newInvoice,
+                already_paid: alreadyPaid,
+                new_debt: newDebt,
+                wage_area_before: wageResult.before_area,
+                wage_area_after: wageResult.after_area,
+                wage_area_delta: wageResult.area_delta,
+                wage_amount_before: wageResult.amount_before,
+                wage_amount_after: wageResult.amount_after,
+                wage_amount_delta: wageResult.amount_delta,
+                wage_mode: wageResult.mode,
+                wage_warning: wageResult.warning || null
+            }
+        });
+    } catch (err) {
+        console.error('Adjust Billing Area Error:', err.message);
+        res.status(500).json({ error: err.message, code: err.code || 'BILLING_AREA_ADJUST_FAILED' });
     }
 });
 

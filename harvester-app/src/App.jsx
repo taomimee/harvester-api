@@ -1785,6 +1785,12 @@ function App() {
     note: ''
   });
   const [isSavingWorkRound, setIsSavingWorkRound] = useState(false);
+
+  // 📐 แก้ไร่ที่ลูกค้ายืนยันหลังปิดงาน — กระทบยอดลูกค้า + ค่าแรง แต่ไม่แตะวัดจริง
+  const [billingAdjustModal, setBillingAdjustModal] = useState(null);
+  const [billingAdjustArea, setBillingAdjustArea] = useState('');
+  const [isSavingBillingAdjust, setIsSavingBillingAdjust] = useState(false);
+
   // 💰 State สำหรับหน้าสรุปค่าแรง
   const [showWageSummary, setShowWageSummary] = useState(false);
   const [wageTab, setWageTab] = useState('UNPAID'); // 👈 เพิ่มบรรทัดนี้ สำหรับสลับแท็บค่าแรง
@@ -2682,9 +2688,10 @@ function App() {
           `🤝 ตกลงลูกค้า: ${Number(s.billing_area || billingArea).toFixed(2)} ไร่\n` +
           `👷 ลงค่าแรงก่อนหน้า: ${Number(s.prior_wage_area || 0).toFixed(2)} ไร่\n` +
           `👷 เพิ่มค่าแรงรอบนี้: ${Number(s.final_wage_area || 0).toFixed(2)} ไร่\n` +
+          `👷 ค่าแรงสุทธิทั้งงาน: ${Number(s.wage_area_total || 0).toFixed(2)} ไร่\n` +
           `💰 ยอดลูกค้า: ${Number(s.total_price || 0).toLocaleString()} บาท` +
-          (Number(s.wage_overage_area || 0) > 0
-            ? `\n\n⚠️ ค่าแรงที่ล็อกไว้ก่อนหน้ามากกว่ายอดตกลง ${Number(s.wage_overage_area).toFixed(2)} ไร่\nส่วนต่างถือเป็นต้นทุนกิจการ ไม่ดึงเงินลูกน้องคืน`
+          (Math.abs(Number(s.wage_adjustment_area || 0)) > 0.001
+            ? `\n\n📐 ระบบปรับค่าแรงตามไร่ลูกค้า ${Number(s.wage_adjustment_area) > 0 ? '+' : ''}${Number(s.wage_adjustment_area).toFixed(2)} ไร่`
             : '')
         );
       }
@@ -2698,6 +2705,67 @@ function App() {
       alert(`❌ บันทึกรอบงานไม่สำเร็จ\n${err.message}`);
     } finally {
       setIsSavingWorkRound(false);
+    }
+  };
+
+  const openBillingAreaAdjust = (job) => {
+    if (!job) return;
+    const currentArea = Number((job.billing_area ?? job.area_size) || 0);
+    setBillingAdjustArea(String(Number(currentArea.toFixed(2))));
+    setBillingAdjustModal(job);
+  };
+
+  const submitBillingAreaAdjust = async () => {
+    if (!billingAdjustModal || isSavingBillingAdjust) return;
+    const newArea = Number(billingAdjustArea);
+    if (!Number.isFinite(newArea) || newArea < 0) return alert('กรุณาระบุจำนวนไร่ที่ลูกค้ายืนยันให้ถูกต้องครับ');
+
+    const oldArea = Number((billingAdjustModal.billing_area ?? billingAdjustModal.area_size) || 0);
+    if (Math.abs(newArea - oldArea) < 0.000001) return alert('จำนวนไร่ยังเท่าเดิมครับ');
+
+    const direction = newArea < oldArea ? 'ลด' : 'เพิ่ม';
+    const confirmText =
+      `📐 ยืนยัน${direction}ไร่ตามที่ลูกค้าบอก?\n\n` +
+      `เดิมคิดเงิน: ${oldArea.toFixed(2)} ไร่\n` +
+      `ลูกค้ายืนยันใหม่: ${newArea.toFixed(2)} ไร่\n` +
+      `ต่างกัน: ${(newArea - oldArea > 0 ? '+' : '')}${(newArea - oldArea).toFixed(2)} ไร่\n\n` +
+      `✅ ยอดเงินลูกค้าจะคำนวณใหม่\n` +
+      `✅ ค่าแรงของแปลง/บิลนี้จะปรับตรงตามไร่ใหม่ (ไม่แตะแปลงอื่น)\n` +
+      `🔒 พื้นที่ที่วัดจริงจะไม่ถูกแก้ทับ\n` +
+      `💸 ส่วนลดเป็นจำนวนเงินยังแยกเหมือนเดิม`;
+    if (!window.confirm(confirmText)) return;
+
+    setIsSavingBillingAdjust(true);
+    try {
+      const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${billingAdjustModal.id}/billing-area`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ billing_area: newArea })
+      });
+      let result = {};
+      try { result = await res.json(); } catch (_) {}
+      if (!res.ok) throw new Error(result.error || `HTTP ${res.status}`);
+
+      const s = result.summary || {};
+      alert(
+        `✅ ปรับไร่ลูกค้าเรียบร้อย\n\n` +
+        `📐 วัด/ข้อมูลเดิม: ${Number(s.measured_or_original_area || 0).toFixed(2)} ไร่ (ไม่แก้)\n` +
+        `🤝 ไร่คิดเงิน: ${Number(s.old_billing_area || oldArea).toFixed(2)} → ${Number(s.new_billing_area || newArea).toFixed(2)} ไร่\n` +
+        `👷 ไร่ค่าแรง: ${Number(s.wage_area_before || 0).toFixed(2)} → ${Number(s.wage_area_after || 0).toFixed(2)} ไร่\n` +
+        `💰 ค่าแรงเปลี่ยน: ${Number(s.wage_amount_delta || 0) >= 0 ? '+' : ''}${Number(s.wage_amount_delta || 0).toLocaleString()} บาท\n` +
+        `💵 ยอดค้างใหม่: ${Number(s.new_debt || 0).toLocaleString()} บาท` +
+        (s.wage_warning ? `\n\n⚠️ ${s.wage_warning}` : '')
+      );
+
+      setBillingAdjustModal(null);
+      await fetchJobs();
+      await refreshWageLedger();
+      await fetchDashboard();
+    } catch (err) {
+      console.error(err);
+      alert(`❌ ปรับไร่ลูกค้าไม่สำเร็จ\n${err.message}`);
+    } finally {
+      setIsSavingBillingAdjust(false);
     }
   };
 
@@ -4356,7 +4424,7 @@ function App() {
                      const currentJobDebt = Number(job.total_price);
                      
                      // คำนวณเผื่อบิลนี้เคยมีการจ่ายชำระบางส่วนมาก่อน
-                     const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                     const orig = Number((job.billing_area ?? job.area_size) || 0) * Number(job.price_per_rai || 0);
                      const pastPaid = orig > currentJobDebt ? orig - currentJobDebt : 0;
                      
                      let discountForThisJob = 0;
@@ -4414,7 +4482,7 @@ function App() {
                      if (remainingDeposit <= 0) break; // เงินชำระบางส่วนหมดแล้ว หยุดลูป
 
                      const currentJobDebt = Number(job.total_price);
-                     const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                     const orig = Number((job.billing_area ?? job.area_size) || 0) * Number(job.price_per_rai || 0);
                      const pastPaid = orig > currentJobDebt ? orig - currentJobDebt : 0;
                      
                      let newStatus = 'UNPAID';
@@ -4499,7 +4567,7 @@ function App() {
                          {/* รายการบิลย่อย */}
                          <div className="p-3 space-y-2 bg-gray-50/50">
                             {group.jobs.map(job => {
-                               const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                               const orig = Number((job.billing_area ?? job.area_size) || 0) * Number(job.price_per_rai || 0);
                                const hasDiscount = orig > Number(job.total_price);
                                const isDeposit = job.payment_status === 'DEPOSIT';
 
@@ -4540,6 +4608,15 @@ function App() {
                                         📅 {new Date(job.job_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}
                                       </p>
                                       <p className="text-xs font-bold text-gray-800">📐 {Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่ (เรท {job.price_per_rai})</p>
+                                      {userRole === 'BOSS' && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => { e.stopPropagation(); openBillingAreaAdjust(job); }}
+                                          className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-black hover:bg-blue-100"
+                                        >
+                                          📐 แก้ไร่ตามลูกค้า
+                                        </button>
+                                      )}
                                     </div>
                                     <div className="text-right">
                                       {hasDiscount && <span className="block text-[10px] text-gray-400 line-through mb-0.5">{orig.toLocaleString()} ฿</span>}
@@ -4596,7 +4673,7 @@ function App() {
                   .slice(0, 50)
                   .map(job => {
                     const isDeposit = job.payment_status === 'DEPOSIT';
-                    const orig = Number(job.area_size || 0) * Number(job.price_per_rai || 0);
+                    const orig = Number((job.billing_area ?? job.area_size) || 0) * Number(job.price_per_rai || 0);
                     const trueTotal = orig > Number(job.total_price) ? orig : (Number(job.total_price) || 0);
                     
                     // 👇 บิลที่ปิดแล้ว จะดึงยอดเงินสดที่ได้รับจริงมาโชว์ตรงๆ
@@ -5004,6 +5081,84 @@ function App() {
         )}
 
         {/* 🌾 Popup ระบบรอบทำงาน: จบวันนี้ / จบงานทั้งหมด */}
+        {/* 📐 Popup แก้ไร่ที่ลูกค้ายืนยันหลังปิดงาน */}
+        {billingAdjustModal && (() => {
+          const job = billingAdjustModal;
+          const oldArea = Number((job.billing_area ?? job.area_size) || 0);
+          const newArea = Number(billingAdjustArea);
+          const valid = Number.isFinite(newArea) && newArea >= 0;
+          const diff = valid ? newArea - oldArea : 0;
+          const rate = Number(job.price_per_rai || 0);
+          const measured = Number(job.work_summary?.measured_area_total || job.area_size || 0);
+          const wageNow = Number(job.work_summary?.wage_area_total || oldArea || 0);
+          const newTotal = valid ? newArea * rate : 0;
+
+          return (
+            <div className="fixed inset-0 bg-black/65 z-[360] flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+                <div className="p-5 border-b bg-gradient-to-r from-blue-50 to-cyan-50 flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-black text-blue-900">📐 แก้ไร่ตามที่ลูกค้ายืนยัน</h2>
+                    <p className="text-sm font-bold text-gray-700 mt-1">{job.customers?.name || 'ไม่ระบุชื่อ'} • {job.crop_type || 'งานเกี่ยว'}</p>
+                  </div>
+                  <button disabled={isSavingBillingAdjust} onClick={() => setBillingAdjustModal(null)} className="w-9 h-9 rounded-full bg-white border border-gray-200 text-gray-500 font-bold disabled:opacity-50">✕</button>
+                </div>
+
+                <div className="p-4 overflow-y-auto space-y-3">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-gray-50 border rounded-xl p-3">
+                      <p className="text-gray-500 font-bold">📐 วัด/ข้อมูลเดิม</p>
+                      <p className="text-lg font-black text-gray-800 mt-1">{measured.toFixed(2)} ไร่</p>
+                      <p className="text-[10px] text-gray-400">เก็บไว้ ไม่แก้ทับ</p>
+                    </div>
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                      <p className="text-orange-700 font-bold">👷 ค่าแรงตอนนี้</p>
+                      <p className="text-lg font-black text-orange-900 mt-1">{wageNow.toFixed(2)} ไร่</p>
+                      <p className="text-[10px] text-orange-600">ปรับเฉพาะแปลง/บิลนี้</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 border-2 border-blue-300 rounded-2xl p-4">
+                    <label className="block text-blue-900 font-black text-sm mb-2">🤝 ลูกค้ายืนยันว่าจริง ๆ กี่ไร่?</label>
+                    <input
+                      autoFocus
+                      type="number" min="0" step="0.01" inputMode="decimal"
+                      className="w-full bg-white border-2 border-blue-300 rounded-xl p-3 text-2xl font-black text-blue-900 outline-none focus:ring-2 focus:ring-blue-400"
+                      value={billingAdjustArea}
+                      onChange={e => setBillingAdjustArea(e.target.value)}
+                    />
+                    <p className="text-[11px] text-blue-700 mt-2 font-bold">เดิมคิดเงินไว้ {oldArea.toFixed(2)} ไร่</p>
+                  </div>
+
+                  {valid && (
+                    <div className="space-y-2">
+                      <div className={`rounded-xl border p-3 ${diff < -0.001 ? 'bg-amber-50 border-amber-200' : diff > 0.001 ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                        <div className="flex justify-between text-sm"><span className="font-bold text-gray-600">ต่างจากเดิม</span><b className={diff < 0 ? 'text-amber-700' : diff > 0 ? 'text-green-700' : 'text-gray-700'}>{diff > 0 ? '+' : ''}{diff.toFixed(2)} ไร่</b></div>
+                        <div className="flex justify-between text-sm mt-1"><span className="font-bold text-gray-600">👷 ค่าแรงหลังปรับ</span><b className="text-orange-800">{newArea.toFixed(2)} ไร่</b></div>
+                        <div className="flex justify-between text-sm mt-1"><span className="font-bold text-gray-600">💵 ยอดตามไร่ใหม่</span><b className="text-green-800">{newTotal.toLocaleString()} บาท</b></div>
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] leading-relaxed text-slate-700 font-semibold">
+                        ✅ เปลี่ยนเฉพาะ <b>ไร่คิดเงิน + ค่าแรงของแปลง/บิลนี้</b><br/>
+                        🧩 ถ้ามีหลายรอบในแปลงเดียวกัน ระบบปรับตามสัดส่วนเดิมของคนงาน<br/>
+                        🔒 วัดจริง/ประวัติรอบทำงานยังอยู่เหมือนเดิม<br/>
+                        💸 ถ้าลูกค้าต่อเป็น “ลดเงิน” ให้ใช้ระบบส่วนลดเดิม — ไม่แตะค่าแรง
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3 pt-2">
+                    <button disabled={isSavingBillingAdjust} onClick={() => setBillingAdjustModal(null)} className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-xl font-bold disabled:opacity-50">ยกเลิก</button>
+                    <button disabled={isSavingBillingAdjust || !valid || Math.abs(diff) < 0.000001} onClick={submitBillingAreaAdjust} className="flex-[1.4] bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-black shadow-lg disabled:opacity-40">
+                      {isSavingBillingAdjust ? '⏳ กำลังปรับ...' : '✅ บันทึกไร่ใหม่'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {workRoundModal && (() => {
           const job = workRoundModal.job;
           const isFinal = workRoundModal.mode === 'FINAL';
@@ -5090,7 +5245,7 @@ function App() {
                           <div className="flex justify-between"><span className="text-gray-600">💰 ค่าแรงรอบนี้</span><b>{(finalWageArea * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท</b></div>
                           {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ต่อรองลดจากวัดจริง {customerDifference.toFixed(2)} ไร่</p>}
                           {customerDifference < -0.001 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {Math.abs(customerDifference).toFixed(2)} ไร่ กรุณาตรวจอีกครั้ง</p>}
-                          {wageOverageArea > 0 && <p className="bg-red-100 text-red-800 rounded-lg p-2 font-black">⚠️ ค่าแรงที่ล็อกไปแล้วมากกว่ายอดลูกค้า {wageOverageArea.toFixed(2)} ไร่ ระบบจะไม่ติดลบและไม่ดึงเงินลูกน้องคืน ส่วนต่างเป็นต้นทุนกิจการ</p>}
+                          {wageOverageArea > 0 && <p className="bg-blue-100 text-blue-800 rounded-lg p-2 font-black">📐 ค่าแรงที่ล็อกไปแล้วมากกว่ายอดลูกค้า {wageOverageArea.toFixed(2)} ไร่ ตอนปิดงานระบบจะปรับค่าแรงย้อนหลังให้ยอดไร่ค่าแรงรวมตรงกับไร่ที่ลูกค้ายืนยัน</p>}
                           <div className="flex justify-between bg-white rounded-lg p-2 border border-green-200"><span className="text-gray-600">ยอดลูกค้าประมาณ</span><b className="text-green-800">{(billingArea * (Number(job.price_per_rai) || 0)).toLocaleString()} บาท</b></div>
                         </div>
                       )}
