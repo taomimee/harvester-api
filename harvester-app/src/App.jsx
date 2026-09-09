@@ -2861,9 +2861,9 @@ function App() {
       if (!workers) return alert('กรุณาระบุคนที่ลงแปลงวันนี้ครับ');
     } else {
       if (!Number.isFinite(billingArea) || billingArea < 0) return alert('กรุณาระบุจำนวนไร่ที่ตกลงคิดเงินกับลูกค้าครับ');
-      const finalWageArea = Math.max(0, billingArea - currentSummary.wageArea);
-      if (finalWageArea > 0 && !workers) {
-        return alert(`ยังเหลือค่าแรง ${finalWageArea.toFixed(2)} ไร่ กรุณาระบุคนที่จะรับค่าแรงรอบสุดท้ายครับ`);
+      if (measuredToday > 0 && !workers) return alert('วันนี้มีพื้นที่เกี่ยวเพิ่ม กรุณาระบุคนที่รับค่าแรงรอบสุดท้ายครับ');
+      if (currentSummary.roundCount === 0 && measuredToday <= 0 && billingArea > 0 && !workers) {
+        return alert('ยังไม่มีรอบงานเดิม กรุณาระบุคนที่จะรับค่าแรงก่อนปิดงานครับ');
       }
     }
 
@@ -2904,10 +2904,11 @@ function App() {
         const totalMeasured = currentSummary.measuredArea + measuredToday;
         alert(
           `✅ ปิดรอบวันนี้แล้ว\n\n` +
-          `วัดจริงวันนี้: ${measuredToday.toFixed(2)} ไร่\n` +
-          `วัดจริงสะสม: ${totalMeasured.toFixed(2)} ไร่\n` +
-          `ลงค่าแรงรอบนี้: ${measuredToday.toFixed(2)} ไร่\n` +
-          `ค่าแรง: ${(measuredToday * wagePerRai).toLocaleString()} บาท\n\n` +
+          `📐 วัดจริงวันนี้: ${measuredToday.toFixed(2)} ไร่\n` +
+          `📐 วัดจริงสะสม: ${totalMeasured.toFixed(2)} ไร่\n` +
+          `👷 จำคนรับค่าแรง: ${workers}\n` +
+          `💵 เรทที่จำไว้: ${wagePerRai.toLocaleString()} บาท/ไร่\n\n` +
+          `📝 ยังไม่ลงสมุดค่าแรง — จะลงพร้อมกันตอน 🏁 จบงานทั้งหมด\n` +
           `${workRoundData.nextWorkDate ? '📅 บันทึกวันนัดเกี่ยวต่อแล้ว' : '⏸ รอลูกค้านัดวันเกี่ยวต่อ'}`
         );
       } else {
@@ -2915,20 +2916,17 @@ function App() {
         alert(
           `🏁 ปิดงานทั้งหมดเรียบร้อย\n\n` +
           `📐 วัดจริงทั้งหมด: ${Number(s.measured_area_total || 0).toFixed(2)} ไร่\n` +
-          `🤝 ตกลงลูกค้า: ${Number(s.billing_area || billingArea).toFixed(2)} ไร่\n` +
-          `👷 ลงค่าแรงก่อนหน้า: ${Number(s.prior_wage_area || 0).toFixed(2)} ไร่\n` +
-          `👷 เพิ่มค่าแรงรอบนี้: ${Number(s.final_wage_area || 0).toFixed(2)} ไร่\n` +
-          `👷 ค่าแรงสุทธิทั้งงาน: ${Number(s.wage_area_total || 0).toFixed(2)} ไร่\n` +
-          `💰 ยอดลูกค้า: ${Number(s.total_price || 0).toLocaleString()} บาท` +
-          (Math.abs(Number(s.wage_adjustment_area || 0)) > 0.001
-            ? `\n\n📐 ระบบปรับค่าแรงตามไร่ลูกค้า ${Number(s.wage_adjustment_area) > 0 ? '+' : ''}${Number(s.wage_adjustment_area).toFixed(2)} ไร่`
-            : '')
+          `🤝 ลูกค้ารับคิดเงิน: ${Number(s.billing_area ?? billingArea).toFixed(2)} ไร่\n` +
+          `👷 แบ่งเข้าค่าแรงรวม: ${Number(s.wage_area_total || 0).toFixed(2)} ไร่\n` +
+          `💰 ลงสมุดค่าแรง: ${Number(s.wage_amount_total || 0).toLocaleString()} บาท\n` +
+          `📚 จำนวนรอบค่าแรง: ${Number(s.wage_rounds_posted || 0)} รอบ\n` +
+          `💵 ยอดลูกค้า: ${Number(s.total_price || 0).toLocaleString()} บาท`
         );
       }
 
       setWorkRoundModal(null);
       await fetchJobs();
-      await refreshWageLedger();
+      if (!isPartial) await refreshWageLedger();
       await fetchDashboard();
     } catch (err) {
       console.error(err);
@@ -5439,10 +5437,43 @@ function App() {
           const billingRaw = String(workRoundData.billingArea ?? '').trim();
           const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
           const validBilling = Number.isFinite(billingArea) && billingArea >= 0;
-          const finalWageArea = isFinal && validBilling ? Math.max(0, billingArea - ws.wageArea) : 0;
-          const wageOverageArea = isFinal && validBilling ? Math.max(0, ws.wageArea - billingArea) : 0;
           const customerDifference = isFinal && validBilling ? measuredTotal - billingArea : 0;
           const workersSelected = String(workRoundData.workers || '').split(',').map(v => v.trim()).filter(Boolean);
+
+          // 🧮 Preview การแบ่ง "ไร่ที่ลูกค้ารับ" กลับเข้าค่าแรงแต่ละรอบตามพื้นที่วัดจริง
+          const previewRounds = [
+            ...ws.rounds.map((r, idx) => ({
+              key: r.id || `old-${idx}`,
+              label: `รอบ ${idx + 1}`,
+              measured: Math.max(0, Number(r.measured_area) || 0),
+              workers: String(r.workers || '').trim() || 'ไม่ระบุ',
+              rate: Math.max(0, Number(r.wage_per_rai) || 60)
+            })),
+            ...(isFinal && todayMeasured > 0 ? [{
+              key: 'today-final',
+              label: `รอบ ${ws.rounds.length + 1} (วันนี้)`,
+              measured: todayMeasured,
+              workers: String(workRoundData.workers || '').trim() || 'ยังไม่เลือก',
+              rate: Math.max(0, Number(workRoundData.wagePerRai) || 60)
+            }] : [])
+          ];
+          const previewBasis = previewRounds.reduce((sum, r) => sum + r.measured, 0);
+          const wagePreview = isFinal && validBilling ? previewRounds.map(r => ({
+            ...r,
+            wageArea: previewBasis > 0 ? billingArea * (r.measured / previewBasis) : 0
+          })) : [];
+          if (isFinal && validBilling && billingArea > 0 && previewBasis <= 0 && workersSelected.length) {
+            wagePreview.push({
+              key: 'fallback-final', label: 'รอบปิดงาน', measured: 0,
+              workers: workersSelected.join(', '),
+              rate: Math.max(0, Number(workRoundData.wagePerRai) || 60), wageArea: billingArea
+            });
+          }
+          if (wagePreview.length) {
+            const allocated = wagePreview.reduce((sum, r) => sum + r.wageArea, 0);
+            wagePreview[wagePreview.length - 1].wageArea += billingArea - allocated;
+          }
+          const previewWageAmount = wagePreview.reduce((sum, r) => sum + (r.wageArea * r.rate), 0);
 
           return (
             <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-3 z-[300]">
@@ -5470,8 +5501,8 @@ function App() {
                       <p className="font-black text-blue-900">{ws.measuredArea.toFixed(2)} ไร่</p>
                     </div>
                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 text-center">
-                      <p className="text-[10px] text-orange-700 font-bold">ค่าแรงล็อกแล้ว</p>
-                      <p className="font-black text-orange-900">{ws.wageArea.toFixed(2)} ไร่</p>
+                      <p className="text-[10px] text-orange-700 font-bold">จำคนไว้แล้ว</p>
+                      <p className="font-black text-orange-900">{ws.roundCount} รอบ</p>
                     </div>
                   </div>
 
@@ -5496,7 +5527,7 @@ function App() {
                           className="flex-1 min-w-0 border border-green-300 p-3 rounded-xl bg-white text-green-900 font-black text-lg outline-none focus:ring-2 focus:ring-green-400"
                           value={workRoundData.billingArea}
                           onChange={(e) => setWorkRoundData(prev => ({ ...prev, billingArea: e.target.value }))}
-                          placeholder="เช่น 35"
+                          placeholder="เช่น 42"
                         />
                         <button
                           type="button"
@@ -5508,15 +5539,35 @@ function App() {
                       </div>
 
                       {validBilling && (
-                        <div className="mt-3 space-y-1.5 text-xs">
+                        <div className="mt-3 space-y-2 text-xs">
                           <div className="flex justify-between"><span className="text-gray-600">📐 วัดจริงทั้งหมด</span><b>{measuredTotal.toFixed(2)} ไร่</b></div>
                           <div className="flex justify-between"><span className="text-gray-600">🤝 คิดเงินลูกค้า</span><b className="text-green-800">{billingArea.toFixed(2)} ไร่</b></div>
-                          <div className="flex justify-between"><span className="text-gray-600">👷 ค่าแรงที่ล็อกก่อนหน้า</span><b>{ws.wageArea.toFixed(2)} ไร่</b></div>
-                          <div className="flex justify-between border-t border-green-200 pt-1.5"><span className="font-black text-green-900">👷 เพิ่มค่าแรงรอบนี้</span><b className="text-lg text-green-800">{finalWageArea.toFixed(2)} ไร่</b></div>
-                          <div className="flex justify-between"><span className="text-gray-600">💰 ค่าแรงรอบนี้</span><b>{(finalWageArea * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท</b></div>
-                          {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ต่อรองลดจากวัดจริง {customerDifference.toFixed(2)} ไร่</p>}
+                          <div className="flex justify-between border-t border-green-200 pt-2"><span className="font-black text-green-900">👷 ไร่ค่าแรงรวมที่จะลงสมุด</span><b className="text-lg text-orange-700">{billingArea.toFixed(2)} ไร่</b></div>
+                          <p className="bg-white border border-green-200 rounded-lg p-2 font-bold text-green-900">
+                            ✅ ระบบจะเอา {billingArea.toFixed(2)} ไร่ แบ่งกลับให้คนงานตามสัดส่วนพื้นที่วัดจริงของแต่ละรอบ แล้วค่อยลงสมุดค่าแรงทั้งหมดครั้งเดียว
+                          </p>
+
+                          {wagePreview.length > 0 && (
+                            <div className="bg-white border border-orange-200 rounded-xl p-2.5 space-y-2">
+                              <p className="font-black text-orange-900">👷 ตัวอย่างแบ่งเข้าค่าแรง</p>
+                              {wagePreview.map((r) => (
+                                <div key={r.key} className="flex items-start justify-between gap-3 border-b last:border-b-0 border-orange-100 pb-1.5 last:pb-0">
+                                  <div className="min-w-0">
+                                    <p className="font-bold text-gray-800">{r.label} • {r.workers}</p>
+                                    <p className="text-[10px] text-gray-500">วัดจริง {r.measured.toFixed(2)} ไร่ • เรท {r.rate.toLocaleString()} บ./ไร่</p>
+                                  </div>
+                                  <b className="text-orange-700 whitespace-nowrap">{r.wageArea.toFixed(2)} ไร่</b>
+                                </div>
+                              ))}
+                              <div className="flex justify-between pt-1 border-t border-orange-200">
+                                <span className="font-black text-gray-700">ค่าแรงประมาณรวม</span>
+                                <b className="text-orange-800">{previewWageAmount.toLocaleString()} บาท</b>
+                              </div>
+                            </div>
+                          )}
+
+                          {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ลูกค้ารับน้อยกว่าวัดจริง {customerDifference.toFixed(2)} ไร่ → ส่วนต่างถูกเฉลี่ยลดจากค่าแรงทุก round ตามสัดส่วน</p>}
                           {customerDifference < -0.001 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {Math.abs(customerDifference).toFixed(2)} ไร่ กรุณาตรวจอีกครั้ง</p>}
-                          {wageOverageArea > 0 && <p className="bg-blue-100 text-blue-800 rounded-lg p-2 font-black">📐 ค่าแรงที่ล็อกไปแล้วมากกว่ายอดลูกค้า {wageOverageArea.toFixed(2)} ไร่ ตอนปิดงานระบบจะปรับค่าแรงย้อนหลังให้ยอดไร่ค่าแรงรวมตรงกับไร่ที่ลูกค้ายืนยัน</p>}
                           <div className="flex justify-between bg-white rounded-lg p-2 border border-green-200"><span className="text-gray-600">ยอดลูกค้าประมาณ</span><b className="text-green-800">{(billingArea * (Number(job.price_per_rai) || 0)).toLocaleString()} บาท</b></div>
                         </div>
                       )}
@@ -5536,7 +5587,10 @@ function App() {
                   )}
 
                   <div className="bg-orange-50 p-3 rounded-xl border border-orange-200">
-                    <label className="block text-orange-900 font-black mb-2">👷 คนที่รับค่าแรงรอบนี้</label>
+                    <label className="block text-orange-900 font-black mb-1">👷 {isFinal ? 'คนที่รับค่าแรงรอบสุดท้าย' : 'คนที่รับค่าแรงรอบนี้'}</label>
+                    <p className="text-[11px] text-orange-700 font-bold mb-2">
+                      {isFinal ? 'ถ้าวันนี้ไม่ได้เกี่ยวเพิ่ม ไม่ต้องเลือกใหม่ • ระบบใช้คนที่จำไว้ในรอบก่อน' : '✅ ติ๊กแล้วจำไว้ก่อน • ยังไม่ลงสมุดค่าแรงจนกว่าจะ 🏁 จบงานทั้งหมด'}
+                    </p>
                     <div className="flex flex-wrap gap-2 mb-2">
                       {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
                         const selected = workersSelected.includes(name);
@@ -5571,9 +5625,11 @@ function App() {
                       />
                     </div>
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5">
-                      <p className="text-[10px] text-blue-700 font-bold">💰 เข้ากระเป๋าลูกน้องรอบนี้</p>
+                      <p className="text-[10px] text-blue-700 font-bold">{isFinal ? '💰 ค่าแรงรวมที่จะลงสมุด' : '📝 ค่าแรงรอบนี้ (ยังไม่ลงสมุด)'}</p>
                       <p className="text-lg font-black text-blue-900">
-                        {((isFinal ? finalWageArea : todayMeasured) * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท
+                        {isFinal
+                          ? `${previewWageAmount.toLocaleString()} บาท`
+                          : `${(todayMeasured * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท`}
                       </p>
                     </div>
                   </div>
