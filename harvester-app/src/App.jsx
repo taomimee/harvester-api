@@ -364,17 +364,8 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
     } catch (e) { if (routeScopeRef.current === scope) setRouteMessage(`${e.message} • ลองโหลดใหม่ก่อนบันทึกอีกครั้ง`); }
     finally { clearTimeout(timer); if (routeScopeRef.current === scope) setRouteBusy(false); }
   };
-  // 🧽 ยางลบเส้นเดินรถ: แตะเส้นทีละช่วง ไม่ต้องเลือกจุดเริ่ม/จุดปลาย
-  // erase = เลือกเส้นปกติเพื่อตัด, restore = เลือกเส้นที่ตัดไว้เพื่อคืน
-  const selectRouteEdge = i => {
-    if (routeBusy || !routeEdit || i <= 0 || i >= pathData.length) return;
-    const key = gpsEdgeKey(pathData[i-1], pathData[i]);
-    const isExcluded = excludedEdges.has(key);
-    if (cutMode === 'erase' && isExcluded) return;
-    if (cutMode === 'restore' && !isExcluded) return;
-    setCutSelection(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
-    setCutAnchor(null);
-  };
+  // 🧽 ยางลบแบบถู: ใช้นิ้วลากผ่านเส้นต่อเนื่อง ไม่ต้องจิ้มทีละช่วง
+  // erase = ถูลบเส้นปกติ, restore = ถูคืนเส้นที่ตัดไว้, pan = เลื่อนแผนที่
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
@@ -1124,16 +1115,6 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
           bubblingMouseEvents: false
         }).addTo(routeGroup);
 
-        // ทำ hit area ให้กว้างกว่าตัวเส้นจริง จิ้มบนมือถือได้ง่ายเหมือนใช้ยางลบ
-        const canTapThisEdge = routeEdit && (
-          (cutMode === 'erase' && !excluded) ||
-          (cutMode === 'restore' && excluded)
-        );
-        if (canTapThisEdge) {
-          L.polyline([[aLat, aLng], [bLat, bLng]], { weight: 26, opacity: 0, bubblingMouseEvents: false })
-            .addTo(routeGroup)
-            .on('click', () => selectRouteEdge(i));
-        }
       }
 
       const firstPoint = pathData[0];
@@ -1164,6 +1145,199 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       markerLayer.current = markerGroup;
     }
   }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded]);
+
+  // 🧽 ถูยางลบบนแผนที่
+  // - ปิดการลากแผนที่ชั่วคราวในโหมดถู เพื่อให้นิ้วลากเป็น "ยางลบ"
+  // - ทุกตำแหน่งนิ้วจะเลือกเฉพาะเส้นที่ใกล้ที่สุดภายในรัศมี จึงไม่กวาดเส้นข้าง ๆ ทั้งแถบ
+  // - เก็บเส้นที่โดนถูไว้ตลอดหนึ่ง stroke แล้วค่อยอัปเดต React ตอนยกนิ้ว เพื่อลดอาการกระตุก
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !routeEdit) return;
+
+    const container = map.getContainer();
+    const rubbingMode = cutMode === 'erase' || cutMode === 'restore';
+
+    if (!rubbingMode) {
+      map.dragging.enable();
+      return;
+    }
+
+    map.dragging.disable();
+    const oldTouchAction = container.style.touchAction;
+    container.style.touchAction = 'none';
+
+    const BRUSH_RADIUS_PX = 16;
+    const SAMPLE_STEP_PX = 7;
+
+    let rubbing = false;
+    let activePointerId = null;
+    let lastPoint = null;
+    let strokeSegments = [];
+    let strokeKeys = new Set();
+    let trailLayer = null;
+
+    const distanceSqToSegment = (p, a, b) => {
+      const vx = b.x - a.x, vy = b.y - a.y;
+      const wx = p.x - a.x, wy = p.y - a.y;
+      const lenSq = vx * vx + vy * vy;
+      if (lenSq <= 0.0001) {
+        const dx = p.x - a.x, dy = p.y - a.y;
+        return dx * dx + dy * dy;
+      }
+      const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / lenSq));
+      const x = a.x + t * vx, y = a.y + t * vy;
+      const dx = p.x - x, dy = p.y - y;
+      return dx * dx + dy * dy;
+    };
+
+    const buildScreenSegments = () => {
+      const segments = [];
+      for (let i = 1; i < pathData.length; i++) {
+        const a = pathData[i - 1], b = pathData[i];
+        const key = gpsEdgeKey(a, b);
+        const excluded = excludedEdges.has(key);
+        if (cutMode === 'erase' ? excluded : !excluded) continue;
+
+        const aLat = Number(a.latitude), aLng = Number(a.longitude);
+        const bLat = Number(b.latitude), bLng = Number(b.longitude);
+        if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
+
+        const pa = map.latLngToContainerPoint([aLat, aLng]);
+        const pb = map.latLngToContainerPoint([bLat, bLng]);
+        segments.push({
+          key,
+          a: pa,
+          b: pb,
+          minX: Math.min(pa.x, pb.x) - BRUSH_RADIUS_PX,
+          maxX: Math.max(pa.x, pb.x) + BRUSH_RADIUS_PX,
+          minY: Math.min(pa.y, pb.y) - BRUSH_RADIUS_PX,
+          maxY: Math.max(pa.y, pb.y) + BRUSH_RADIUS_PX
+        });
+      }
+      return segments;
+    };
+
+    const collectNearest = (point) => {
+      let nearestKey = null;
+      let nearestDistSq = BRUSH_RADIUS_PX * BRUSH_RADIUS_PX;
+
+      for (const segment of strokeSegments) {
+        if (point.x < segment.minX || point.x > segment.maxX || point.y < segment.minY || point.y > segment.maxY) continue;
+        const d2 = distanceSqToSegment(point, segment.a, segment.b);
+        if (d2 <= nearestDistSq) {
+          nearestDistSq = d2;
+          nearestKey = segment.key;
+        }
+      }
+
+      if (nearestKey) strokeKeys.add(nearestKey);
+    };
+
+    const rubBetween = (from, to) => {
+      const dx = to.x - from.x, dy = to.y - from.y;
+      const distance = Math.hypot(dx, dy);
+      const steps = Math.max(1, Math.ceil(distance / SAMPLE_STEP_PX));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        collectNearest(L.point(from.x + dx * t, from.y + dy * t));
+      }
+    };
+
+    const toContainerPoint = (event) => {
+      const rect = container.getBoundingClientRect();
+      return L.point(event.clientX - rect.left, event.clientY - rect.top);
+    };
+
+    const ignoreTarget = (event) => {
+      const el = event.target;
+      return !!(el && typeof el.closest === 'function' && el.closest('.leaflet-control'));
+    };
+
+    const onPointerDown = (event) => {
+      if (routeBusy || ignoreTarget(event)) return;
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+      rubbing = true;
+      activePointerId = event.pointerId;
+      lastPoint = toContainerPoint(event);
+      strokeSegments = buildScreenSegments();
+      strokeKeys = new Set();
+
+      trailLayer = L.polyline([], {
+        color: cutMode === 'restore' ? '#22C55E' : '#F97316',
+        weight: 10,
+        opacity: 0.42,
+        lineCap: 'round',
+        lineJoin: 'round',
+        interactive: false
+      }).addTo(map);
+      trailLayer.addLatLng(map.containerPointToLatLng(lastPoint));
+
+      try { container.setPointerCapture(event.pointerId); } catch (_) {}
+      rubBetween(lastPoint, lastPoint);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const onPointerMove = (event) => {
+      if (!rubbing || event.pointerId !== activePointerId) return;
+      const nextPoint = toContainerPoint(event);
+      rubBetween(lastPoint, nextPoint);
+      lastPoint = nextPoint;
+      trailLayer?.addLatLng(map.containerPointToLatLng(nextPoint));
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const finishStroke = (event) => {
+      if (!rubbing || (event && event.pointerId !== activePointerId)) return;
+      rubbing = false;
+
+      const keys = [...strokeKeys];
+      if (keys.length) {
+        setCutSelection(prev => {
+          const merged = new Set(prev);
+          keys.forEach(key => merged.add(key));
+          return [...merged];
+        });
+      }
+
+      if (trailLayer) {
+        try { map.removeLayer(trailLayer); } catch (_) {}
+        trailLayer = null;
+      }
+
+      if (activePointerId !== null) {
+        try { container.releasePointerCapture(activePointerId); } catch (_) {}
+      }
+      activePointerId = null;
+      lastPoint = null;
+      strokeSegments = [];
+      strokeKeys = new Set();
+
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    container.addEventListener('pointerdown', onPointerDown, { capture: true, passive: false });
+    container.addEventListener('pointermove', onPointerMove, { capture: true, passive: false });
+    container.addEventListener('pointerup', finishStroke, { capture: true, passive: false });
+    container.addEventListener('pointercancel', finishStroke, { capture: true, passive: false });
+
+    return () => {
+      container.removeEventListener('pointerdown', onPointerDown, true);
+      container.removeEventListener('pointermove', onPointerMove, true);
+      container.removeEventListener('pointerup', finishStroke, true);
+      container.removeEventListener('pointercancel', finishStroke, true);
+      container.style.touchAction = oldTouchAction;
+      if (trailLayer) {
+        try { map.removeLayer(trailLayer); } catch (_) {}
+      }
+      map.dragging.enable();
+    };
+  }, [routeEdit, cutMode, routeBusy, pathData, excludedEdges]);
 
   // 🎯 เมื่อผู้ใช้กด "ค้นหาเส้นทาง" ให้พาไปหารถล่าสุด 1 ครั้ง
   // Auto-refresh หลังจากนั้นจะอัปเดตข้อมูลอย่างเดียว ไม่แย่งกล้อง
@@ -1358,7 +1532,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         .gps-workspace button:disabled { opacity:.45; }
         .gps-workspace [class*="text-[9px]"], .gps-workspace [class*="text-[10px]"] { font-size:12px; font-weight:600; }
         .gps-workspace .leaflet-control-zoom { margin-bottom:170px; }
-        .gps-cutting .leaflet-container { cursor:pointer; }
+        .gps-cutting .leaflet-container { cursor:crosshair; }
       `}</style>
       {!drawMode && !routeEdit && !mobileToolsOpen && exclusionPanelIndex === null && (
         <button onClick={() => { setCutMode('erase'); setCutSelection([]); setCutAnchor(null); setRouteEdit(true); setIsMapFullScreen(true); setTimeout(() => mapInstance.current?.invalidateSize(), 300); setAutoFollow(false); setMobileToolsOpen(false); }}
@@ -1368,26 +1542,35 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         <div className="absolute top-3 left-3 right-16 sm:right-auto sm:w-80 z-[440] bg-slate-900 text-white rounded-2xl shadow-xl p-3">
           <div className="flex justify-between items-center"><strong>🧽 ยางลบเส้นเดินรถ</strong><button disabled={routeBusy} aria-label="ปิดโหมดยางลบ" onClick={() => {if(cutSelection.length && !window.confirm('ออกโดยไม่บันทึกสิ่งที่จิ้มไว้?')) return;setRouteEdit(false);setCutSelection([]);setCutAnchor(null);}}>✕</button></div>
           <p className="text-xs text-slate-300">รถ {vehicleId} • {workDate} • ตัดไว้แล้ว {routeState.keys.length} ช่วง</p>
-          <div className="grid grid-cols-2 gap-2 mt-2">
-            <button disabled={routeBusy} onClick={() => {setCutMode('erase');setCutSelection([]);setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'erase' ? 'bg-orange-600 text-white' : 'bg-slate-700'}`}>🧽 จิ้มลบ</button>
-            <button disabled={routeBusy || !routeState.keys.length} onClick={() => {setCutMode('restore');setCutSelection([]);setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'restore' ? 'bg-emerald-600 text-white' : 'bg-slate-700'}`}>↩ จิ้มคืน</button>
+          <div className="grid grid-cols-3 gap-2 mt-2">
+            <button disabled={routeBusy} onClick={() => {setCutMode('erase');setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'erase' ? 'bg-orange-600 text-white' : 'bg-slate-700'}`}>🧽 ถูลบ</button>
+            <button disabled={routeBusy} onClick={() => {setCutMode('pan');setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'pan' ? 'bg-blue-600 text-white' : 'bg-slate-700'}`}>🖐 เลื่อน</button>
+            <button disabled={routeBusy || !routeState.keys.length} onClick={() => {setCutMode('restore');setCutAnchor(null);}} className={`rounded-xl text-xs font-black ${cutMode === 'restore' ? 'bg-emerald-600 text-white' : 'bg-slate-700'}`}>↩ ถูคืน</button>
           </div>
-          <p className="text-xs mt-2">{cutMode === 'erase' ? 'แตะเส้นที่ไม่ต้องการทีละช่วงได้เลย • แตะซ้ำเพื่อยกเลิกก่อนบันทึก' : 'แตะเส้นสีเทาที่ต้องการเอากลับ • แตะซ้ำเพื่อยกเลิกก่อนบันทึก'}</p>
-          <p className={`text-xs mt-1 ${cutMode === 'erase' ? 'text-orange-300' : 'text-emerald-300'}`}>{cutMode === 'erase' ? 'สีส้ม = จิ้มรอลบ • สีเทา = ลบไปแล้ว' : 'สีเขียว = จิ้มรอคืน • สีเทา = ลบไปแล้ว'}</p>
+          <p className="text-xs mt-2">{cutMode === 'erase'
+            ? 'เอานิ้วแตะค้างแล้วถูผ่านเส้นที่ไม่ต้องการได้ยาว ๆ • ระบบเก็บทุกช่วงที่ถูผ่าน'
+            : cutMode === 'restore'
+              ? 'ถูผ่านเส้นสีเทาที่ต้องการเอากลับ'
+              : 'โหมดเลื่อนแผนที่ • ลากดูตำแหน่ง แล้วกด ถูลบ เพื่อทำต่อ'}</p>
+          <p className={`text-xs mt-1 ${cutMode === 'erase' ? 'text-orange-300' : cutMode === 'restore' ? 'text-emerald-300' : 'text-blue-300'}`}>
+            {cutMode === 'erase' ? 'เลือกเฉพาะเส้นที่ใกล้นิ้วที่สุด • สีส้ม = รอลบ'
+              : cutMode === 'restore' ? 'สีเขียว = รอคืน • สีเทา = ลบไปแล้ว'
+              : 'เลื่อน/ซูมแผนที่ได้ตามปกติ'}
+          </p>
         </div>
         <div className="absolute bottom-3 left-3 right-3 sm:right-auto sm:w-96 z-[460] rounded-2xl bg-white shadow-2xl border border-slate-200 p-3 max-h-[42%] overflow-y-auto">
-          <strong className="text-sm">{cutMode === 'erase' ? '🧽 จิ้มรอลบ' : '↩ จิ้มรอคืน'} {cutSelection.length} ช่วง</strong>
-          <p className="text-xs text-slate-500">จิ้มทีละเส้นบนแผนที่ • พิกัดต้นฉบับยังอยู่เสมอ</p>
+          <strong className="text-sm">{cutMode === 'restore' ? '↩ ถูรอคืน' : '🧽 ถูรอลบ'} {cutSelection.length} ช่วง</strong>
+          <p className="text-xs text-slate-500">ลากนิ้วถูได้ต่อเนื่อง • พิกัด GPS ต้นฉบับยังอยู่เสมอ</p>
           <p role="status" className="text-xs font-semibold text-blue-800 my-2">{routeMessage}</p>
           <div className="grid grid-cols-3 gap-2">
             <button disabled={routeBusy || !cutSelection.length} onClick={() => {setCutSelection([]);setCutAnchor(null);}} className="bg-slate-100 rounded-xl text-xs font-bold">ล้างที่จิ้ม</button>
             <button
-              disabled={routeBusy || !routeReady || !cutSelection.length}
-              onClick={() => cutMode === 'erase'
-                ? saveRouteEdges([...new Set([...routeState.keys, ...cutSelection])])
-                : saveRouteEdges(routeState.keys.filter(k => !selectedEdges.has(k)))}
+              disabled={routeBusy || !routeReady || !cutSelection.length || cutMode === 'pan'}
+              onClick={() => cutMode === 'restore'
+                ? saveRouteEdges(routeState.keys.filter(k => !selectedEdges.has(k)))
+                : saveRouteEdges([...new Set([...routeState.keys, ...cutSelection])])}
               className={`${cutMode === 'erase' ? 'bg-orange-600' : 'bg-emerald-600'} text-white rounded-xl text-xs font-black col-span-2`}
-            >{cutMode === 'erase' ? `✅ บันทึกลบ ${cutSelection.length}` : `✅ คืนเส้น ${cutSelection.length}`}</button>
+            >{cutMode === 'restore' ? `✅ คืนเส้น ${cutSelection.length}` : `✅ บันทึกลบ ${cutSelection.length}`}</button>
             <button disabled={routeBusy || !routeHistory.length} onClick={() => saveRouteEdges(routeHistory[routeHistory.length-1], true)} className="bg-slate-100 rounded-xl text-xs">↶ ย้อนครั้งก่อน</button>
             <button disabled={routeBusy || !routeReady || !routeState.keys.length} onClick={() => { if(window.confirm('คืนเส้นทั้งหมดของรถและวันนี้?')) saveRouteEdges([]); }} className="bg-slate-100 rounded-xl text-xs">คืนทั้งวัน</button>
             <button disabled={routeBusy} onClick={() => setReloadRoute(n => n+1)} className="bg-slate-100 rounded-xl text-xs">โหลดใหม่</button>
