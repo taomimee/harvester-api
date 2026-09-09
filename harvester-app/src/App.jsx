@@ -3,7 +3,7 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
-// 🛰️ GPS V3.4 — reviewed exclusions; all areas/progress use the same net geometry.
+// 🛰️ GPS V3.6 — plot→queue linking: create queue from GPS plot or link only unfinished jobs.
 // 🧽 Route Eraser — tap individual route segments to erase/restore; no start/end range selection.
 // Turf 6/7 compatibility: https://turfjs.org/docs/api/difference
 const plotClip = (operation, a, b) => {
@@ -296,23 +296,126 @@ const gpsEdgeInBox = (a, b, bounds) => {
 };
 
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
-function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest, isMapFullScreen, setIsMapFullScreen, isFetchingGps, jobs = [], onPlotsSaved, onOpenJob, focusPlot }) {
+function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest, isMapFullScreen, setIsMapFullScreen, isFetchingGps, jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot }) {
   const [linkReview, setLinkReview] = useState(null);
-  const [linkSearch, setLinkSearch] = useState('');
+  const [linkNewQueueDrafts, setLinkNewQueueDrafts] = useState({});
+  const [linkCreatingQueue, setLinkCreatingQueue] = useState(false);
   const [plotRevision, setPlotRevision] = useState(null);
   const [plotReload, setPlotReload] = useState(0);
+
+  const activeLinkJobs = useMemo(() => jobs.filter(j => j.status !== 'DONE').sort((a,b) => {
+    const priority = { IN_PROGRESS: 1, PAUSED: 2, PENDING: 3 };
+    const pa = priority[a.status] || 9, pb = priority[b.status] || 9;
+    if (pa !== pb) return pa - pb;
+    return new Date(a.job_date || 0) - new Date(b.job_date || 0);
+  }), [jobs]);
+
   const openLinkReview = (all, indices, after = null) => {
-    setLinkSearch(''); setAutoFollow(false); setMobileToolsOpen(false);
+    setLinkNewQueueDrafts({}); setAutoFollow(false); setMobileToolsOpen(false);
     setLinkReview({all:all.map(p => ({...p,id:p.id || plotNewId()})),indices,after,scope:plotScopeRef.current});
   };
+
   const setPlotJob = (index, value) => {
-    const job=jobs.find(j => String(j.id) === value);
+    const job=activeLinkJobs.find(j => String(j.id) === value);
+    const plotId = linkReview?.all?.[index]?.id;
+    if (plotId) setLinkNewQueueDrafts(d => { const next={...d}; delete next[plotId]; return next; });
     setLinkReview(review => ({...review,all:review.all.map((p,i) => i!==index ? p : {...p,job_id:job ? Number(job.id) : null,name:job ? `${job.customers?.name || 'ลูกค้า'} — แปลงที่ ${index+1}` : `แปลงที่ ${index+1}`})}));
   };
+
+  const setNewQueueDraft = (plotId, patch) => {
+    setLinkNewQueueDrafts(d => ({...d,[plotId]:{...(d[plotId] || {customer_name:'',phone:''}),...patch}}));
+  };
+
+  const selectCustomerForNewQueue = (index, customer) => {
+    const plot = linkReview?.all?.[index];
+    if (!plot) return;
+    setNewQueueDraft(plot.id, {customer_name: customer.name || '', phone: customer.phone || ''});
+    setLinkReview(review => ({...review,all:review.all.map((p,i)=>i===index?{...p,job_id:null,name:`${customer.name || 'ลูกค้า'} — แปลงที่ ${index+1}`}:p)}));
+  };
+
+  const queueDateTimeFromMapDate = () => {
+    const today = new Date();
+    const localY = today.getFullYear();
+    const localM = String(today.getMonth()+1).padStart(2,'0');
+    const localD = String(today.getDate()).padStart(2,'0');
+    const localDate = `${localY}-${localM}-${localD}`;
+    if (workDate === localDate) return `${workDate}T${String(today.getHours()).padStart(2,'0')}:${String(today.getMinutes()).padStart(2,'0')}`;
+    return `${workDate}T08:00`;
+  };
+
+  const createQueueFromPlotGroup = async (group) => {
+    const firstPlot = group.plots[0];
+    const center = firstPlot.center || centerFromPoints(firstPlot.points);
+    const totalArea = group.plots.reduce((sum,p)=>sum + Math.max(0, Number(p.area?.rawRai) || 0), 0);
+    const payload = {
+      customer_name: group.customer_name.trim(),
+      phone: String(group.phone || '').trim(),
+      address_note: '',
+      crop_type: 'ข้าว',
+      area_size: Number(totalArea.toFixed(6)),
+      job_date: queueDateTimeFromMapDate(),
+      latitude: center?.lat || '',
+      longitude: center?.lng || '',
+      vehicle_id: Number(vehicleId) || 0,
+      boundaries: [],
+      price_per_rai: '',
+      total_price: '',
+      payment_status: 'UNPAID'
+    };
+    const response = await fetch('https://harvester-api-server.onrender.com/api/jobs', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'สร้างคิวใหม่ไม่สำเร็จ');
+    const jobId = Number(data?.data?.[0]?.id || data?.data?.id);
+    if (!Number.isSafeInteger(jobId) || jobId <= 0) throw new Error('สร้างคิวแล้ว แต่ไม่ได้รับ Job ID กลับมา');
+    return jobId;
+  };
+
   const confirmPlotLinks = async () => {
     const review=linkReview;
-    if(!review || review.scope!==plotScopeRef.current) return;
-    if(await savePlotsToServer(review.all)) {setLinkReview(null);review.after?.();}
+    if(!review || review.scope!==plotScopeRef.current || linkCreatingQueue) return;
+
+    // แปลงที่พิมพ์ชื่อลูกค้า = สร้างคิวใหม่จากยอด GPS ของแปลงนั้น
+    // ถ้าหลายแปลงพิมพ์ชื่อ+เบอร์เดียวกัน จะสร้างเพียง 1 คิว แล้วผูกหลายแปลงเข้าคิวเดียวกัน
+    const groups = new Map();
+    for (const index of review.indices) {
+      const plot = review.all[index];
+      const draft = linkNewQueueDrafts[plot.id];
+      const name = String(draft?.customer_name || '').trim();
+      if (!name) continue;
+      const phone = String(draft?.phone || '').trim();
+      const key = `${name.toLocaleLowerCase('th-TH')}|${phone}`;
+      if (!groups.has(key)) groups.set(key,{customer_name:name,phone,indices:[],plots:[]});
+      groups.get(key).indices.push(index); groups.get(key).plots.push(plot);
+    }
+
+    const createdJobIds = [];
+    let finalPlots = review.all.map(p=>({...p}));
+    try {
+      setLinkCreatingQueue(true);
+      for (const group of groups.values()) {
+        const jobId = await createQueueFromPlotGroup(group);
+        createdJobIds.push(jobId);
+        for (const index of group.indices) {
+          finalPlots[index] = {...finalPlots[index], job_id:jobId, name:`${group.customer_name} — แปลงที่ ${index+1}`};
+        }
+      }
+
+      const ok = await savePlotsToServer(finalPlots);
+      if (!ok) throw new Error('สร้างคิวแล้ว แต่ผูกแปลงยังไม่สำเร็จ');
+      setLinkReview(null); setLinkNewQueueDrafts({});
+      await onQueueCreated?.();
+      review.after?.();
+    } catch (e) {
+      // ถ้าสร้างคิวใหม่สำเร็จ แต่บันทึกแปลงพลาด ให้ลบเฉพาะคิวใหม่ที่เพิ่งสร้างเพื่อไม่ทิ้งคิวเปล่า
+      if (createdJobIds.length) {
+        await Promise.allSettled(createdJobIds.map(id => fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}`, {method:'DELETE'})));
+      }
+      setPlotSyncStatus(`❌ ${e.message || e}`);
+    } finally {
+      setLinkCreatingQueue(false);
+    }
   };
   const [routeEdit, setRouteEdit] = useState(false);
   const [cutMode, setCutMode] = useState('erase');
@@ -1578,24 +1681,81 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         </div>
       </>}
       {linkReview && <div role="dialog" aria-modal="true" aria-label="เลือกคิวเจ้าของแปลง" className="absolute inset-0 z-[700] bg-slate-950/50 flex items-end sm:items-center justify-center p-2">
-        <div className="bg-white rounded-2xl shadow-2xl w-full sm:max-w-xl max-h-[90%] flex flex-col overflow-hidden">
-          <div className="p-4 border-b"><h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3><p className="text-xs text-slate-500">เลือกคิวแยกแต่ละแปลง • รวมพื้นที่สุทธิ • ยอดคิดเงินจริงยังไม่เปลี่ยน</p>
-            <input aria-label="ค้นหาคิว" placeholder="ค้นชื่อลูกค้า / เลขคิว" value={linkSearch} onChange={e=>setLinkSearch(e.target.value)} className="mt-2 w-full border rounded-xl p-2 text-sm"/>
+        <div className="bg-white rounded-2xl shadow-2xl w-full sm:max-w-xl max-h-[92%] flex flex-col overflow-hidden">
+          <div className="p-4 border-b">
+            <h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3>
+            <p className="text-xs text-slate-500">สร้างคิวใหม่จากยอดแปลงนี้ หรือเลือกเฉพาะคิวงานที่ยังไม่เสร็จ</p>
           </div>
           <div className="p-3 space-y-3 overflow-y-auto">
-            {linkReview.indices.map(index=>{const plot=linkReview.all[index];return <div key={plot.id} className="bg-slate-50 border rounded-xl p-3">
-              <div className="flex justify-between gap-2"><strong>แปลงที่ {index+1}</strong><span className="text-sm font-bold text-emerald-700">{formatThaiRai(plot.area?.rawRai)}</span></div>
-              <label className="block text-xs font-bold mt-2">คิวเจ้าของแปลง<select aria-label={`คิวแปลงที่ ${index+1}`} disabled={isSavingPlot} value={plot.job_id || ''} onChange={e=>setPlotJob(index,e.target.value)} className="block w-full border bg-white rounded-xl p-3 mt-1 text-sm">
-                <option value="">ยังไม่ผูกคิว (เก็บแปลงไว้ก่อน)</option>
-                {jobs.filter(j=>String(j.id)===String(plot.job_id) || `${j.id} ${j.customers?.name || ''}`.toLowerCase().includes(linkSearch.toLowerCase())).map(j=><option key={j.id} value={j.id}>{j.customers?.name || 'ไม่ระบุชื่อ'} • คิว #{j.id} • {String(j.job_date || '').slice(0,10)} • {j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} {j.status==='DONE'?'• จบงานแล้ว':''}</option>)}
-              </select></label>
-              <label className="block text-xs font-bold mt-2">ชื่อแปลง<input aria-label={`ชื่อแปลงที่ ${index+1}`} disabled={isSavingPlot} maxLength={120} value={plot.name || ''} onChange={e=>{const name=e.target.value;setLinkReview(r=>({...r,all:r.all.map((p,i)=>i===index?{...p,name}:p)}));}} className="block w-full border rounded-xl p-2 mt-1 text-sm"/></label>
-            </div>})}
+            {linkReview.indices.map(index=>{
+              const plot=linkReview.all[index];
+              const draft=linkNewQueueDrafts[plot.id] || {customer_name:'',phone:''};
+              const keyword=String(draft.customer_name || '').trim().toLowerCase();
+              const exactCustomer=customers.some(c => c.name === draft.customer_name && String(c.phone || '') === String(draft.phone || ''));
+              const matches=keyword && !exactCustomer ? customers.filter(c=>{
+                const name=String(c.name || '').toLowerCase();
+                const phone=String(c.phone || '');
+                return keyword.split(/\s+/).every(k=>name.includes(k) || phone.includes(k));
+              }).slice(0,8) : [];
+              const currentDoneJob = plot.job_id ? jobs.find(j=>String(j.id)===String(plot.job_id) && j.status==='DONE') : null;
+              return <div key={plot.id} className="bg-slate-50 border rounded-2xl p-3">
+                <div className="flex justify-between gap-2 items-start">
+                  <div><strong>แปลงที่ {index+1}</strong><p className="text-[10px] text-slate-500">{plot.name || `แปลงที่ ${index+1}`}</p></div>
+                  <span className="text-sm font-black text-emerald-700 text-right">{formatThaiRai(plot.area?.rawRai)}</span>
+                </div>
+
+                <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                  <p className="text-xs font-black text-emerald-900">📝 สร้างคิวใหม่จากแปลงนี้</p>
+                  <p className="text-[10px] text-emerald-700 mb-2">ยอดคิวใหม่จะเริ่มจากพื้นที่ GPS ของแปลงนี้อัตโนมัติ</p>
+                  <div className="relative">
+                    <input
+                      aria-label={`สร้างคิวใหม่จากแปลงที่ ${index+1}`}
+                      disabled={isSavingPlot || linkCreatingQueue}
+                      placeholder="พิมพ์ชื่อลูกค้า หรือเบอร์เพื่อค้นหา..."
+                      value={draft.customer_name || ''}
+                      onChange={e=>{
+                        const value=e.target.value;
+                        setNewQueueDraft(plot.id,{customer_name:value,phone:value===''?'':draft.phone});
+                        setLinkReview(r=>({...r,all:r.all.map((p,i)=>i===index?{...p,job_id:null,name:value?`${value} — แปลงที่ ${index+1}`:`แปลงที่ ${index+1}`}:p)}));
+                      }}
+                      className="w-full border border-emerald-300 bg-white rounded-xl p-3 text-sm font-semibold"
+                    />
+                    {matches.length>0 && <div className="absolute left-0 right-0 top-full mt-1 z-[30] bg-white border rounded-xl shadow-xl max-h-44 overflow-y-auto">
+                      <p className="text-[10px] text-gray-400 px-3 py-2 bg-gray-50">พบลูกค้าเก่า • แตะเพื่อใช้ข้อมูลเดิม</p>
+                      {matches.map(c=><button type="button" key={c.id || `${c.name}/${c.phone}`} onMouseDown={e=>{e.preventDefault();selectCustomerForNewQueue(index,c);}} className="w-full text-left px-3 py-2 border-t hover:bg-emerald-50">
+                        <span className="font-bold text-sm text-gray-800">{c.name}</span><span className="float-right text-xs text-gray-500">📞 {c.phone || 'ไม่มีเบอร์'}</span>
+                      </button>)}
+                    </div>}
+                  </div>
+                  {!!draft.customer_name && <div className="mt-2 grid grid-cols-[1fr_auto] gap-2 items-center">
+                    <input aria-label="เบอร์ลูกค้าคิวใหม่" disabled={isSavingPlot || linkCreatingQueue} placeholder="เบอร์โทร (เว้นว่างได้)" value={draft.phone || ''} onChange={e=>setNewQueueDraft(plot.id,{phone:e.target.value})} className="border bg-white rounded-lg p-2 text-xs"/>
+                    <span className="text-[10px] font-black text-emerald-800 whitespace-nowrap">✅ จะสร้างคิวใหม่</span>
+                  </div>}
+                </div>
+
+                <div className="my-2 flex items-center gap-2"><div className="h-px bg-slate-200 flex-1"/><span className="text-[10px] font-bold text-slate-400">หรือ</span><div className="h-px bg-slate-200 flex-1"/></div>
+
+                <label className="block text-xs font-black text-slate-800">🚜 คิวเจ้าของแปลง — เฉพาะงานที่ยังไม่เสร็จ
+                  {currentDoneJob && <span className="block mt-1 text-[10px] text-amber-700">คิวเดิม #{currentDoneJob.id} จบงานแล้ว • เลือกคิวใหม่ด้านล่างได้</span>}
+                  <select aria-label={`คิวแปลงที่ ${index+1}`} disabled={isSavingPlot || linkCreatingQueue} value={activeLinkJobs.some(j=>String(j.id)===String(plot.job_id)) ? plot.job_id : ''} onChange={e=>setPlotJob(index,e.target.value)} className="block w-full border bg-white rounded-xl p-3 mt-1 text-sm">
+                    <option value="">ยังไม่ผูกคิว (เก็บแปลงไว้ก่อน)</option>
+                    {activeLinkJobs.map(j=><option key={j.id} value={j.id}>{j.customers?.name || 'ไม่ระบุชื่อ'} • คิว #{j.id} • {j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'} • {j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`}</option>)}
+                  </select>
+                </label>
+
+                {(draft.customer_name || activeLinkJobs.some(j=>String(j.id)===String(plot.job_id))) && <p className="mt-2 text-[10px] font-bold text-blue-700">
+                  {draft.customer_name ? `🆕 คิวใหม่ • เริ่มที่ ${formatThaiRai(plot.area?.rawRai)}` : `🔗 จะผูกเข้าคิว #${plot.job_id} • ยอด GPS ของคิวนั้นจะรวมแปลงนี้อัตโนมัติ`}
+                </p>}
+              </div>
+            })}
           </div>
-          <div className="border-t p-3"><p role="status" className="text-xs text-blue-800 mb-2">{plotSyncStatus}</p><div className="flex gap-2">
-            <button disabled={isSavingPlot} onClick={()=>setLinkReview(null)} className="flex-1 bg-slate-100 rounded-xl font-bold">ยกเลิก</button>
-            <button disabled={isSavingPlot || plotRevision===null} onClick={confirmPlotLinks} className="flex-1 bg-emerald-600 text-white rounded-xl font-black">{isSavingPlot?'กำลังบันทึก…':'บันทึกแปลงและคิว'}</button>
-          </div></div>
+          <div className="border-t p-3">
+            <p role="status" className="text-xs text-blue-800 mb-2">{plotSyncStatus}</p>
+            <div className="flex gap-2">
+              <button disabled={isSavingPlot || linkCreatingQueue} onClick={()=>{setLinkReview(null);setLinkNewQueueDrafts({});}} className="flex-1 bg-slate-100 rounded-xl font-bold">ยกเลิก</button>
+              <button disabled={isSavingPlot || linkCreatingQueue || plotRevision===null} onClick={confirmPlotLinks} className="flex-1 bg-emerald-600 text-white rounded-xl font-black">{linkCreatingQueue?'กำลังสร้างคิว…':isSavingPlot?'กำลังบันทึก…':'บันทึกแปลงและคิว'}</button>
+            </div>
+          </div>
         </div>
       </div>}
       <div ref={mapRef} className="flex-1 w-full z-0" />
@@ -3706,7 +3866,11 @@ function App() {
             {/* ส่วนแสดงแผนที่อัจฉริยะแบบใหม่ */}
             <div className="flex-1 relative bg-gray-200 min-h-0 sm:min-h-[300px]">
               <TrackingMap
-                jobs={jobs} onPlotsSaved={fetchJobs} focusPlot={gpsFocusPlot}
+                jobs={jobs}
+                customers={customersList}
+                onPlotsSaved={fetchJobs}
+                onQueueCreated={async()=>{await fetchJobs();fetchAllCustomers();}}
+                focusPlot={gpsFocusPlot}
                 onOpenJob={id=>{setIsMapFullScreen(false);setActiveTab('active');setGpsJobDetail(id);fetchJobs();}}
                 pathData={visibleGpsPath}
                 vehicleId={trackingVehicleId}
@@ -3854,14 +4018,22 @@ function App() {
                       </span>
                     </div>
 
-                    <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 mb-3" onClick={e=>e.stopPropagation()}>
-                      <p className="text-xs font-bold text-sky-800">🛰️ พื้นที่วัดจาก GPS</p>
-                      {job.gps_summary_error ? <p className="text-xs text-red-700">โหลดพื้นที่ GPS ไม่สำเร็จ</p> : <>
-                        <p className="font-black text-sky-950">{job.gps_summary?.plot_count || 0} แปลง • {plotThaiArea(Number(job.gps_summary?.area_rai || 0)*1600).text}</p>
-                        {!!job.gps_summary?.invalid_count && <p className="text-xs text-red-700">มี {job.gps_summary.invalid_count} แปลงที่ต้องตรวจขอบ ยอดยังไม่ครบ</p>}
-                      </>}
-                      <button onClick={()=>setGpsJobDetail(job.id)} className="mt-2 text-sm font-bold text-blue-700 underline">ดูแปลง / ใช้ยอดวัดเข้าคิว →</button>
-                    </div>
+                    {job.gps_summary_error ? (
+                      <div className="bg-red-50 border border-red-200 rounded-xl p-2.5 mb-3" onClick={e=>e.stopPropagation()}>
+                        <p className="text-xs font-bold text-red-700">🛰️ โหลดพื้นที่ GPS ไม่สำเร็จ</p>
+                      </div>
+                    ) : Number(job.gps_summary?.plot_count || 0) > 0 ? (
+                      <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="w-full text-left bg-sky-50 border border-sky-200 rounded-xl p-3 mb-3 hover:bg-sky-100 transition">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-bold text-sky-800">🛰️ GPS ผูกกับคิวแล้ว • {job.gps_summary.plot_count} แปลง</p>
+                            <p className="font-black text-sky-950">{plotThaiArea(Number(job.gps_summary.area_rai || 0)*1600).text}</p>
+                            {!!job.gps_summary?.invalid_count && <p className="text-xs text-red-700">มี {job.gps_summary.invalid_count} แปลงที่ต้องตรวจขอบ</p>}
+                          </div>
+                          <span className="text-sm font-black text-blue-700 whitespace-nowrap">ดูแปลง →</span>
+                        </div>
+                      </button>
+                    ) : null}
                     {/* 💡 กล่องประเภทพืชแบบแยกสี + ไอคอน */}
                     <div className="grid grid-cols-2 gap-2 mb-3 text-sm">
                       <div className={`p-2 rounded-lg border ${
@@ -3884,10 +4056,16 @@ function App() {
                         </span>
                       </div>
                       
-                      <div className="bg-gray-50 border border-gray-200 p-2 rounded-lg">
-                        <span className="block text-gray-500 text-xs">{job.status === 'DONE' ? 'พื้นที่คิดเงิน' : 'ลูกค้าแจ้ง (ประมาณ)'}</span>
-                        <span className="font-semibold text-gray-800">
-                          {job.status === 'DONE' ? Number((job.billing_area ?? job.area_size) || 0).toFixed(2) : `~${job.area_size || 0}`} ไร่
+                      <div className={`${job.status !== 'DONE' && Number(job.gps_summary?.plot_count || 0) > 0 ? 'bg-sky-50 border-sky-200' : 'bg-gray-50 border-gray-200'} border p-2 rounded-lg`}>
+                        <span className="block text-gray-500 text-xs">
+                          {job.status === 'DONE' ? 'พื้นที่คิดเงิน' : Number(job.gps_summary?.plot_count || 0) > 0 ? `🛰️ วัดจาก GPS (${job.gps_summary.plot_count} แปลง)` : 'ลูกค้าแจ้ง (ประมาณ)'}
+                        </span>
+                        <span className={`font-semibold ${job.status !== 'DONE' && Number(job.gps_summary?.plot_count || 0) > 0 ? 'text-sky-900' : 'text-gray-800'}`}>
+                          {job.status === 'DONE'
+                            ? `${Number((job.billing_area ?? job.area_size) || 0).toFixed(2)} ไร่`
+                            : Number(job.gps_summary?.plot_count || 0) > 0
+                              ? plotThaiArea(Number(job.gps_summary?.area_rai || 0) * 1600).text
+                              : `~${job.area_size || 0} ไร่`}
                         </span>
                       </div>
                     </div>
