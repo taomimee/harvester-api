@@ -2477,7 +2477,7 @@ function App() {
       phone: job.customers?.phone || '',
       address_note: job.address_note || job.customers?.address_note || '', // 💡 ดึงหมายเหตุงานก่อน
       crop_type: job.crop_type || 'ข้าว',
-      area_size: job.area_size || '',
+      area_size: (job.billing_area ?? job.area_size) || '',
       job_date: formattedDate,
       latitude: job.latitude || '',
       longitude: job.longitude || '',
@@ -2546,12 +2546,14 @@ function App() {
         body: JSON.stringify(formData)
       });
       if (response.ok) {
-        alert(editingId ? '✅ อัปเดตข้อมูลสำเร็จ!' : '✅ บันทึกคิวงานสำเร็จ!');
+        alert(editingId ? '✅ อัปเดตการ์ดงานและซิงก์ข้อมูลตาม Job ID สำเร็จ!' : '✅ บันทึกคิวงานสำเร็จ!');
         setShowAddForm(false);
         setEditingId(null);
         setSelectedDayJobs(null);
         setFormData({ customer_name: '', phone: '', address_note: '', crop_type: 'ข้าว', area_size: '', job_date: '', latitude: '', longitude: '', vehicle_id: 0, boundaries: [], price_per_rai: '', total_price: '', payment_status: 'UNPAID' });
-        fetchJobs();
+        await fetchJobs();
+        await refreshWageLedger();
+        await fetchDashboard();
         fetchAllCustomers(); 
       } else { 
         // 💡 เพิ่มตรงนี้ เพื่อให้มันโชว์ว่า Database ฟ้องว่าอะไร
@@ -4443,7 +4445,7 @@ function App() {
                      
                      // 1. อัปเดตยอดเงิน
                      const updatePayload = {
-                         customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                         customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: (job.billing_area ?? job.area_size), job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
                          total_price: finalTotalIncome, 
                          payment_status: 'PAID'
                      };
@@ -4502,7 +4504,7 @@ function App() {
 
                      // 1. อัปเดตยอดเงิน
                      const updatePayload = {
-                         customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: job.area_size, job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
+                         customer_name: job.customers?.name || '', phone: job.customers?.phone || '', address_note: job.address_note || '', crop_type: job.crop_type || 'ข้าว', area_size: (job.billing_area ?? job.area_size), job_date: job.job_date, latitude: job.latitude, longitude: job.longitude, vehicle_id: job.vehicles?.id || job.vehicle_id || 0, boundaries: job.boundaries || [], price_per_rai: job.price_per_rai,
                          total_price: newPrice, 
                          payment_status: newStatus
                      };

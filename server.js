@@ -604,6 +604,87 @@ const reconcileJobWageArea = async (jobId, targetArea) => {
     };
 };
 
+
+// 🔗 JOB-ID AREA CASCADE
+// การแก้ "จำนวนไร่" ใช้ jobs.id เป็นตัวหลักของการ์ดงาน
+// ทำให้ยอดพื้นที่รอบงาน (measured_area) ของ job เดียวกันรวมเท่ากับค่าที่แก้
+// โดยรักษาสัดส่วนเดิมของแต่ละรอบให้มากที่สุด
+const syncJobRoundMeasuredArea = async (jobId, targetArea) => {
+    const target = Math.max(0, safeRoundNumber(targetArea));
+
+    const { data: rounds, error } = await supabase
+        .from('job_work_rounds')
+        .select('id,measured_area')
+        .eq('job_id', jobId)
+        .order('work_date', { ascending: true });
+
+    if (error) throw error;
+    if (!rounds || rounds.length === 0) {
+        return { before_area: 0, after_area: 0, snapshots: [] };
+    }
+
+    const snapshots = rounds.map(r => ({
+        id: r.id,
+        measured_area: Math.max(0, safeRoundNumber(r.measured_area))
+    }));
+    const before = snapshots.reduce((sum, r) => sum + r.measured_area, 0);
+
+    let nextAreas = snapshots.map(r => r.measured_area);
+    if (before > 1e-9) {
+        const ratio = target / before;
+        nextAreas = snapshots.map(r => Math.max(0, r.measured_area * ratio));
+        const diff = target - nextAreas.reduce((sum, n) => sum + n, 0);
+        if (Math.abs(diff) > 1e-9) {
+            nextAreas[nextAreas.length - 1] = Math.max(0, nextAreas[nextAreas.length - 1] + diff);
+        }
+    } else {
+        nextAreas = snapshots.map(() => 0);
+        if (target > 0) nextAreas[nextAreas.length - 1] = target;
+    }
+
+    const changed = [];
+    try {
+        for (let i = 0; i < snapshots.length; i++) {
+            if (Math.abs(nextAreas[i] - snapshots[i].measured_area) < 1e-9) continue;
+            const { data: updated, error: updateError } = await supabase
+                .from('job_work_rounds')
+                .update({ measured_area: nextAreas[i] })
+                .eq('id', snapshots[i].id)
+                .select('id,measured_area')
+                .maybeSingle();
+
+            if (updateError) throw updateError;
+            if (!updated) {
+                const e = new Error(`แก้พื้นที่รอบงาน #${snapshots[i].id} ไม่สำเร็จ`);
+                e.code = 'ROUND_MEASURED_AREA_UPDATE_FAILED';
+                throw e;
+            }
+            changed.push(snapshots[i]);
+        }
+    } catch (err) {
+        for (const old of changed.reverse()) {
+            try {
+                await supabase.from('job_work_rounds')
+                    .update({ measured_area: old.measured_area })
+                    .eq('id', old.id);
+            } catch (_) {}
+        }
+        throw err;
+    }
+
+    return { before_area: before, after_area: target, snapshots };
+};
+
+const restoreJobRoundMeasuredArea = async (snapshots = []) => {
+    for (const old of snapshots) {
+        try {
+            await supabase.from('job_work_rounds')
+                .update({ measured_area: old.measured_area })
+                .eq('id', old.id);
+        } catch (_) {}
+    }
+};
+
 // 🌾 ปิด "รอบวันนี้" แต่ยังไม่ปิดงานลูกค้า
 // measured_area = วันนี้วัดจริงกี่ไร่
 // ค่าแรงรอบกลางทางจะล็อกตาม measured_area วันนี้ทันที
@@ -850,20 +931,19 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
 });
 
 
-// 📐 แก้ "ไร่ที่ลูกค้ายืนยัน" หลังปิดงาน แต่ก่อนรับเงินเสร็จ
-// - measured_area / area_size ไม่แก้ทับ: เก็บเป็นหลักฐานวัดจริง/ข้อมูลเดิม
-// - billing_area + total_price ปรับตามลูกค้า
-// - ค่าแรงทั้งงานถูก reconcile ให้จำนวนไร่รวมตรง billing_area
-// - ส่วนลดเป็น "จำนวนเงิน" ยังเป็นระบบเดิมและไม่กระทบค่าแรง
+// 📐 แก้จำนวนไร่ของการ์ดงาน โดยยึด jobs.id เป็นหลัก
+// เปลี่ยน 12 -> 11 = การ์ดงาน / รอบงาน / ค่าแรง / ยอดลูกหนี้ ของ job id นี้เป็น 11 ทั้งหมด
+// ส่วนลด "เป็นจำนวนเงิน" ยังคงเป็นระบบเดิม และไม่กระทบค่าแรง
 app.patch('/api/jobs/:id/billing-area', async (req, res) => {
     const jobId = Number(req.params.id);
-    const billingArea = safeRoundNumber(req.body?.billing_area, NaN);
+    const newArea = safeRoundNumber(req.body?.billing_area, NaN);
 
     if (!Number.isFinite(jobId) || jobId <= 0) return res.status(400).json({ error: 'job_id ไม่ถูกต้อง' });
-    if (!Number.isFinite(billingArea) || billingArea < 0) return res.status(400).json({ error: 'กรุณาระบุไร่ที่ลูกค้ายืนยันให้ถูกต้อง' });
+    if (!Number.isFinite(newArea) || newArea < 0) return res.status(400).json({ error: 'กรุณาระบุจำนวนไร่ให้ถูกต้อง' });
 
     let wageResult = null;
-    let oldJobSnapshot = null;
+    let measuredResult = null;
+
     try {
         const { data: job, error: jobError } = await supabase
             .from('jobs')
@@ -873,95 +953,155 @@ app.patch('/api/jobs/:id/billing-area', async (req, res) => {
 
         if (jobError) throw jobError;
         if (!job) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
-        if (job.status !== 'DONE') return res.status(400).json({ error: 'แก้ไร่ลูกค้าได้หลังปิดงานแล้วเท่านั้น' });
-        if (job.payment_status === 'PAID') return res.status(400).json({ error: 'งานนี้รับเงินและปิดบิลแล้ว กรุณาอย่าแก้ไร่ย้อนหลังจากหน้าลูกหนี้' });
 
-        const oldBillingArea = Math.max(0, safeRoundNumber(job.billing_area ?? job.area_size, 0));
+        const oldArea = Math.max(0, safeRoundNumber(job.billing_area ?? job.area_size, 0));
         const rate = Math.max(0, safeRoundNumber(job.price_per_rai, 0));
-        const oldInvoice = oldBillingArea * rate;
-        const currentDebt = Math.max(0, safeRoundNumber(job.total_price, 0));
+        const oldInvoice = oldArea * rate;
+        const oldDebt = Math.max(0, safeRoundNumber(job.total_price, 0));
+
+        // ถ้ามีมัดจำ ให้รักษา "จำนวนเงินที่จ่ายแล้ว" ไว้
         const alreadyPaid = job.payment_status === 'DEPOSIT'
-            ? Math.max(0, oldInvoice - currentDebt)
+            ? Math.max(0, oldInvoice - oldDebt)
             : 0;
 
-        const newInvoice = billingArea * rate;
+        const newInvoice = newArea * rate;
         const newDebt = Math.max(0, newInvoice - alreadyPaid);
-        const newPaymentStatus = alreadyPaid > 0
+        const nextPaymentStatus = alreadyPaid > 0
             ? (newDebt <= 0.000001 ? 'PAID' : 'DEPOSIT')
             : (job.payment_status || 'UNPAID');
 
-        // ปรับค่าแรงก่อน ถ้าล้มเหลวจะยังไม่แตะยอดลูกค้า
-        wageResult = await reconcileJobWageArea(jobId, billingArea);
+        // 1) ค่าแรงของ job id นี้เท่านั้น
+        wageResult = await reconcileJobWageArea(jobId, newArea);
 
-        oldJobSnapshot = {
-            billing_area: job.billing_area,
-            total_price: job.total_price,
-            payment_status: job.payment_status
-        };
+        // 2) ประวัติรอบงานของ job id นี้ ให้ยอดพื้นที่รวมตรงกัน
+        measuredResult = await syncJobRoundMeasuredArea(jobId, newArea);
 
+        // 3) ตัวการ์ด + ยอดลูกหนี้
         const { data: updatedJob, error: updateError } = await supabase
             .from('jobs')
             .update({
-                billing_area: billingArea,
+                area_size: newArea,
+                billing_area: newArea,
                 total_price: newDebt,
-                payment_status: newPaymentStatus
+                payment_status: nextPaymentStatus
             })
             .eq('id', jobId)
             .select()
             .single();
 
         if (updateError) {
-            // ค่าแรงถูกปรับแล้ว แต่ยอดลูกค้าอัปเดตไม่ได้: พยายามย้อนค่าแรงกลับ
             try { await reconcileJobWageArea(jobId, wageResult.before_area); } catch (_) {}
+            try { await restoreJobRoundMeasuredArea(measuredResult?.snapshots || []); } catch (_) {}
             throw updateError;
         }
 
         res.json({
             success: true,
-            message: 'ปรับไร่ลูกค้าและค่าแรงเรียบร้อย',
+            message: 'ปรับจำนวนไร่ทั้งการ์ดตาม Job ID เรียบร้อย',
             job: updatedJob,
             summary: {
-                measured_or_original_area: Math.max(0, safeRoundNumber(job.area_size, 0)),
-                old_billing_area: oldBillingArea,
-                new_billing_area: billingArea,
-                billing_area_delta: billingArea - oldBillingArea,
+                job_id: jobId,
+                old_area: oldArea,
+                new_area: newArea,
                 old_invoice: oldInvoice,
                 new_invoice: newInvoice,
                 already_paid: alreadyPaid,
                 new_debt: newDebt,
                 wage_area_before: wageResult.before_area,
                 wage_area_after: wageResult.after_area,
-                wage_area_delta: wageResult.area_delta,
                 wage_amount_before: wageResult.amount_before,
                 wage_amount_after: wageResult.amount_after,
-                wage_amount_delta: wageResult.amount_delta,
-                wage_mode: wageResult.mode,
-                wage_warning: wageResult.warning || null
+                measured_area_before: measuredResult.before_area,
+                measured_area_after: measuredResult.after_area,
+                sync_mode: 'JOB_ID_CASCADE'
             }
         });
     } catch (err) {
-        console.error('Adjust Billing Area Error:', err.message);
-        res.status(500).json({ error: err.message, code: err.code || 'BILLING_AREA_ADJUST_FAILED' });
+        console.error('Job Area Cascade Error:', err.message);
+        res.status(500).json({ error: err.message, code: err.code || 'JOB_AREA_CASCADE_FAILED' });
     }
 });
 
 // API สำหรับแก้ไขข้อมูลคิวงาน (PUT)
+// ✅ กฎหลัก: jobs.id คือ "การ์ดงาน"
+// ถ้าแก้จำนวนไร่จาก 📋 ประวัติ ระบบจะซิงก์เฉพาะ job id นั้นทั้งชุด:
+// area_size + billing_area + measured_area รอบงาน + wage_area/บิลค่าแรง + total_price/ลูกหนี้
 app.put('/api/jobs/:id', async (req, res) => {
-    const { id } = req.params;
+    const jobId = Number(req.params.id);
     let { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
 
-    // แปลงค่าตัวเลข
-    area_size = area_size ? Number(area_size) : null;
-    price_per_rai = price_per_rai ? Number(price_per_rai) : 0;
-    total_price = total_price ? Number(total_price) : 0;
+    if (!Number.isFinite(jobId) || jobId <= 0) {
+        return res.status(400).json({ error: 'job_id ไม่ถูกต้อง' });
+    }
+
+    const hasArea = area_size !== '' && area_size !== null && area_size !== undefined;
+    const nextArea = hasArea ? Number(area_size) : null;
+    if (hasArea && (!Number.isFinite(nextArea) || nextArea < 0)) {
+        return res.status(400).json({ error: 'จำนวนไร่ไม่ถูกต้อง' });
+    }
+
+    const nextRate = price_per_rai !== '' && price_per_rai !== null && price_per_rai !== undefined
+        ? Math.max(0, Number(price_per_rai) || 0)
+        : 0;
+
+    let wageResult = null;
+    let measuredResult = null;
 
     try {
-        const { data: jobInfo, error: findError } = await supabase.from('jobs').select('customer_id').eq('id', id).single();
+        const { data: jobInfo, error: findError } = await supabase
+            .from('jobs')
+            .select('id,customer_id,area_size,billing_area,price_per_rai,total_price,payment_status')
+            .eq('id', jobId)
+            .single();
+
         if (findError) throw findError;
+        if (!jobInfo) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
+
+        const oldCanonicalArea = Math.max(0, safeRoundNumber(jobInfo.billing_area ?? jobInfo.area_size, 0));
+        const canonicalArea = hasArea ? Math.max(0, nextArea) : oldCanonicalArea;
+        const rate = Number.isFinite(nextRate) ? nextRate : Math.max(0, safeRoundNumber(jobInfo.price_per_rai, 0));
+
+        // ถ้ามีมัดจำอยู่ ให้เก็บ "เงินที่จ่ายมาแล้ว" ไว้ และคำนวณหนี้ใหม่
+        const oldRate = Math.max(0, safeRoundNumber(jobInfo.price_per_rai, 0));
+        const oldInvoice = oldCanonicalArea * oldRate;
+        const oldDebt = Math.max(0, safeRoundNumber(jobInfo.total_price, 0));
+        const alreadyPaid = jobInfo.payment_status === 'DEPOSIT'
+            ? Math.max(0, oldInvoice - oldDebt)
+            : 0;
+
+        const newInvoice = canonicalArea * rate;
+        let nextTotalPrice = newInvoice;
+        let nextPaymentStatus = payment_status || jobInfo.payment_status || 'UNPAID';
+
+        if (jobInfo.payment_status === 'DEPOSIT' || nextPaymentStatus === 'DEPOSIT') {
+            nextTotalPrice = Math.max(0, newInvoice - alreadyPaid);
+            nextPaymentStatus = nextTotalPrice <= 0.000001 ? 'PAID' : 'DEPOSIT';
+        } else if (nextPaymentStatus === 'PAID') {
+            // ประวัติรับเงินยังอิงยอดเต็มของการ์ด
+            nextTotalPrice = newInvoice;
+        }
+
+        // ถ้า frontend ส่ง total_price มาจากส่วนลดเดิม และ "ไม่ได้แก้จำนวนไร่/เรท"
+        // ให้รักษายอดนั้นไว้ เพื่อไม่ทำลายระบบลดราคาเป็นจำนวนเงิน
+        const areaChanged = Math.abs(canonicalArea - oldCanonicalArea) > 1e-9;
+        const rateChanged = Math.abs(rate - oldRate) > 1e-9;
+        if (!areaChanged && !rateChanged && total_price !== '' && total_price !== null && total_price !== undefined) {
+            const sentTotal = Number(total_price);
+            if (Number.isFinite(sentTotal) && sentTotal >= 0) nextTotalPrice = sentTotal;
+        }
+
+        // ถ้าแก้ "ไร่" ให้ทุกอย่างของ job id นี้ตามเลขเดียวกัน
+        if (areaChanged) {
+            wageResult = await reconcileJobWageArea(jobId, canonicalArea);
+            measuredResult = await syncJobRoundMeasuredArea(jobId, canonicalArea);
+        }
 
         if (jobInfo.customer_id) {
-            // 👇 แก้ไขตรงนี้: เปลี่ยน phone || null เป็น phone || "" 👇
-            await supabase.from('customers').update({ name: customer_name, phone: phone || "" }).eq('id', jobInfo.customer_id);
+            const { error: customerError } = await supabase
+                .from('customers')
+                .update({ name: customer_name, phone: phone || "" })
+                .eq('id', jobInfo.customer_id);
+            if (customerError) throw customerError;
         }
 
         const { data: updatedJob, error: jobError } = await supabase
@@ -969,23 +1109,50 @@ app.put('/api/jobs/:id', async (req, res) => {
             .update({
                 vehicle_id: vehicle_id === 0 ? null : vehicle_id,
                 crop_type,
-                area_size,
+                area_size: canonicalArea,
+                billing_area: canonicalArea,
                 job_date,
                 latitude,
                 longitude,
-                price_per_rai,
-                total_price,
-                payment_status,
-                address_note: address_note 
+                price_per_rai: rate,
+                total_price: nextTotalPrice,
+                payment_status: nextPaymentStatus,
+                address_note
             })
-            .eq('id', id)
-            .select();
+            .eq('id', jobId)
+            .select()
+            .single();
 
-        if (jobError) throw jobError;
-        res.json({ message: 'อัปเดตข้อมูลสำเร็จ!', data: updatedJob });
+        if (jobError) {
+            if (wageResult) {
+                try { await reconcileJobWageArea(jobId, wageResult.before_area); } catch (_) {}
+            }
+            if (measuredResult) {
+                try { await restoreJobRoundMeasuredArea(measuredResult.snapshots || []); } catch (_) {}
+            }
+            throw jobError;
+        }
+
+        res.json({
+            message: areaChanged
+                ? `อัปเดตการ์ดงาน #${jobId} และซิงก์จำนวนไร่ทั้งระบบสำเร็จ`
+                : 'อัปเดตข้อมูลสำเร็จ!',
+            data: updatedJob,
+            area_sync: areaChanged ? {
+                job_id: jobId,
+                old_area: oldCanonicalArea,
+                new_area: canonicalArea,
+                wage_area_before: wageResult?.before_area ?? null,
+                wage_area_after: wageResult?.after_area ?? null,
+                measured_area_before: measuredResult?.before_area ?? null,
+                measured_area_after: measuredResult?.after_area ?? null,
+                total_price: nextTotalPrice,
+                mode: 'JOB_ID_CASCADE'
+            } : null
+        });
     } catch (err) {
         console.error('Error updating job:', err.message);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: err.message, code: err.code || 'JOB_UPDATE_FAILED' });
     }
 });
 
