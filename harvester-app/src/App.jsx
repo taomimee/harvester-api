@@ -392,7 +392,13 @@ const gpsEdgeInBox = (a, b, bounds) => {
 };
 
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
-function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest, isMapFullScreen, setIsMapFullScreen, isFetchingGps, jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot }) {
+function TrackingMap({
+  pathData, vehicleId, workDate, trackingMode, focusRequest,
+  isMapFullScreen, setIsMapFullScreen, isFetchingGps,
+  jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot,
+  fleetPaths = {}, fleetVehicles = [], vehicleColors = {},
+  fleetFitRequest = 0, onSelectVehicle
+}) {
   const [linkReview, setLinkReview] = useState(null);
   const [linkNewQueueDrafts, setLinkNewQueueDrafts] = useState({});
   const [linkCreatingQueue, setLinkCreatingQueue] = useState(false);
@@ -550,6 +556,12 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const routeScopeRef = useRef(routeScope);
   routeScopeRef.current = routeScope;
   useEffect(() => {
+    if (!vehicleId || !workDate) {
+      setRouteReady(false);
+      setRouteState({ keys: [], revision: 0 });
+      setRouteMessage('');
+      return;
+    }
     let active = true;
     const controller = new AbortController();
     setRouteReady(false); setRouteState({ keys: [], revision: 0 }); setRouteHistory([]);
@@ -589,6 +601,7 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
   const mapInstance = useRef(null);
   const polylineLayer = useRef(null);
   const markerLayer = useRef(null);
+  const fleetLayer = useRef(null);
   const drawLayer = useRef(null);
   const plotsLayer = useRef(null);
   const plotLoadSeq = useRef(0);
@@ -1348,13 +1361,15 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       }
 
       if ([lastLat, lastLng].every(Number.isFinite)) {
+        const selectedVehicleColor = vehicleColors[String(vehicleId)] || '#F97316';
+        const selectedVehicleName = fleetVehicles.find(v => String(v.id) === String(vehicleId))?.name || `รถ ${vehicleId}`;
         const carIcon = L.divIcon({
           className: 'bg-transparent border-0',
-          html: `<div class="bg-orange-500 text-white rounded-full w-9 h-9 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer" style="margin-left:-18px;margin-top:-18px;">🚜</div>`,
+          html: `<div style="margin-left:-18px;margin-top:-18px;background:${selectedVehicleColor};" class="text-white rounded-full w-9 h-9 flex items-center justify-center font-bold text-lg border-2 border-white shadow-lg drop-shadow-md cursor-pointer">🚜</div>`,
           iconSize: [0, 0]
         });
         const marker = L.marker([lastLat, lastLng], { icon: carIcon }).addTo(markerGroup);
-        marker.bindTooltip('ตำแหน่งล่าสุด');
+        marker.bindTooltip(`${selectedVehicleName} • ตำแหน่งล่าสุด`);
         marker.on('click', () => {
           window.open(`https://www.google.com/maps/dir/?api=1&destination=${lastLat},${lastLng}`, '_blank');
         });
@@ -1363,7 +1378,89 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
       polylineLayer.current = routeGroup;
       markerLayer.current = markerGroup;
     }
-  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded]);
+  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded, vehicleColors, fleetVehicles, vehicleId]);
+
+  // 🚜 ภาพรวมรถหลายคัน — รถอื่นใช้สีประจำคัน, รถที่เลือกยังคงเส้นละเอียดเกี่ยว/วิ่งแบบเดิม
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+
+    if (fleetLayer.current) {
+      try { map.removeLayer(fleetLayer.current); } catch (_) {}
+      fleetLayer.current = null;
+    }
+
+    if (trackingMode !== 'realtime' || routeEdit || drawMode) return;
+
+    const group = L.layerGroup().addTo(map);
+    fleetVehicles.forEach((vehicle, index) => {
+      const id = String(vehicle.id);
+      const points = Array.isArray(fleetPaths?.[id]) ? fleetPaths[id] : [];
+      if (!points.length) return;
+
+      const color = vehicleColors[id] || ['#2563EB','#F97316','#7C3AED','#16A34A','#DB2777','#0891B2'][index % 6];
+      const latlngs = points
+        .map(p => [Number(p.latitude), Number(p.longitude)])
+        .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+
+      if (!latlngs.length) return;
+
+      // รถที่เลือกมีเส้นละเอียดวาดทับอยู่แล้ว จึงใส่เพียง halo สีประจำคันด้านล่าง
+      L.polyline(latlngs, {
+        color,
+        weight: id === String(vehicleId) ? 7 : 4,
+        opacity: id === String(vehicleId) ? 0.18 : 0.68,
+        interactive: false
+      }).addTo(group);
+
+      // รถที่เลือกมี marker หลักอยู่แล้ว ไม่วาด marker ซ้ำ
+      if (id === String(vehicleId)) return;
+
+      const last = latlngs[latlngs.length - 1];
+      const rawLast = points[points.length - 1];
+      const when = rawLast?.created_at ? new Date(rawLast.created_at) : null;
+      const ageSec = when && !Number.isNaN(when.getTime()) ? Math.max(0, Math.floor((Date.now() - when.getTime()) / 1000)) : null;
+      const online = ageSec !== null && ageSec <= 60;
+
+      const icon = L.divIcon({
+        className: 'bg-transparent border-0',
+        html: `<div style="transform:translate(-50%,-50%);width:max-content;">
+          <button type="button" style="background:${color};" class="text-white rounded-full w-8 h-8 flex items-center justify-center text-base border-2 border-white shadow-lg mx-auto">🚜</button>
+          <div style="border-color:${color};" class="mt-1 bg-white/95 border px-1.5 py-0.5 rounded-md shadow text-[9px] font-black text-slate-800 whitespace-nowrap">
+            ${String(vehicle.name || `รถ ${id}`).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+            ${online ? '<span class="text-emerald-600"> • สด</span>' : ''}
+          </div>
+        </div>`,
+        iconSize: [0, 0]
+      });
+      const marker = L.marker(last, { icon, zIndexOffset: 600 }).addTo(group);
+      marker.on('click', () => onSelectVehicle?.(id));
+      marker.bindTooltip(`แตะเพื่อดู ${vehicle.name || `รถ ${id}`}`);
+    });
+
+    fleetLayer.current = group;
+    return () => {
+      try { map.removeLayer(group); } catch (_) {}
+      if (fleetLayer.current === group) fleetLayer.current = null;
+    };
+  }, [fleetPaths, fleetVehicles, vehicleColors, vehicleId, trackingMode, routeEdit, drawMode, onSelectVehicle]);
+
+  // 🌍 ขอภาพรวมรถทั้งหมด
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !fleetFitRequest || trackingMode !== 'realtime') return;
+    const latlngs = [];
+    Object.values(fleetPaths || {}).forEach(points => {
+      if (!Array.isArray(points)) return;
+      points.forEach(p => {
+        const lat = Number(p.latitude), lng = Number(p.longitude);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) latlngs.push([lat, lng]);
+      });
+    });
+    if (!latlngs.length) return;
+    setAutoFollow(false);
+    map.fitBounds(L.latLngBounds(latlngs), { padding:[35,35], maxZoom:16 });
+  }, [fleetFitRequest]);
 
   // 🧽 ถูยางลบบนแผนที่
   // - ปิดการลากแผนที่ชั่วคราวในโหมดถู เพื่อให้นิ้วลากเป็น "ยางลบ"
@@ -2219,7 +2316,12 @@ function TrackingMap({ pathData, vehicleId, workDate, trackingMode, focusRequest
         </>
       )}
 
-      {!routeReady && !routeEdit && !drawMode && <div role="status" className="absolute top-16 left-3 right-16 sm:right-auto sm:max-w-xs z-[420] bg-amber-50 text-amber-900 rounded-xl shadow p-2 text-xs font-bold">{routeMessage}<button onClick={() => setReloadRoute(n => n+1)} className="ml-2 underline">ลองใหม่</button></div>}
+      {!routeReady && routeMessage && !routeEdit && !drawMode && (
+        <div role="status" className="absolute left-3 z-[420] bg-amber-50/95 text-amber-900 rounded-lg shadow border border-amber-200 px-2.5 py-1.5 text-[10px] font-bold max-w-[70%]" style={{ bottom:'calc(7rem + env(safe-area-inset-bottom))' }}>
+          ⚠️ เครื่องมือตัดเส้นยังไม่พร้อม
+          <button onClick={() => setReloadRoute(n => n+1)} className="ml-2 underline">ลองใหม่</button>
+        </div>
+      )}
       {/* GPS mini dashboard */}
       {pathData.length > 0 && !drawMode && !routeEdit && !mobileToolsOpen && (
         <div className="hidden sm:block absolute bottom-20 left-4 z-[390] bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-200 p-2.5 max-w-[calc(100%-90px)]">
@@ -2392,65 +2494,198 @@ function App() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address_note: '' });
 
-  // 👇 วาง State สำหรับ GPS ตรงนี้ 👇
+  // 🛰️ GPS — เปิดแล้วเห็นรถทันที / เลือกรถบนแผนที่ / ประวัติเลือกวันได้
   const [trackingVehicleId, setTrackingVehicleId] = useState('');
   const [trackingMode, setTrackingMode] = useState('realtime');
-  const [trackingDate, setTrackingDate] = useState(new Date().toISOString().slice(0, 10));
+  const [trackingDate, setTrackingDate] = useState('');
   const [gpsPathData, setGpsPathData] = useState([]);
   const [gpsDataScope, setGpsDataScope] = useState('');
-  const gpsRequestSeq = useRef(0);
+  const [gpsFleetPaths, setGpsFleetPaths] = useState({});
   const [isFetchingGps, setIsFetchingGps] = useState(false);
-  const [gpsFocusRequest, setGpsFocusRequest] = useState(0); // เพิ่มเมื่อกดค้นหา เพื่อพาแผนที่ไปหารถ 1 ครั้ง
-  const [showGpsMobilePanel, setShowGpsMobilePanel] = useState(false); // 📱 ตั้งค่าค้นหา GPS แบบ bottom sheet
+  const [isFetchingFleetGps, setIsFetchingFleetGps] = useState(false);
+  const [gpsFocusRequest, setGpsFocusRequest] = useState(0);
+  const [gpsFleetFitRequest, setGpsFleetFitRequest] = useState(0);
+  const gpsRequestSeq = useRef(0);
+  const gpsFleetRequestSeq = useRef(0);
+  const gpsTabOpenedRef = useRef(false);
 
-  // วันที่อ้างอิงของ GPS/แปลง ใช้ค่าเดียวกันทั้งค้นหาเส้นทางและบันทึกแปลง
   const getLocalDateString = () => {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
     return now.toISOString().slice(0, 10);
   };
-  const effectiveTrackingDate = trackingMode === 'realtime' ? getLocalDateString() : trackingDate;
+
+  const effectiveTrackingDate = trackingMode === 'realtime'
+    ? getLocalDateString()
+    : (trackingDate || getLocalDateString());
 
   const gpsViewScope = `${trackingVehicleId}/${effectiveTrackingDate}`;
   const gpsViewScopeRef = useRef(gpsViewScope);
   gpsViewScopeRef.current = gpsViewScope;
   const visibleGpsPath = gpsDataScope === gpsViewScope ? gpsPathData : [];
-  // 🔍 ใช้ฟังก์ชันเดียวกันทั้งคอมและมือถือ
-  const searchGpsRoute = async () => {
-    if (!trackingVehicleId) {
-      alert('กรุณาเลือกรถเกี่ยวครับ');
-      return false;
-    }
 
-    const requestScope = gpsViewScope;
+  const GPS_FLEET_COLORS = ['#2563EB', '#F97316', '#7C3AED', '#16A34A', '#DB2777', '#0891B2', '#DC2626', '#CA8A04'];
+  const vehicleColors = useMemo(() => Object.fromEntries(
+    vehicles.map((v, i) => [String(v.id), GPS_FLEET_COLORS[i % GPS_FLEET_COLORS.length]])
+  ), [vehicles]);
+
+  const gpsLastPointTime = (path) => {
+    if (!Array.isArray(path) || !path.length) return 0;
+    const raw = path[path.length - 1]?.created_at;
+    const t = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const gpsAgeText = (path) => {
+    const t = gpsLastPointTime(path);
+    if (!t) return 'ไม่มีสัญญาณ';
+    const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (sec < 60) return `${sec} วิ`;
+    if (sec < 3600) return `${Math.floor(sec / 60)} นาที`;
+    return `${Math.floor(sec / 3600)} ชม.`;
+  };
+
+  const fetchGpsDay = async (vehicleId, date) => {
+    const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${vehicleId}?date=${date}`, { cache:'no-store' });
+    let data = [];
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error(data?.error || 'โหลด GPS ไม่สำเร็จ');
+    return Array.isArray(data) ? data : [];
+  };
+
+  const loadSelectedGps = async (vehicleId = trackingVehicleId, date = effectiveTrackingDate, { focus = true, silent = true } = {}) => {
+    if (!vehicleId) return false;
+    const scope = `${vehicleId}/${date}`;
     const requestSeq = ++gpsRequestSeq.current;
     setIsFetchingGps(true);
     try {
-      const dateToSend = effectiveTrackingDate;
-      const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
-      const data = await res.json();
-
-      if (gpsViewScopeRef.current !== requestScope || gpsRequestSeq.current !== requestSeq) return false;
-      if (!res.ok) throw new Error(data.error || 'โหลด GPS ไม่สำเร็จ');
-      setGpsDataScope(requestScope);
-      setGpsPathData(Array.isArray(data) ? data : []);
-      if (!Array.isArray(data) || data.length === 0) {
-        alert('ไม่มีข้อมูลการวิ่งในวันที่เลือกครับ (รถอาจจะยังไม่สตาร์ท)');
-        return false;
-      }
-
+      const data = await fetchGpsDay(vehicleId, date);
+      if (gpsRequestSeq.current !== requestSeq || gpsViewScopeRef.current !== scope) return false;
+      setGpsDataScope(scope);
       setGpsPathData(data);
-      setGpsFocusRequest(prev => prev + 1);
-      return true;
+      if (trackingMode === 'realtime') {
+        setGpsFleetPaths(prev => ({ ...prev, [String(vehicleId)]: data }));
+      }
+      if (focus && data.length) setGpsFocusRequest(n => n + 1);
+      return data.length > 0;
     } catch (e) {
-      console.error(e);
-      alert('ดึงข้อมูล GPS ไม่สำเร็จครับ');
+      console.error('GPS selected load:', e);
+      if (!silent) alert('ดึงข้อมูล GPS ไม่สำเร็จครับ');
+      if (gpsRequestSeq.current === requestSeq && gpsViewScopeRef.current === scope) {
+        setGpsDataScope(scope);
+        setGpsPathData([]);
+      }
       return false;
     } finally {
       if (gpsRequestSeq.current === requestSeq) setIsFetchingGps(false);
     }
   };
-  // 👆 จบการวาง State 👆
+
+  // โหลดรถทุกคันวันนี้ เพื่อเลือกคันที่มี GPS ล่าสุดอัตโนมัติ และวาดภาพรวมหลายคัน
+  const loadFleetGps = async ({ chooseBest = false, focusBest = false } = {}) => {
+    if (!vehicles.length) return {};
+    const date = getLocalDateString();
+    const seq = ++gpsFleetRequestSeq.current;
+    setIsFetchingFleetGps(true);
+    try {
+      const settled = await Promise.all(vehicles.map(async v => {
+        try {
+          const path = await fetchGpsDay(v.id, date);
+          return [String(v.id), path];
+        } catch (_) {
+          return [String(v.id), []];
+        }
+      }));
+      if (gpsFleetRequestSeq.current !== seq) return {};
+      const next = Object.fromEntries(settled);
+      setGpsFleetPaths(next);
+
+      let selectedId = String(trackingVehicleId || '');
+      if (chooseBest || !selectedId || !vehicles.some(v => String(v.id) === selectedId)) {
+        const candidates = vehicles
+          .map(v => ({ id:String(v.id), t:gpsLastPointTime(next[String(v.id)]), has:(next[String(v.id)] || []).length > 0 }))
+          .sort((a,b) => (b.has - a.has) || (b.t - a.t));
+        selectedId = candidates[0]?.id || String(vehicles[0]?.id || '');
+        if (selectedId) setTrackingVehicleId(selectedId);
+      }
+
+      if (selectedId) {
+        const selectedPath = next[selectedId] || [];
+        const selectedScope = `${selectedId}/${date}`;
+        setGpsDataScope(selectedScope);
+        setGpsPathData(selectedPath);
+        if (focusBest && selectedPath.length) setGpsFocusRequest(n => n + 1);
+      }
+      return next;
+    } finally {
+      if (gpsFleetRequestSeq.current === seq) setIsFetchingFleetGps(false);
+    }
+  };
+
+  const selectGpsVehicle = async (id) => {
+    const vehicleId = String(id || '');
+    if (!vehicleId) return;
+    setTrackingVehicleId(vehicleId);
+
+    if (trackingMode === 'realtime') {
+      const date = getLocalDateString();
+      const cached = gpsFleetPaths[vehicleId];
+      if (Array.isArray(cached)) {
+        setGpsDataScope(`${vehicleId}/${date}`);
+        setGpsPathData(cached);
+        if (cached.length) setGpsFocusRequest(n => n + 1);
+      } else {
+        setTimeout(() => loadSelectedGps(vehicleId, date, { focus:true, silent:true }), 0);
+      }
+    } else {
+      const date = trackingDate || getLocalDateString();
+      setTimeout(() => loadSelectedGps(vehicleId, date, { focus:true, silent:true }), 0);
+    }
+  };
+
+  const changeGpsMode = (mode) => {
+    if (mode === trackingMode) return;
+    setTrackingMode(mode);
+    if (mode === 'realtime') {
+      setTrackingDate(getLocalDateString());
+      setTimeout(() => loadFleetGps({ chooseBest:false, focusBest:true }), 0);
+    } else {
+      const date = trackingDate || getLocalDateString();
+      setTrackingDate(date);
+      const fallbackId = trackingVehicleId || String(vehicles[0]?.id || '');
+      if (fallbackId && !trackingVehicleId) setTrackingVehicleId(fallbackId);
+      setTimeout(() => fallbackId && loadSelectedGps(fallbackId, date, { focus:true, silent:true }), 0);
+    }
+  };
+
+  const shiftTrackingDate = (days) => {
+    const base = new Date(`${trackingDate || getLocalDateString()}T12:00:00`);
+    base.setDate(base.getDate() + days);
+    const next = `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}-${String(base.getDate()).padStart(2,'0')}`;
+    setTrackingDate(next);
+  };
+
+  // เข้าเมนู "พิกัด" = สดทันที + เลือกรถที่มี GPS ล่าสุด + พาไปหารถ
+  useEffect(() => {
+    if (activeTab !== 'gps') {
+      gpsTabOpenedRef.current = false;
+      return;
+    }
+    if (gpsTabOpenedRef.current || !vehicles.length) return;
+    gpsTabOpenedRef.current = true;
+    setTrackingMode('realtime');
+    setTrackingDate(getLocalDateString());
+    loadFleetGps({ chooseBest:true, focusBest:true });
+  }, [activeTab, vehicles.length]);
+
+  // ประวัติ: เปลี่ยนรถหรือวันที่แล้วโหลดทันที ไม่ต้องกด "ค้นหา"
+  useEffect(() => {
+    if (activeTab !== 'gps' || trackingMode !== 'history' || !trackingVehicleId || !trackingDate) return;
+    loadSelectedGps(trackingVehicleId, trackingDate, { focus:true, silent:true });
+  }, [activeTab, trackingMode, trackingVehicleId, trackingDate]);
+
+  // คงชื่อเดิมไว้เผื่อ code ส่วนอื่นเรียก แต่ไม่ต้องใช้ปุ่มค้นหาแล้ว
+  const searchGpsRoute = async () => loadSelectedGps(trackingVehicleId, effectiveTrackingDate, { focus:true, silent:false });
 
   // 👇 วางต่อท้าย isFetchingGps 👇
   // 💸 State สำหรับจัดการค่าใช้จ่ายจิปาถะ
@@ -2558,39 +2793,16 @@ function App() {
     }
   };
 
-// 🔄 ระบบ Auto-Refresh ดึงพิกัด GPS อัตโนมัติ (ทุกๆ 10 วินาที)
+// 🔄 GPS สด: รีเฟรชรถทุกคันทุก 10 วินาที เพื่อให้ภาพรวมและสีรถอัปเดตพร้อมกัน
   useEffect(() => {
     let intervalId;
-
-    // ระบบจะทำงานก็ต่อเมื่อ: เปิดหน้า GPS อยู่ + เลือกโหมดทำงานปัจจุบัน + เลือกรถแล้ว
-    if (activeTab === 'gps' && trackingMode === 'realtime' && trackingVehicleId) {
-      
-      intervalId = setInterval(async () => {
-        try {
-          // คำนวณวันที่ของวันนี้ส่งไปด้วย (แก้บั๊ก Timezone)
-          const dateToSend = getLocalDateString();
-          
-          // แอบไปดึงข้อมูลเงียบๆ หลังบ้าน
-          const res = await fetch(`https://harvester-api-server.onrender.com/api/gps/${trackingVehicleId}?date=${dateToSend}`);
-          const data = await res.json();
-          
-          // อัปเดตเส้นทางบนแผนที่
-          if (res.ok && Array.isArray(data) && gpsViewScopeRef.current === `${trackingVehicleId}/${dateToSend}`) {
-            setGpsDataScope(`${trackingVehicleId}/${dateToSend}`);
-            setGpsPathData(data);
-          }
-        } catch (e) {
-          console.error("ระบบดึง GPS อัตโนมัติขัดข้อง:", e);
-        }
-      }, 10000); // 10000 มิลลิวินาที = 10 วินาที
-      
+    if (activeTab === 'gps' && trackingMode === 'realtime' && vehicles.length) {
+      intervalId = setInterval(() => {
+        loadFleetGps({ chooseBest:false, focusBest:false }).catch(() => {});
+      }, 10000);
     }
-
-    // ล้างความจำ (หยุดนาฬิกาปลุก) เวลาสลับไปแท็บอื่น จะได้ไม่กินแบตมือถือ
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [activeTab, trackingMode, trackingVehicleId]);
+    return () => { if (intervalId) clearInterval(intervalId); };
+  }, [activeTab, trackingMode, vehicles.length, trackingVehicleId]);
 
 
   // ฟังก์ชันดึงรายชื่อรถ
@@ -3922,175 +4134,125 @@ function App() {
 
         {activeTab === 'calendar' && renderCalendar()}
 
-        {/* 👇 วางหน้าจอ GPS ตรงนี้ 👇 */}
+        {/* 🛰️ GPS — เปิดแล้วเห็นรถทันที ไม่ต้องค้นหา */}
         {activeTab === 'gps' && (
-          <div data-gps-shell className={isMapFullScreen ? "fixed inset-0 z-[500] bg-white flex flex-col pb-[env(safe-area-inset-bottom)]" : "bg-white sm:rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[calc(100dvh-5.5rem)] sm:h-[75vh] min-h-[500px]"}>
-            
-            {/* 📱 Mobile GPS header — สูงนิดเดียว ไม่กินพื้นที่แผนที่ */}
-            <div className="sm:hidden h-12 shrink-0 px-2.5 bg-white border-b border-gray-200 z-[470] flex items-center gap-2 shadow-sm">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-blue-600">🛰️</span>
-                  <p className="font-black text-xs text-gray-800 truncate">
-                    {vehicles.find(v => String(v.id) === String(trackingVehicleId))?.name || 'GPS รถเกี่ยว'}
-                  </p>
-                  <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-full ${trackingMode === 'realtime' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-                    {trackingMode === 'realtime' ? 'LIVE' : 'ย้อนหลัง'}
-                  </span>
+          <div data-gps-shell className={isMapFullScreen ? "fixed inset-0 z-[500] bg-white flex flex-col pb-[env(safe-area-inset-bottom)]" : "bg-white sm:rounded-xl shadow-md border border-gray-200 overflow-hidden flex flex-col h-[calc(100dvh-5.5rem)] sm:h-[78vh] min-h-[520px]"}>
+
+            {/* แถบ LIVE / ประวัติ — คงที่และเล็ก */}
+            <div className="shrink-0 bg-white border-b border-gray-200 px-2.5 py-2 z-[470] shadow-sm">
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-blue-600 text-lg">🛰️</span>
+                    <div className="min-w-0">
+                      <p className="font-black text-sm text-gray-900 truncate">GPS รถเกี่ยว</p>
+                      <p className="text-[9px] text-gray-500 truncate">
+                        {trackingMode === 'realtime'
+                          ? (isFetchingFleetGps ? 'กำลังอัปเดตรถทุกคัน…' : 'เปิดแล้วพาไปหารถอัตโนมัติ')
+                          : `ประวัติ ${new Date(`${effectiveTrackingDate}T12:00:00`).toLocaleDateString('th-TH')}`}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-[8px] text-gray-400 truncate">
-                  {trackingVehicleId ? `${effectiveTrackingDate}${gpsPathData.length ? ` • ${gpsPathData.length.toLocaleString()} จุด` : ''}` : 'แตะค้นหาเพื่อเลือกรถ'}
-                </p>
-              </div>
-              <button
-                onClick={() => setShowGpsMobilePanel(true)}
-                className="h-9 px-3 rounded-full bg-blue-600 text-white font-black text-[11px] shadow-sm active:scale-95"
-              >
-                🔍 ค้นหา
-              </button>
-            </div>
 
-            {/* 📱 Mobile search/settings bottom sheet */}
-            {showGpsMobilePanel && (
-              <div className="sm:hidden fixed inset-0 z-[1000] flex items-end">
-                <button aria-label="ปิด" onClick={() => setShowGpsMobilePanel(false)} className="absolute inset-0 bg-black/35" />
-                <div className="relative w-full bg-white rounded-t-3xl shadow-2xl p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-                  <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-3" />
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <h3 className="font-black text-base text-gray-800">🛰️ ค้นหาเส้นทาง</h3>
-                      <p className="text-[10px] text-gray-500">ปิดแผงนี้แล้วแผนที่จะกลับมาเต็มพื้นที่</p>
-                    </div>
-                    <button onClick={() => setShowGpsMobilePanel(false)} className="w-9 h-9 rounded-full bg-gray-100 text-gray-600 font-black">✕</button>
-                  </div>
-
-                  <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-xl">
-                    <button
-                      onClick={() => setTrackingMode('realtime')}
-                      className={`flex-1 py-2 text-xs font-black rounded-lg ${trackingMode === 'realtime' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}
-                    >🟢 ปัจจุบัน</button>
-                    <button
-                      onClick={() => setTrackingMode('history')}
-                      className={`flex-1 py-2 text-xs font-black rounded-lg ${trackingMode === 'history' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}
-                    >🕒 ย้อนหลัง</button>
-                  </div>
-
-                  <label className="block text-[10px] font-black text-gray-600 mb-1">รถเกี่ยว</label>
-                  <select
-                    className="w-full border border-gray-300 p-3 rounded-xl bg-white text-sm font-bold text-gray-700 mb-3"
-                    value={trackingVehicleId}
-                    onChange={(e) => setTrackingVehicleId(e.target.value)}
-                  >
-                    <option value="">-- เลือกรถเกี่ยว --</option>
-                    {vehicles.map(v => (<option key={`mobile-${v.id}`} value={v.id}>🚜 {v.name}</option>))}
-                  </select>
-
-                  {trackingMode === 'history' && (
-                    <>
-                      <label className="block text-[10px] font-black text-gray-600 mb-1">วันที่</label>
-                      <input
-                        type="date"
-                        className="w-full border border-gray-300 p-3 rounded-xl bg-white text-sm mb-3"
-                        value={trackingDate}
-                        onChange={(e) => setTrackingDate(e.target.value)}
-                      />
-                    </>
-                  )}
-
-                  {gpsPathData.length > 0 && (
-                    <div className="mb-3 bg-sky-50 border border-sky-100 rounded-xl p-2.5 flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-[9px] font-black text-sky-700">📍 พิกัดล่าสุด</p>
-                        <p className="font-mono text-[9px] text-gray-600 truncate">{gpsPathData[gpsPathData.length - 1].latitude}, {gpsPathData[gpsPathData.length - 1].longitude}</p>
-                      </div>
-                      <button
-                        onClick={() => navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length - 1].latitude}, ${gpsPathData[gpsPathData.length - 1].longitude}`)}
-                        className="w-9 h-9 shrink-0 bg-white rounded-lg border border-sky-200"
-                      >📋</button>
-                    </div>
-                  )}
-
+                <div className="flex bg-gray-100 p-1 rounded-xl shrink-0">
                   <button
-                    onClick={async () => {
-                      const ok = await searchGpsRoute();
-                      if (ok) setShowGpsMobilePanel(false);
-                    }}
-                    disabled={isFetchingGps}
-                    className="w-full bg-blue-600 text-white font-black py-3 rounded-xl text-sm shadow-md disabled:opacity-50"
+                    type="button"
+                    onClick={() => changeGpsMode('realtime')}
+                    className={`px-3 py-2 rounded-lg text-[10px] font-black ${trackingMode === 'realtime' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500'}`}
                   >
-                    {isFetchingGps ? '⏳ กำลังดึงข้อมูล...' : '🔍 ค้นหาแล้วไปที่รถ'}
+                    🟢 สด
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeGpsMode('history')}
+                    className={`px-3 py-2 rounded-lg text-[10px] font-black ${trackingMode === 'history' ? 'bg-white text-orange-700 shadow-sm' : 'text-gray-500'}`}
+                  >
+                    📅 ประวัติ
                   </button>
                 </div>
               </div>
-            )}
 
-            {/* แผงควบคุมด้านบน */}
-            <div className="hidden sm:block p-4 bg-gray-50 border-b border-gray-200 z-10 relative shadow-sm shrink-0">
-              <h2 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
-                <span className="text-blue-600">🛰️</span> ระบบติดตามรถเกี่ยว
-              </h2>
-              
-              <div className="flex gap-2 mb-3 bg-gray-200 p-1 rounded-lg">
-                <button 
-                  onClick={() => setTrackingMode('realtime')}
-                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition ${trackingMode === 'realtime' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}
-                >
-                  🟢 ทำงานปัจจุบัน
-                </button>
-                <button 
-                  onClick={() => setTrackingMode('history')}
-                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition ${trackingMode === 'history' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500'}`}
-                >
-                  🕒 ดูประวัติย้อนหลัง
-                </button>
-              </div>
+              {/* รถหลายคัน = ปุ่มสีเล็ก ๆ เลื่อนซ้าย/ขวา */}
+              <div className="mt-2 flex items-center gap-2">
+                <div className="flex-1 overflow-x-auto">
+                  <div className="flex gap-2 min-w-max pb-0.5">
+                    {vehicles.map(v => {
+                      const id = String(v.id);
+                      const selected = id === String(trackingVehicleId);
+                      const color = vehicleColors[id] || '#2563EB';
+                      const path = trackingMode === 'realtime'
+                        ? (gpsFleetPaths[id] || [])
+                        : (selected ? visibleGpsPath : []);
+                      const lastTime = gpsLastPointTime(path);
+                      const online = trackingMode === 'realtime' && lastTime > 0 && (Date.now() - lastTime) <= 60000;
 
-              <div className="flex gap-2">
-                <select 
-                  className="flex-1 border border-gray-300 p-2 rounded-lg bg-white text-sm font-bold text-gray-700"
-                  value={trackingVehicleId}
-                  onChange={(e) => setTrackingVehicleId(e.target.value)}
-                >
-                  <option value="">-- เลือกรถเกี่ยว --</option>
-                  {vehicles.map(v => ( <option key={v.id} value={v.id}>🚜 {v.name}</option> ))}
-                </select>
+                      return (
+                        <button
+                          key={`gps-chip-${id}`}
+                          type="button"
+                          onClick={() => selectGpsVehicle(id)}
+                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[10px] font-black shadow-sm whitespace-nowrap ${selected ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-gray-200'}`}
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full border border-white/70 shadow" style={{ backgroundColor: color }} />
+                          <span>{v.name}</span>
+                          {trackingMode === 'realtime' && (
+                            <span className={online ? 'text-emerald-400' : selected ? 'text-slate-300' : 'text-gray-400'}>
+                              {online ? 'สด' : gpsAgeText(path)}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
-                {trackingMode === 'history' && (
-                  <input 
-                    type="date" 
-                    className="flex-1 border border-gray-300 p-2 rounded-lg bg-white text-sm"
-                    value={trackingDate}
-                    onChange={(e) => setTrackingDate(e.target.value)}
-                  />
+                {trackingMode === 'realtime' && Object.values(gpsFleetPaths).some(p => Array.isArray(p) && p.length) && (
+                  <button
+                    type="button"
+                    onClick={() => setGpsFleetFitRequest(n => n + 1)}
+                    className="shrink-0 px-2.5 py-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-black"
+                  >
+                    🌍 ทั้งหมด
+                  </button>
                 )}
               </div>
 
-              <button 
-                onClick={searchGpsRoute}
-                className="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-sm shadow-md transition flex justify-center items-center gap-2"
-              >
-                {isFetchingGps ? '⏳ กำลังดึงข้อมูล...' : '🔍 ค้นหาเส้นทาง'}
-              </button>
+              {/* ประวัติ = แถบปฏิทินทันที ไม่ต้องเปิด popup */}
+              {trackingMode === 'history' && (
+                <div className="mt-2 grid grid-cols-[42px_1fr_auto_42px] gap-2 items-center bg-orange-50 border border-orange-200 rounded-xl p-1.5">
+                  <button type="button" onClick={() => shiftTrackingDate(-1)} className="h-9 rounded-lg bg-white border border-orange-200 text-orange-800 font-black">‹</button>
+                  <input
+                    type="date"
+                    value={trackingDate || getLocalDateString()}
+                    onChange={(e) => setTrackingDate(e.target.value)}
+                    className="min-w-0 h-9 rounded-lg border border-orange-200 bg-white px-2 text-xs font-bold text-gray-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setTrackingDate(getLocalDateString())}
+                    className="h-9 px-2.5 rounded-lg bg-white border border-orange-200 text-[10px] font-black text-orange-800 whitespace-nowrap"
+                  >
+                    วันนี้
+                  </button>
+                  <button type="button" onClick={() => shiftTrackingDate(1)} className="h-9 rounded-lg bg-white border border-orange-200 text-orange-800 font-black">›</button>
+                </div>
+              )}
+
+              {/* สถานะรถที่เลือก */}
+              {trackingVehicleId && (
+                <div className="mt-1.5 flex items-center justify-between gap-2 text-[9px] text-gray-500">
+                  <span className="truncate">
+                    🚜 {vehicles.find(v => String(v.id) === String(trackingVehicleId))?.name || `รถ ${trackingVehicleId}`}
+                    {visibleGpsPath.length ? ` • ${visibleGpsPath.length.toLocaleString()} จุด` : ' • ไม่มีข้อมูลในวันที่เลือก'}
+                  </span>
+                  {isFetchingGps && <span className="text-blue-600 font-bold whitespace-nowrap">⏳ โหลด…</span>}
+                </div>
+              )}
             </div>
 
-            {/* แผงบอกสถานะย่อส่วน (ซ่อนป้ายพื้นที่อัตโนมัติเก่าทิ้งไป) */}
-            {gpsPathData.length > 0 && !isMapFullScreen && (
-              <div className="hidden sm:flex bg-white border-b border-gray-200 p-3 z-10 shadow-sm shrink-0 justify-between items-center">
-                 <div>
-                   <p className="text-[10px] text-gray-500 mb-0.5">พิกัดล่าสุด: <span className="font-mono">{gpsPathData[gpsPathData.length-1].latitude}, {gpsPathData[gpsPathData.length-1].longitude}</span></p>
-                   <p className="font-bold text-blue-800 text-xs">
-                     {new Date(gpsPathData[gpsPathData.length-1].created_at).toLocaleString('th-TH')}
-                   </p>
-                 </div>
-                 <div className="flex gap-1">
-                   <button onClick={() => navigator.clipboard.writeText(`${gpsPathData[gpsPathData.length-1].latitude}, ${gpsPathData[gpsPathData.length-1].longitude}`)} className="bg-gray-100 hover:bg-gray-200 text-gray-800 px-2 py-1.5 rounded-lg text-xs font-bold transition shadow-sm">📋</button>
-                   <button onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${gpsPathData[gpsPathData.length-1].latitude},${gpsPathData[gpsPathData.length-1].longitude}`, '_blank')} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg shadow-sm text-xs font-bold transition">📍 นำทาง</button>
-                 </div>
-              </div>
-            )}
-
-            {/* ส่วนแสดงแผนที่อัจฉริยะแบบใหม่ */}
-            <div className="flex-1 relative bg-gray-200 min-h-0 sm:min-h-[300px]">
+            {/* แผนที่ */}
+            <div className="flex-1 relative bg-gray-200 min-h-0">
               <TrackingMap
                 jobs={jobs}
                 customers={customersList}
@@ -4103,21 +4265,35 @@ function App() {
                 workDate={effectiveTrackingDate}
                 trackingMode={trackingMode}
                 focusRequest={gpsFocusRequest}
-                isMapFullScreen={isMapFullScreen} 
-                setIsMapFullScreen={setIsMapFullScreen} 
-                isFetchingGps={isFetchingGps} 
+                isMapFullScreen={isMapFullScreen}
+                setIsMapFullScreen={setIsMapFullScreen}
+                isFetchingGps={isFetchingGps || isFetchingFleetGps}
+                fleetPaths={trackingMode === 'realtime' ? gpsFleetPaths : {}}
+                fleetVehicles={vehicles}
+                vehicleColors={vehicleColors}
+                fleetFitRequest={gpsFleetFitRequest}
+                onSelectVehicle={selectGpsVehicle}
               />
-              
-              {/* ข้อความแจ้งเตือนตอนยังไม่มีข้อมูล */}
-              {visibleGpsPath.length === 0 && !(gpsFocusPlot && String(gpsFocusPlot.vehicle_id)===String(trackingVehicleId) && gpsFocusPlot.work_date===effectiveTrackingDate) && (
-                <div className="absolute inset-0 flex items-center justify-center z-[400] pointer-events-none">
-                  <button onClick={() => setShowGpsMobilePanel(true)} className="bg-white/90 backdrop-blur border border-gray-300 px-4 py-3 rounded-xl shadow-sm text-center text-gray-500 text-xs sm:text-sm font-bold pointer-events-auto">
-                    🔍 กรุณากดค้นหาเพื่อดูเส้นทาง
-                  </button>
+
+              {/* ไม่มีข้อมูล: ไม่บังทั้งแผนที่ */}
+              {!isFetchingGps && trackingVehicleId && visibleGpsPath.length === 0 && !(gpsFocusPlot && String(gpsFocusPlot.vehicle_id)===String(trackingVehicleId) && gpsFocusPlot.work_date===effectiveTrackingDate) && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[405] pointer-events-none max-w-[78%]">
+                  <div className="bg-white/95 border border-gray-200 shadow-lg rounded-xl px-3 py-2 text-center">
+                    <p className="text-[10px] font-black text-gray-700">
+                      {trackingMode === 'history' ? '📅 รถคันนี้ไม่มีเส้นทางในวันที่เลือก' : '📡 รถคันนี้ยังไม่มี GPS วันนี้'}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!trackingVehicleId && !isFetchingFleetGps && vehicles.length === 0 && (
+                <div className="absolute inset-0 flex items-center justify-center z-[405] pointer-events-none">
+                  <div className="bg-white/95 border border-gray-200 shadow-lg rounded-xl px-4 py-3 text-center text-xs font-bold text-gray-600">
+                    🚜 ยังไม่มีรายชื่อรถในระบบ
+                  </div>
                 </div>
               )}
             </div>
-
           </div>
         )}
         {/* 👆 จบหน้าจอ GPS 👆 */}

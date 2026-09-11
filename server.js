@@ -1277,11 +1277,42 @@ app.put('/api/jobs/:id', async (req, res) => {
         }
 
         if (jobInfo.customer_id) {
-            const { error: customerError } = await supabase
-                .from('customers')
-                .update({ name: customer_name, phone: phone || "" })
-                .eq('id', jobInfo.customer_id);
-            if (customerError) throw customerError;
+            // ✅ ช่องเบอร์ว่าง = ไม่แก้เบอร์เดิม
+            // Frontend ซ่อนเบอร์จำลอง "ไม่มี-xxxxx" เป็นช่องว่างเพื่อให้ UI อ่านง่าย
+            // จึงห้ามเขียน phone="" ทับฐานข้อมูล เพราะ customers.phone เป็น UNIQUE
+            const customerUpdate = {};
+            const cleanCustomerName = String(customer_name || '').trim();
+            const cleanPhone = String(phone || '').trim();
+
+            if (cleanCustomerName) customerUpdate.name = cleanCustomerName;
+
+            if (cleanPhone) {
+                // ถ้ากรอกเบอร์ใหม่จริง ตรวจว่าซ้ำกับลูกค้ารายอื่นหรือไม่
+                const { data: phoneOwner, error: phoneLookupError } = await supabase
+                    .from('customers')
+                    .select('id,name')
+                    .eq('phone', cleanPhone)
+                    .neq('id', jobInfo.customer_id)
+                    .maybeSingle();
+
+                if (phoneLookupError) throw phoneLookupError;
+
+                if (phoneOwner) {
+                    const duplicateError = new Error(`เบอร์ ${cleanPhone} ถูกใช้กับลูกค้า "${phoneOwner.name || 'รายอื่น'}" อยู่แล้ว`);
+                    duplicateError.code = 'CUSTOMER_PHONE_DUPLICATE';
+                    throw duplicateError;
+                }
+
+                customerUpdate.phone = cleanPhone;
+            }
+
+            if (Object.keys(customerUpdate).length) {
+                const { error: customerError } = await supabase
+                    .from('customers')
+                    .update(customerUpdate)
+                    .eq('id', jobInfo.customer_id);
+                if (customerError) throw customerError;
+            }
         }
 
         const { data: updatedJob, error: jobError } = await supabase
@@ -1333,7 +1364,8 @@ app.put('/api/jobs/:id', async (req, res) => {
         });
     } catch (err) {
         console.error('Error updating job:', err.message);
-        res.status(500).json({ error: err.message, code: err.code || 'JOB_UPDATE_FAILED' });
+        const status = err.code === 'CUSTOMER_PHONE_DUPLICATE' ? 409 : 500;
+        res.status(status).json({ error: err.message, code: err.code || 'JOB_UPDATE_FAILED' });
     }
 });
 
