@@ -4146,11 +4146,13 @@ function App() {
                     <span className="text-blue-600 text-lg">🛰️</span>
                     <div className="min-w-0">
                       <p className="font-black text-sm text-gray-900 truncate">GPS รถเกี่ยว</p>
-                      <p className="text-[9px] text-gray-500 truncate">
-                        {trackingMode === 'realtime'
-                          ? (isFetchingFleetGps ? 'กำลังอัปเดตรถทุกคัน…' : 'เปิดแล้วพาไปหารถอัตโนมัติ')
-                          : `ประวัติ ${new Date(`${effectiveTrackingDate}T12:00:00`).toLocaleDateString('th-TH')}`}
-                      </p>
+                      {(isFetchingFleetGps || trackingMode === 'history') && (
+                        <p className="text-[9px] text-gray-500 truncate">
+                          {trackingMode === 'history'
+                            ? `ประวัติ ${new Date(`${effectiveTrackingDate}T12:00:00`).toLocaleDateString('th-TH')}`
+                            : 'กำลังอัปเดตรถทุกคัน…'}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
