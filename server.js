@@ -210,8 +210,13 @@ app.get('/api/jobs', async (req, res) => {
 app.post('/api/jobs', async (req, res) => {
     let { customer_name, phone, address_note, crop_type, area_size, job_date, latitude, longitude, vehicle_id, price_per_rai, total_price, payment_status } = req.body;
 
-    // แปลงค่าว่างให้เป็น null หรือ 0 ป้องกัน Error ฐานข้อมูล
-    area_size = area_size ? Number(area_size) : null;
+    // ✅ jobs.area_size ในฐานข้อมูลเดิมเป็น NOT NULL
+    // ระบบใหม่อนุญาตให้ "ลูกค้าแจ้งประมาณ" เว้นว่างได้ จึงใช้ 0 เป็นค่าภายในแทน "ยังไม่ระบุ"
+    // ฝั่ง UI จะไม่โชว์ 0 เป็นพื้นที่จริง
+    const parsedArea = area_size !== '' && area_size !== null && area_size !== undefined
+        ? Number(area_size)
+        : 0;
+    area_size = Number.isFinite(parsedArea) && parsedArea >= 0 ? parsedArea : 0;
     price_per_rai = price_per_rai ? Number(price_per_rai) : 0;
     total_price = total_price ? Number(total_price) : 0;
 
@@ -270,7 +275,13 @@ app.post('/api/jobs', async (req, res) => {
             .select();
 
         if (jobError) throw jobError;
-        if (newJob?.[0]?.id) await writeJobAudit(newJob[0].id, 'JOB_CREATED', `สร้างคิวใหม่${area_size == null ? ' • ยังไม่ระบุยอดประมาณ' : ` • ลูกค้าแจ้งประมาณ ${area_size} ไร่`}`, null, newJob[0]);
+        if (newJob?.[0]?.id) await writeJobAudit(
+            newJob[0].id,
+            'JOB_CREATED',
+            `สร้างคิวใหม่${area_size > 0 ? ` • ลูกค้าแจ้งประมาณ ${area_size} ไร่` : ' • ยังไม่ระบุยอดประมาณ'}`,
+            null,
+            newJob[0]
+        );
         res.status(201).json({ message: 'บันทึกคิวงานสำเร็จ!', data: newJob });
 
     } catch (err) {
@@ -1234,7 +1245,9 @@ app.put('/api/jobs/:id', async (req, res) => {
         if (!jobInfo) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
 
         const isDone = jobInfo.status === 'DONE';
-        const oldEstimateArea = jobInfo.area_size == null ? null : Math.max(0, safeRoundNumber(jobInfo.area_size, 0));
+        // ✅ schema เดิมบังคับ area_size NOT NULL
+        // ถ้างานเก่ามีค่า null/ว่างจากยุคก่อน ให้ถือเป็น 0 = "ยังไม่ระบุประมาณ"
+        const oldEstimateArea = Math.max(0, safeRoundNumber(jobInfo.area_size, 0));
         const oldCanonicalArea = isDone
             ? Math.max(0, safeRoundNumber(jobInfo.billing_area ?? jobInfo.area_size, 0))
             : Math.max(0, safeRoundNumber(jobInfo.area_size, 0));
@@ -1320,7 +1333,9 @@ app.put('/api/jobs/:id', async (req, res) => {
             .update({
                 vehicle_id: vehicle_id === 0 ? null : vehicle_id,
                 crop_type,
-                ...(isDone ? { billing_area: canonicalArea } : { area_size: hasArea ? canonicalArea : oldEstimateArea }),
+                ...(isDone
+                    ? { billing_area: canonicalArea }
+                    : { area_size: Math.max(0, safeRoundNumber(hasArea ? canonicalArea : oldEstimateArea, 0)) }),
                 job_date,
                 latitude,
                 longitude,
@@ -1342,7 +1357,9 @@ app.put('/api/jobs/:id', async (req, res) => {
 
         await writeJobAudit(jobId, areaChanged ? (isDone ? 'BILLING_AREA_CHANGED' : 'ESTIMATE_CHANGED') : 'JOB_EDITED',
             areaChanged
-                ? (isDone ? `แก้ไร่คิดเงินเป็น ${canonicalArea.toFixed(2)} ไร่ • ค่าแรง+ลูกหนี้ตาม • ทำจริง/GPS คงเดิม` : `แก้ยอดลูกค้าแจ้งประมาณเป็น ${canonicalArea.toFixed(2)} ไร่`)
+                ? (isDone
+                    ? `แก้ไร่คิดเงินเป็น ${canonicalArea.toFixed(2)} ไร่ • ค่าแรง+ลูกหนี้ตาม • ทำจริง/GPS คงเดิม`
+                    : (canonicalArea > 0 ? `แก้ยอดลูกค้าแจ้งประมาณเป็น ${canonicalArea.toFixed(2)} ไร่` : 'ล้างยอดลูกค้าแจ้งประมาณ'))
                 : 'แก้ข้อมูลคิวงาน', jobInfo, updatedJob);
 
         res.json({
