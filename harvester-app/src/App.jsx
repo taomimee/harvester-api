@@ -3080,10 +3080,13 @@ function App() {
   const openJobs = jobs.filter(j => j.status !== 'DONE');
   const awaitingAreaJobs = openJobs.filter(isAwaitingArea);
   const fieldJobs = openJobs.filter(j => !isAwaitingArea(j));
-  const scheduledTodayJobs = fieldJobs.filter(j => {
+  // Daily summary includes jobs awaiting area confirmation; field follow-up excludes them.
+  const todaySummaryJobs = openJobs.filter(j => {
     const t = new Date(j.job_date);
     return !Number.isNaN(t.getTime()) && t >= todayStart && t < tomorrowStart;
   });
+  const scheduledTodayJobs = todaySummaryJobs.filter(j => !isAwaitingArea(j));
+  const todayAwaitingCount = todaySummaryJobs.filter(isAwaitingArea).length;
 
   // งานที่ต้องตามต่อบนหน้าแรก: งานค้างจากก่อนวันนี้ + งานที่กำลังทำ
   // งาน PAUSED ที่นัดอนาคตจะรอไปโผล่ในวันนัด ไม่ยึดหน้าแรกตลอดเวลา
@@ -3107,9 +3110,9 @@ function App() {
     return new Date(a.job_date || 0) - new Date(b.job_date || 0);
   });
 
-  const todayOnlyArea = scheduledTodayJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
+  const todayOnlyArea = todaySummaryJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
   const oldJobsArea = carryJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
-  const todayIncome = scheduledTodayJobs.reduce(
+  const todayIncome = todaySummaryJobs.reduce(
     (sum, j) => sum + (queueAreaRai(j) * Math.max(0, Number(j.price_per_rai) || 0)),
     0
   );
@@ -3983,8 +3986,9 @@ function App() {
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
                 <span className="text-slate-600 text-xs font-bold mb-1">🚜 นัดเกี่ยววันนี้</span>
                 <span className="text-2xl font-black text-gray-900">
-                  {scheduledTodayJobs.length} <span className="text-sm font-normal">งาน</span>
+                  {todaySummaryJobs.length} <span className="text-sm font-normal">งาน</span>
                 </span>
+                {todayAwaitingCount > 0 && <span className="mt-1 text-xs font-bold text-violet-800">รวมรอยืนยันไร่ {todayAwaitingCount} งาน</span>}
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
