@@ -5,13 +5,30 @@ import 'leaflet/dist/leaflet.css'
 
 const WAGE_API = 'https://harvester-api-server.onrender.com/api';
 const WAGE_ROLES = { DRIVER: '🚜 คนขับ', HELPER: '🔧 เด็กรถเป็นงาน', TRAINEE: '🌱 เด็กฝึกงาน' };
-const wageNames = text => String(text || '').split(',').map(s => s.trim()).filter(Boolean);
+// Presentation icons are not part of worker identity. Keep source names for existing DB profiles.
+const cleanWageName = value => String(value || '').trim().replace(/^[\s👨👩🧑🌾🌱🚜🔧➕✅\u200d\ufe0f]+/u, '').trim();
+const wageNames = text => String(text || '').split(',').map(cleanWageName).filter(Boolean);
+const normalizeWageProfiles = profiles => {
+  const groups = new Map();
+  profiles.forEach(p => {
+    const name = cleanWageName(p.name);
+    if (!name) return;
+    const group = groups.get(name) || [];
+    group.push(p); groups.set(name, group);
+  });
+  return [...groups].map(([name, rows]) => {
+    const exact = rows.find(p => p.name === name);
+    const chosen = exact || rows[0];
+    const conflicting = !exact && new Set(rows.map(p => p.role)).size > 1;
+    return { ...chosen, name, sourceName: chosen.name, role: conflicting ? '' : chosen.role };
+  });
+};
 const crewSplit = (names, profiles) => {
   if (!names.length) throw new Error('เลือกคนทำงานก่อนครับ');
   if (new Set(names).size !== names.length) throw new Error('ห้ามเลือกชื่อคนงานซ้ำ');
   const crew = names.map(name => {
     const profile = profiles.find(p => p.name === name);
-    if (!profile) throw new Error(`กรุณาตั้งระดับของ ${name} ก่อน`);
+    if (!profile || !WAGE_ROLES[profile.role]) throw new Error(`กรุณาตั้งระดับของ ${name} ก่อน`);
     return { name, role: profile.role };
   });
   const drivers = crew.filter(p => p.role === 'DRIVER').length;
@@ -32,10 +49,10 @@ const wageShares = (total, split) => {
   });
 };
 const workerWage = (tx, name, names) => Array.isArray(tx.wage_split) && tx.wage_split.length
-  ? (wageShares(tx.total_amount, tx.wage_split).find(p => p.name === name)?.amount || 0)
-  : Number(tx.total_amount || 0) / Math.max(1, names.length);
+  ? wageShares(tx.total_amount, tx.wage_split).filter(p => cleanWageName(p.name) === cleanWageName(name)).reduce((sum, p) => sum + p.amount, 0)
+  : Number(tx.total_amount || 0) * names.filter(n => cleanWageName(n) === cleanWageName(name)).length / Math.max(1, names.length);
 const workerRateLabel = (tx, name, count) => {
-  const part = tx.wage_split?.find(p => p.name === name);
+  const part = tx.wage_split?.find(p => cleanWageName(p.name) === cleanWageName(name));
   return part ? `${part.rate} บาท/ไร่` : count > 1 ? `ส่วนแบ่งเดิมหาร ${count}` : 'งานเดี่ยว';
 };
 function WageWorkerSettings({ profiles, error, onSave, onReload }) {
@@ -46,8 +63,8 @@ function WageWorkerSettings({ profiles, error, onSave, onReload }) {
     <summary className="cursor-pointer font-black text-orange-900">👷 จัดการคนงาน / ระดับค่าแรง</summary>
     <p className="text-xs my-2 text-gray-600">คนขับ • เด็กรถเป็นงาน 20 • เด็กฝึกงาน 10 บาท/ไร่ — เปลี่ยนระดับมีผลกับรอบใหม่เท่านั้น</p>
     {error && <p className="text-sm font-bold text-red-700">{error} <button type="button" onClick={onReload} className="underline">ลองใหม่</button></p>}
-    <div className="flex flex-wrap gap-2 my-2">{profiles.map(p => <button type="button" key={p.name} onClick={() => { setName(p.name); setRole(p.role); }} className="bg-white rounded-lg border p-2 text-sm font-bold">{p.name} · {WAGE_ROLES[p.role]}</button>)}</div>
-    <input aria-label="ชื่อคนงาน" placeholder="เพิ่มชื่อ หรือเลือกชื่อเพื่อเปลี่ยนระดับ" value={name} onChange={e => setName(e.target.value)} className="w-full border rounded-lg p-2 mb-2" />
+    <div className="flex flex-wrap gap-2 my-2">{profiles.map(p => <button type="button" key={p.name} onClick={() => { setName(p.name); setRole(p.role); }} className="bg-white rounded-lg border p-2 text-sm font-bold">{p.name} · {WAGE_ROLES[p.role] || 'กรุณาตั้งระดับ'}</button>)}</div>
+    <input aria-label="ชื่อคนงาน" placeholder="ชื่ออย่างเดียว ไม่ต้องใส่อีโมจิ เช่น จักร กฤษณ์" value={name} onChange={e => setName(e.target.value)} className="w-full border rounded-lg p-2 mb-2" />
     <select aria-label="ระดับคนงาน" value={role} onChange={e => setRole(e.target.value)} className="w-full border rounded-lg p-2 mb-2">
       <option value="">เลือกระดับคนงาน</option>{Object.entries(WAGE_ROLES).map(([v,l]) => <option key={v} value={v}>{l}</option>)}
     </select>
@@ -2473,15 +2490,16 @@ function App() {
       const res = await fetch(`${WAGE_API}/wage-workers`, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok || !Array.isArray(data)) throw new Error(data.error || 'โหลดระดับคนงานไม่สำเร็จ');
-      setWageProfiles(data); setWageProfileError('');
+      setWageProfiles(normalizeWageProfiles(data)); setWageProfileError('');
     } catch(e) { setWageProfileError(e.message || 'โหลดระดับคนงานไม่สำเร็จ'); }
   };
   useEffect(() => { loadWageProfiles(); }, []);
   const saveWageProfile = async (name, role) => {
+    name = cleanWageName(name);
     const res = await fetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, role }) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
-    setWageProfiles(prev => [...prev.filter(p => p.name !== data.name), data].sort((a,b) => a.name.localeCompare(b.name, 'th')));
+    setWageProfiles(prev => [...prev.filter(p => p.name !== cleanWageName(data.name)), ...normalizeWageProfiles([data])].sort((a,b) => a.name.localeCompare(b.name, 'th')));
     setWageProfileError('');
   };
   const [workRoundData, setWorkRoundData] = useState({
@@ -3530,11 +3548,12 @@ function App() {
     const measuredToday = Math.max(0, Number(workRoundData.measuredArea) || 0);
     const billingRaw = String(workRoundData.billingArea ?? '').trim();
     const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
-    const workers = String(workRoundData.workers || '').trim();
+    const selectedNames = wageNames(workRoundData.workers);
+    const workers = selectedNames.map(name => wageProfiles.find(p => p.name === name)?.sourceName || name).join(', ');
     const wagePerRai = 60;
     if (workers) {
       if (wageProfileError) return alert(wageProfileError);
-      try { crewSplit(wageNames(workers), wageProfiles); } catch(e) { return alert(e.message); }
+      try { crewSplit(selectedNames, wageProfiles); } catch(e) { return alert(e.message); }
     }
 
     if (mode === 'PARTIAL') {
@@ -4866,7 +4885,7 @@ function App() {
           const parseDashboardWageNote = (rawNote) => {
             const noteStr = rawNote || '';
             const paidMatches = noteStr.match(/\[จ่ายแล้ว:([^\]]+)\]/g) || [];
-            const paidWorkers = paidMatches.map(m => m.replace('[จ่ายแล้ว:', '').replace(']', '').trim());
+            const paidWorkers = paidMatches.map(m => m.replace('[จ่ายแล้ว:', '').replace(']', '').trim()).map(cleanWageName);
 
             let wStr = noteStr.replace(/\[จ่ายแล้ว:[^\]]+\]/g, '').trim();
             if (wStr.includes('คนทำ:') && wStr.includes('(')) {
@@ -6427,7 +6446,7 @@ function App() {
                       <p className="text-lg font-black text-blue-900">
                         {isFinal
                           ? `${money2(previewWageAmount)} บาท`
-                          : `${(todayMeasured * (Number(workRoundData.wagePerRai) || 60)).toLocaleString()} บาท`}
+                          : `${money2(todayMeasured * 60)} บาท`}
                       </p>
                     </div>
                   </div>
@@ -6470,7 +6489,7 @@ function App() {
           const parseWageNote = (rawNote) => {
             const noteStr = rawNote || '';
             const paidMatches = noteStr.match(/\[จ่ายแล้ว:([^\]]+)\]/g) || [];
-            const paidWorkers = paidMatches.map(m => m.replace('[จ่ายแล้ว:', '').replace(']', '').trim());
+            const paidWorkers = paidMatches.map(m => m.replace('[จ่ายแล้ว:', '').replace(']', '').trim()).map(cleanWageName);
             
             let cleanNote = noteStr.replace(/\[จ่ายแล้ว:[^\]]+\]/g, '').trim();
             let detailsStr = '';
@@ -6484,13 +6503,13 @@ function App() {
                 wStr = parts[0].trim();
                 detailsStr = parts[1].replace(')', '').trim();
             }
-            const jobWorkers = wStr.split(',').map(w => w.trim()).filter(w => w);
+            const jobWorkers = wageNames(wStr);
             return { jobWorkers, paidWorkers, detailsStr };
           };
 
           // 👨‍🌾 1. ดึงชื่อลูกจ้างทั้งหมดที่มีในระบบ
           const uniqueWorkers = new Set(wageProfiles.map(p => p.name));
-          expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name).forEach(tx => uniqueWorkers.add(tx.spender_name));
+          expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name).forEach(tx => uniqueWorkers.add(cleanWageName(tx.spender_name)));
           wageTransactions.forEach(tx => {
             const { jobWorkers } = parseWageNote(tx.note);
             jobWorkers.forEach(w => uniqueWorkers.add(w));
@@ -6521,7 +6540,7 @@ function App() {
             });
 
             // รวมยอดจากประวัติการกด "เบิกเงิน" แบบใหม่ (พิมพ์ตัวเลขเอง)
-            const newWithdrawals = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name === workerName);
+            const newWithdrawals = expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง' && cleanWageName(tx.spender_name) === cleanWageName(workerName));
             const withdrawnNew = newWithdrawals.reduce((sum, tx) => sum + Number(tx.total_amount), 0);
             
             const totalWithdrawn = oldSystemPaid + withdrawnNew;
