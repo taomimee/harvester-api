@@ -4158,41 +4158,24 @@ function App() {
               <p className="text-sm text-slate-700">ไม่ต้องไปเกี่ยวต่อ • ค่าแรงรอบที่ยังไม่ปิดจะลงเมื่อเถ้าแก่ยืนยันไร่</p>
               {awaitingAreaJobs.map(job => {
                 const ws = getJobWorkSummary(job);
-                const vehicle = vehicles.find(v => String(v.id) === String(job.vehicle_id));
-                const gpsArea = Number(job.gps_summary?.area_rai);
                 const gpsCount = Number(job.gps_summary?.plot_count || 0);
-                const hasGps = !job.gps_summary_error && Number.isFinite(gpsArea) && gpsArea >= 0 && gpsCount > 0;
-                const recordedDrivers = [...new Set(ws.rounds.flatMap(r => Array.isArray(r.wage_split) ? r.wage_split.filter(p => p.role === 'DRIVER').map(p => cleanWageName(p.name)) : []))];
-                const unclassifiedCrew = [...new Set(ws.rounds.filter(r => !Array.isArray(r.wage_split) || !r.wage_split.length).flatMap(r => wageNames(r.workers)))];
-                return <article key={job.id} className="rounded-xl border border-violet-200 bg-violet-50 p-4 text-left space-y-3">
-                  <div>
-                    <h4 className="text-lg font-black text-violet-950 break-words">{job.customers?.name || 'ไม่ระบุลูกค้า'}</h4>
-                    <p className="text-sm font-bold text-violet-800 mt-1">เกี่ยวเสร็จแล้ว · รอลูกค้ายืนยันไร่</p>
+                const crew = [...new Set(ws.rounds.flatMap(r => wageNames(r.workers)))];
+                const lastRound = ws.rounds[ws.rounds.length - 1];
+                const date = lastRound?.work_date ? new Date(lastRound.work_date) : null;
+                const validDate = date && !Number.isNaN(date.getTime());
+                return <button key={job.id} onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 150); }} className="w-full flex flex-wrap items-center gap-y-2 p-3 rounded-xl border border-violet-200 bg-white hover:bg-violet-50 shadow-sm text-left">
+                  <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3">
+                    <span className="block text-xs font-black text-gray-800">{validDate ? `${date.getDate()}/${date.getMonth() + 1}` : '—'}</span>
+                    <span className="block text-xs text-violet-800 font-bold mt-1">เกี่ยวเสร็จ</span>
                   </div>
-                  <div className="bg-white border border-violet-100 rounded-lg p-3 space-y-2 text-sm text-slate-800">
-                    <p><b>🚜 รถ:</b> {vehicle?.name || job.vehicles?.name || 'ยังไม่ระบุรถ'} · {job.crop_type || 'งานเกี่ยว'}</p>
-                    <p><b>🛰️ พื้นที่แปลง GPS:</b> {job.gps_summary_error ? 'โหลดไม่สำเร็จ' : hasGps ? `${formatRaiNgan(gpsArea)} · ${gpsCount} แปลง` : 'ยังไม่มีข้อมูลแปลง GPS'}</p>
-                    <p><b>✅ ทำสะสมทุกรอบ:</b> {formatRaiNgan(ws.measuredArea)} · {ws.roundCount} รอบ</p>
-                    <p><b>👨‍🌾 คนขับที่บันทึก:</b> {recordedDrivers.length ? recordedDrivers.join(', ') : 'รอบเดิมยังไม่ได้แยกตำแหน่งคนขับ'}</p>
-                    {unclassifiedCrew.length > 0 && <p><b>👷 คนลงแปลงในรอบเดิม:</b> {unclassifiedCrew.join(', ')} <span className="text-slate-600">(ไม่ได้ระบุระดับในรอบนั้น)</span></p>}
-                    {job.address_note || job.customers?.address_note ? <p><b>📍 สถานที่ / หมายเหตุ:</b> {job.address_note || job.customers?.address_note}</p> : null}
+                  <div className="flex-1 text-center min-w-0 px-1">
+                    <p className="text-sm font-black text-gray-900 truncate">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
+                    <p className="text-xs text-slate-600 font-semibold mt-1">{job.gps_summary_error ? '🛰️ โหลด GPS ไม่สำเร็จ' : gpsCount > 0 ? `🛰️ GPS ${gpsCount} แปลง • ${formatRaiNgan(job.gps_summary?.area_rai)}` : '🛰️ ยังไม่มีแปลง GPS'}</p>
+                    <p className="text-xs text-emerald-700 font-black mt-0.5">✅ ทำสะสม {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ</p>
+                    <p className="text-xs text-slate-700 mt-1 truncate" title={crew.join(', ')}>👷 {crew.join(', ') || 'ยังไม่ระบุคนทำงาน'}</p>
                   </div>
-                  {ws.rounds.length > 0 && <div className="space-y-2">
-                    <p className="text-sm font-black text-violet-950">คนทำงานและพื้นที่แต่ละรอบ</p>
-                    {ws.rounds.map((round, index) => {
-                      const date = new Date(round.work_date);
-                      const dateText = round.work_date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString('th-TH', {day:'numeric', month:'short', year:'numeric'}) : 'ไม่ระบุวันที่';
-                      const hasSplit = Array.isArray(round.wage_split) && round.wage_split.length > 0;
-                      return <div key={round.id || index} className="bg-white rounded-lg border border-violet-100 p-3 text-sm text-slate-800">
-                        <p className="font-bold">รอบ {index + 1} · {dateText}</p>
-                        <p className="mt-1">ทำจริงรอบนี้ {formatRaiNgan(round.measured_area)}</p>
-                        {hasSplit ? round.wage_split.map((person, personIndex) => <p key={`${person.name}-${personIndex}`} className="mt-1">{WAGE_ROLES[person.role] || '👷 คนทำงาน'}: <b>{cleanWageName(person.name)}</b></p>) : <p className="mt-1">👷 คนลงแปลง: <b>{wageNames(round.workers).join(', ') || 'ไม่ระบุ'}</b></p>}
-                      </div>;
-                    })}
-                  </div>}
-                  <p className="text-sm font-semibold text-violet-900">🤝 ไร่คิดเงิน: รอลูกค้ายืนยัน • ยังไม่ลงค่าแรงของรอบที่รอปิดงาน</p>
-                  <button onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 150); }} className="w-full rounded-lg bg-violet-700 text-white py-3 text-sm font-bold">{userRole === 'BOSS' ? 'เปิดรายละเอียด / ยืนยันไร่ →' : 'ดูรายละเอียดงาน →'}</button>
-                </article>;
+                  <div className="w-full text-right"><span className="inline-block bg-violet-100 text-violet-950 border border-violet-300 px-2.5 py-1.5 rounded-lg text-xs font-bold">รอยืนยันไร่ →</span></div>
+                </button>;
               })}
             </section>}
 
