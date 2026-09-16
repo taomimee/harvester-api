@@ -3721,10 +3721,10 @@ function App() {
 
   const getStatusDisplay = (status) => {
     switch (status) {
-      case 'PENDING': return { text: 'รอคิว', color: 'bg-yellow-100 text-yellow-800 border-yellow-300' }
-      case 'IN_PROGRESS': return { text: 'กำลังเกี่ยว', color: 'bg-blue-100 text-blue-800 border-blue-300' }
-      case 'DONE': return { text: 'เสร็จสิ้น', color: 'bg-green-100 text-green-800 border-green-300' }
-      case 'PAUSED': return { text: 'รอเกี่ยวต่อ', color: 'bg-rose-100 text-rose-800 border-rose-300' }
+      case 'PENDING': return { text: 'รอคิว', color: 'bg-amber-100 text-amber-950 border-amber-500' }
+      case 'IN_PROGRESS': return { text: 'กำลังเกี่ยว', color: 'bg-blue-700 text-white border-blue-800' }
+      case 'DONE': return { text: 'เสร็จสิ้น', color: 'bg-emerald-700 text-white border-emerald-800' }
+      case 'PAUSED': return { text: 'รอเกี่ยวต่อ', color: 'bg-orange-100 text-orange-950 border-orange-400' }
       default: return { text: status, color: 'bg-gray-100 text-gray-800 border-gray-300' }
     }
   }
@@ -3841,15 +3841,8 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
-      <div className={`max-w-md mx-auto ${['home','active'].includes(activeTab) ? 'field-readable' : ''}`}>
-        <style>{`
-          .field-readable { color: #0f172a; }
-          .field-readable [class*="text-[9px]"], .field-readable [class*="text-[10px]"], .field-readable [class*="text-[11px]"], .field-readable .text-xs { font-size: 14px; line-height: 1.55; }
-          .field-readable .text-sm { font-size: 16px; line-height: 1.55; }
-          .field-readable .text-gray-400, .field-readable .text-gray-500 { color: #475569; }
-          .field-readable button { min-height: 44px; }
-          .field-readable [id^="job-card-"] h2 { font-size: 24px; line-height: 1.4; }
-        `}</style>
+      <div className="max-w-md mx-auto">
+
         {/* 🐘 Header ช้างขาวเจริญทรัพย์ (พร้อมทางลับเถ้าแก่) */}
         <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
           
@@ -3955,43 +3948,23 @@ function App() {
         )}
 
         {/* 🏠 หน้าแรก — เน้นสิ่งที่ต้องทำ ไม่เอาข้อมูลคนละสถานะมาปนกัน */}
-        {activeTab === 'home' && userRole === 'DRIVER' && (
-          <section className="space-y-4">
-            <div className="rounded-2xl bg-slate-900 p-5 text-white">
-              <p className="text-base font-bold">งานวันนี้</p>
-              <h2 className="text-2xl font-black mt-2">{scheduledTodayJobs.length} คิวนัดวันนี้</h2>
-              <p className="text-base mt-2">{carryJobs.length > 0 ? `มีงานค้าง / รอนัดอีก ${carryJobs.length} คิว` : 'ไม่มีงานค้าง'}</p>
-            </div>
-            <button onClick={() => setActiveTab('active')} className="w-full rounded-xl bg-blue-700 text-white py-4 text-lg font-black">เปิดคิวงานทั้งหมด →</button>
-            <h3 className="text-xl font-black text-slate-900">งานที่ต้องทำ</h3>
-            {todayJobs.length === 0 && <p className="bg-white border rounded-xl p-5 text-lg text-slate-700">ยังไม่มีงานวันนี้</p>}
-            {todayJobs.map(job => <article key={job.id} className="bg-white border-2 border-slate-300 rounded-2xl p-4 space-y-3">
-              <span className={`inline-block rounded-lg px-3 py-2 font-bold ${job.status === 'IN_PROGRESS' ? 'bg-blue-700 text-white' : 'bg-amber-100 text-amber-950'}`}>{getStatusDisplay(job.status).text}</span>
-              <h3 className="text-2xl font-black text-slate-900 break-words">{job.customers?.name || 'ไม่ระบุลูกค้า'}</h3>
-              <p className="text-base font-bold text-slate-700">🚜 {vehicles.find(v => v.id === job.vehicle_id)?.name || 'ยังไม่ระบุรถ'} · {job.crop_type || 'ข้าว'}</p>
-              <p className="text-base text-slate-700">📍 {job.address_note || job.customers?.address_note || 'ยังไม่มีรายละเอียดสถานที่'}</p>
-              <button onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150); }} className="w-full bg-blue-700 text-white rounded-xl py-3 text-lg font-bold">เปิดงานนี้ →</button>
-            </article>)}
-          </section>
-        )}
-
-        {activeTab === 'home' && userRole === 'BOSS' && (
+        {activeTab === 'home' && (
           <div className="space-y-4">
 
             {/* 1. ภาพรวมวันนี้ */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-gray-500 text-xs font-bold mb-1">🚜 คิววันนี้</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🚜 คิววันนี้</span>
                 <span className="text-2xl font-black text-gray-900">
                   {scheduledTodayJobs.length} <span className="text-sm font-normal">งาน</span>
                 </span>
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-gray-500 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้</span>
                 <span className="text-2xl font-black text-emerald-600 leading-none">{formatRaiNgan(todayOnlyArea)}</span>
                 {carryJobs.length > 0 && (
-                  <span className="mt-2 text-[10px] sm:text-xs font-black text-red-700 bg-red-50 px-2.5 py-1 rounded-lg border border-red-200">
+                  <span className="mt-2 text-[10px] sm:text-xs font-black text-red-700 bg-red-100 px-2.5 py-1 rounded-lg border border-red-400">
                     ⚠️ ค้าง/รอ {carryJobs.length} คิว • {formatRaiNgan(oldJobsArea)}
                   </span>
                 )}
@@ -3999,17 +3972,17 @@ function App() {
 
               {userRole === 'BOSS' && (
                 <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                  <span className="text-gray-500 text-xs font-bold mb-1">💰 มูลค่าคิววันนี้</span>
+                  <span className="text-slate-600 text-xs font-bold mb-1">💰 มูลค่าคิววันนี้</span>
                   <span className="text-2xl font-black text-blue-600">
                     {Math.round(todayIncome).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
                   </span>
-                  <span className="text-[9px] text-gray-400 mt-1">ประมาณจากพื้นที่ × ราคา/ไร่</span>
+                  <span className="text-[9px] text-slate-600 mt-1">ประมาณจากพื้นที่ × ราคา/ไร่</span>
                 </div>
               )}
 
               <div
                 onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                className={`bg-red-50 p-4 rounded-xl shadow-sm border border-red-200 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-red-100 transition ${userRole === 'BOSS' ? '' : 'col-span-2'}`}
+                className={`bg-red-100 p-4 rounded-xl shadow-sm border border-red-400 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-red-100 transition ${userRole === 'BOSS' ? '' : 'col-span-2'}`}
               >
                 <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ค้าง</span>
                 <span className="text-2xl font-black text-red-600">
@@ -4030,7 +4003,7 @@ function App() {
                 <div className="flex justify-between items-start gap-3">
                   <div className="min-w-0">
                     <h4 className="font-black text-lg text-gray-900">{mainVehicle?.name || 'รถเกี่ยว 1'}</h4>
-                    <p className="text-xs text-gray-500 font-semibold mt-0.5">
+                    <p className="text-xs text-slate-600 font-semibold mt-0.5">
                       👨‍🌾 คนขับ: {mainVehicle?.driver_name || 'ยังไม่ระบุ'}
                     </p>
                   </div>
@@ -4040,7 +4013,7 @@ function App() {
                       setTrackingMode('realtime');
                       if (mainVehicle) setTrackingVehicleId(String(mainVehicle.id));
                     }}
-                    className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm whitespace-nowrap"
+                    className="bg-white text-blue-800 hover:bg-blue-50 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm whitespace-nowrap"
                   >
                     📍 ดู GPS
                   </button>
@@ -4053,14 +4026,14 @@ function App() {
                       : '☕'}
                   </div>
                   <div className="min-w-0">
-                    <span className={`block text-xs font-bold ${activeJobNow ? 'text-blue-800' : 'text-gray-500'}`}>
+                    <span className={`block text-xs font-bold ${activeJobNow ? 'text-blue-800' : 'text-slate-600'}`}>
                       {activeJobNow ? `กำลังเกี่ยว • ${activeJobNow.crop_type || 'ข้าว'}` : 'สแตนด์บาย'}
                     </span>
                     <span className="block font-black text-gray-900 text-sm truncate mt-0.5">
                       {activeJobNow ? activeJobNow.customers?.name || 'ไม่ระบุลูกค้า' : 'รอรับคิวงานถัดไป'}
                     </span>
                     {activeJobNow && (
-                      <span className="block text-[10px] text-gray-500 font-semibold mt-0.5">
+                      <span className="block text-[10px] text-slate-600 font-semibold mt-0.5">
                         {Number(activeJobNow.gps_summary?.area_rai || 0) > 0 ? '🛰️ GPS ' : '🗣️ ประมาณ '}
                         {formatRaiNgan(queueAreaRai(activeJobNow))}
                       </span>
@@ -4075,7 +4048,7 @@ function App() {
               <div className="flex justify-between items-center mb-3">
                 <div>
                   <h3 className="font-bold text-gray-800 text-sm">🚜 งานที่ต้องจัดการ</h3>
-                  <p className="text-[9px] text-gray-400 mt-0.5">คิววันนี้ + งานค้างที่ยังไม่จบ</p>
+                  <p className="text-[9px] text-slate-600 mt-0.5">คิววันนี้ + งานค้างที่ยังไม่จบ</p>
                 </div>
                 <button onClick={() => setActiveTab('active')} className="text-xs text-orange-600 font-bold hover:underline">
                   ทั้งหมด {todayJobs.length} ▶
@@ -4084,7 +4057,7 @@ function App() {
 
               {todayJobs.length === 0 ? (
                 <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                  <p className="text-gray-500 font-bold text-sm">ไม่มีงานที่ต้องจัดการตอนนี้ 🍃</p>
+                  <p className="text-slate-600 font-bold text-sm">ไม่มีงานที่ต้องจัดการตอนนี้ 🍃</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -4106,7 +4079,7 @@ function App() {
                             if (targetCard) targetCard.scrollIntoView({ behavior:'smooth', block:'center' });
                           }, 120);
                         }}
-                        className="flex items-center p-3 rounded-xl border border-gray-100 bg-white hover:bg-gray-50 shadow-sm cursor-pointer transition"
+                        className="flex items-center p-3 rounded-xl border border-slate-200 bg-white hover:bg-gray-50 shadow-sm cursor-pointer transition"
                       >
                         <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3">
                           {!isToday && <span className="block text-xs font-black text-gray-800">{dateText}</span>}
@@ -4120,7 +4093,7 @@ function App() {
 
                         <div className="flex-1 text-center min-w-0 px-1">
                           <p className="text-sm font-black text-gray-900 truncate">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
-                          <p className="text-xs text-gray-500 font-semibold mt-1">
+                          <p className="text-xs text-slate-600 font-semibold mt-1">
                             {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'}{' '}
                             {Number(job.gps_summary?.area_rai || 0) > 0
                               ? `🛰️ ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
@@ -4172,7 +4145,7 @@ function App() {
                 {debtorsList.length > 0 && (
                   <div
                     onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                    className="flex items-center gap-3 bg-red-50 p-3 rounded-lg border border-red-200 cursor-pointer hover:bg-red-100 transition"
+                    className="flex items-center gap-3 bg-red-100 p-3 rounded-lg border border-red-400 cursor-pointer hover:bg-red-100 transition"
                   >
                     <div className="text-xl">🔴</div>
                     <div>
@@ -4197,7 +4170,7 @@ function App() {
                     </div>
 
                     {radarOverride ? (
-                      <button onClick={() => setRadarOverride(null)} className="bg-red-50 text-red-600 border border-red-200 px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap">
+                      <button onClick={() => setRadarOverride(null)} className="bg-red-100 text-red-600 border border-red-400 px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap">
                         กลับไปดูรถ
                       </button>
                     ) : (
@@ -4264,7 +4237,7 @@ function App() {
                   })() : weatherData?.error ? (
                     <p className="text-xs text-center text-red-500 font-bold py-4">❌ ดึงข้อมูลอากาศไม่ได้</p>
                   ) : (
-                    <p className="text-xs text-center text-gray-500 font-bold py-4">⏳ กำลังโหลดสภาพอากาศ...</p>
+                    <p className="text-xs text-center text-slate-600 font-bold py-4">⏳ กำลังโหลดสภาพอากาศ...</p>
                   )}
                 </div>
               </div>
@@ -4532,8 +4505,8 @@ function App() {
                   id={`job-card-${job.id}`} 
                   className="bg-white rounded-xl p-5 shadow-md border border-gray-200 transition-all duration-500"
                 >
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-2 mb-3">
-                    <div className="text-indigo-800 font-bold text-sm flex justify-between px-1">
+                  <div className="bg-slate-100 border border-slate-300 rounded-lg p-2 mb-3">
+                    <div className="text-slate-700 font-bold text-sm flex justify-between px-1">
                       <span>📅 {jobDateTime.date}</span>
                       <span>⏰ {jobDateTime.time} น.</span>
                     </div>
@@ -4543,7 +4516,7 @@ function App() {
                     <div className="flex justify-between items-start mb-3">
                       <div>
                         <h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2>
-                        <p className="text-sm text-gray-500">
+                        <p className="text-sm text-slate-600">
                           📞 {job.customers?.phone && job.customers.phone !== '-' && !job.customers.phone.startsWith('ไม่มี') ? (
                             <a 
                               href={`tel:${job.customers.phone}`} 
@@ -4557,12 +4530,12 @@ function App() {
                           )}
                         </p>
                       </div>
-                      <span className={`px-3 py-2 rounded-lg text-base font-black border ${job.status === 'IN_PROGRESS' ? 'bg-blue-700 text-white border-blue-800' : job.status === 'DONE' ? 'bg-emerald-700 text-white border-emerald-800' : 'bg-amber-100 text-amber-950 border-amber-400'}`}>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>
                         {statusObj.text}
                       </span>
                     </div>
 
-                    {(isExpanded || activeTab !== 'active') && (() => {
+                    {(() => {
                       const ws = getJobWorkSummary(job);
                       const gpsArea = getJobGpsArea(job);
                       const gpsCount = Number(job.gps_summary?.plot_count || 0);
@@ -4577,8 +4550,8 @@ function App() {
                             {gpsCount>0 && <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="text-[10px] font-black text-blue-700 bg-white border border-blue-200 rounded-lg px-2 py-1">ดู {gpsCount} แปลง</button>}
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">📐 ทำจริง</span><b>{formatRaiNgan(ws.measuredArea)}</b></div>
-                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-gray-500">🤝 คิดเงิน</span><b className="text-emerald-800">{formatRaiNgan(billing)}</b></div>
+                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-slate-600">📐 ทำจริง</span><b>{formatRaiNgan(ws.measuredArea)}</b></div>
+                            <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-slate-600">🤝 คิดเงิน</span><b className="text-emerald-800">{formatRaiNgan(billing)}</b></div>
                           </div>
                           {userRole==='BOSS' && <p className="text-xs font-black text-emerald-900">💰 ยอดบิล {Number(job.total_price || 0).toLocaleString()} บาท</p>}
                           {gpsArea>0 && <p className="text-[10px] text-sky-700">🛰️ GPS เก็บไว้เป็นข้อเท็จจริง {plotThaiArea(gpsArea*1600).text}</p>}
@@ -4591,10 +4564,10 @@ function App() {
                           {gpsCount>0 ? <button onClick={(e)=>{e.stopPropagation();setGpsJobDetail(job.id);}} className="text-[10px] font-black text-blue-700 bg-sky-100 border border-sky-200 rounded-lg px-2 py-1">🛰️ {gpsCount} แปลง • ดูแปลง</button> : null}
                         </div>
 
-                        {job.gps_summary_error ? <p className="text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">🛰️ โหลด GPS ไม่สำเร็จ</p>
+                        {job.gps_summary_error ? <p className="text-xs font-bold text-red-700 bg-red-100 border border-red-400 rounded-lg p-2">🛰️ โหลด GPS ไม่สำเร็จ</p>
                           : gpsArea>0 ? <p className="text-sm font-black text-sky-900">🛰️ GPS {plotThaiArea(gpsArea*1600).text}</p>
                           : estimate>0 ? <p className="text-sm font-black text-amber-900">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)}</p>
-                          : <p className="text-xs font-bold text-gray-500">ยังไม่มีพื้นที่ • ผูกแปลง GPS หรือใส่ยอดประมาณได้ภายหลัง</p>}
+                          : <p className="text-xs font-bold text-slate-600">ยังไม่มีพื้นที่ • ผูกแปลง GPS หรือใส่ยอดประมาณได้ภายหลัง</p>}
 
                         {gpsArea>0 && estimate>0 && <p className="text-[10px] text-amber-700">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)} • เก็บแยกจาก GPS</p>}
 
@@ -4602,13 +4575,13 @@ function App() {
                           <span>✅ ทำแล้ว {formatRaiNgan(ws.measuredArea)}</span>
                           <span>🗂️ {ws.roundCount} รอบ</span>
                           <span className="text-orange-700">⏳ รอปิดค่าแรง {ws.pendingRoundCount} รอบ</span>
-                        </div> : <p className="text-[10px] text-gray-500">ยังไม่มีรอบทำงาน</p>}
+                        </div> : <p className="text-[10px] text-slate-600">ยังไม่มีรอบทำงาน</p>}
 
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
-                    {userRole === 'BOSS' && (isExpanded || activeTab !== 'active') && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
+                    {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
@@ -4637,13 +4610,6 @@ function App() {
                     ) : null}
                   </div>
                   
-                  {!isExpanded && activeTab === 'active' && <div className="space-y-2 mb-3 text-base text-slate-700">
-                    <p className="font-bold">🚜 {assignedVehicle?.name || 'ยังไม่ระบุรถ'} · {job.crop_type || 'ข้าว'}</p>
-                    <p>📍 {job.address_note || job.customers?.address_note || 'ยังไม่มีรายละเอียดสถานที่'}</p>
-                    <p>พื้นที่ {formatRaiNgan(queueAreaRai(job))}</p>
-                  </div>}
-                  <button aria-expanded={isExpanded} onClick={() => setExpandedId(isExpanded ? null : job.id)} className="w-full border-2 border-slate-300 bg-white text-slate-800 rounded-xl py-3 text-base font-bold mb-3">{isExpanded ? 'ย่อรายละเอียด ▴' : 'ดูรายละเอียดงาน ▾'}</button>
-                  {userRole === 'DRIVER' && activeTab === 'active' && job.status !== 'DONE' && <button onClick={() => job.status === 'IN_PROGRESS' ? openWorkRoundModal(job, 'PARTIAL') : updateStatus(job.id, 'IN_PROGRESS')} className={`w-full rounded-xl py-4 text-lg font-black text-white ${job.status === 'IN_PROGRESS' ? 'bg-emerald-700' : 'bg-blue-700'}`}>{job.status === 'IN_PROGRESS' ? '✓ จบงานรอบวันนี้' : '▶ เริ่มเกี่ยว'}</button>}
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
                       <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-4 border border-yellow-200">
@@ -4671,7 +4637,7 @@ function App() {
                                       <span className="font-black text-gray-800">
                                         {round.round_type === 'FINAL' ? '🏁 รอบปิดงาน' : `รอบ ${rIdx + 1}`}
                                       </span>
-                                      <span className="text-gray-500">
+                                      <span className="text-slate-600">
                                         {round.work_date ? new Date(round.work_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '-'}
                                       </span>
                                     </div>
@@ -4682,7 +4648,7 @@ function App() {
                                         : <span className="text-orange-700 font-bold">⏳ รอแบ่งค่าแรงตอนจบ</span>}
                                       <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
                                     </div>
-                                    {cleanNote && <p className="mt-1 text-[10px] text-gray-500">📝 {cleanNote}</p>}
+                                    {cleanNote && <p className="mt-1 text-[10px] text-slate-600">📝 {cleanNote}</p>}
                                   </div>
                                 );
                               })}
@@ -4725,7 +4691,7 @@ function App() {
 
                         {/* ตะแกรงโชว์รูปภาพ */}
                         {jobAttachments.length === 0 ? (
-                          <div className="text-center text-xs text-gray-400 py-6 bg-gray-50 rounded-lg border border-dashed border-gray-300 font-semibold">
+                          <div className="text-center text-xs text-slate-600 py-6 bg-gray-50 rounded-lg border border-dashed border-gray-300 font-semibold">
                             ยังไม่มีรูปภาพสำหรับงานนี้
                           </div>
                         ) : (
@@ -4738,7 +4704,7 @@ function App() {
                                 {userRole === 'BOSS' && (
                                   <button 
                                     onClick={(e) => handleDeleteImage(e, img.id, img.image_url, job.id)}
-                                    className="absolute top-1 right-1 bg-red-500/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
+                                    className="absolute top-1 right-1 bg-red-1000/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
                                   >
                                     ✕
                                   </button>
@@ -4767,23 +4733,23 @@ function App() {
 
                       {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
                       <div className="flex gap-2 pt-3 border-t border-gray-200">
-                        {userRole === 'BOSS' && job.status !== 'IN_PROGRESS' && (
+                        {job.status !== 'IN_PROGRESS' && (
                           <button 
                             onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
-                            className={`flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
+                            className={`flex-1 bg-blue-700 hover:bg-blue-800 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
                           >
                             ▶️ เริ่มเกี่ยว
                           </button>
                         )}
 
                         {/* 🌾 จบเฉพาะรอบวันนี้: จำพื้นที่จริง + คนรับค่าแรงไว้ก่อน ยังไม่ลงสมุด */}
-                        {userRole === 'BOSS' && job.status === 'IN_PROGRESS' && (
+                        {job.status === 'IN_PROGRESS' && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               openWorkRoundModal(job, 'PARTIAL');
                             }}
-                            className={`flex-1 bg-rose-500 hover:bg-rose-600 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
+                            className={`flex-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
                           >
                             🌾 จบวันนี้
                           </button>
@@ -4818,7 +4784,7 @@ function App() {
                         <div className="grid grid-cols-3 gap-2 pt-2 mt-2">
                           <button onClick={(e) => { e.stopPropagation(); inspectJobIntegrity(job); }} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-2 rounded-lg font-bold transition">🔍 ตรวจยอดงาน</button>
                           <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="bg-red-500 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="bg-red-1000 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
                         </div>
                       )}
                     </div>
@@ -4830,7 +4796,7 @@ function App() {
                         {assignedVehicle ? assignedVehicle.name : '⏳ ยังไม่จัดรถ'}
                       </span></p>
                       {assignedVehicle && assignedVehicle.driver_name && (
-                        <p className="text-xs text-gray-500 mt-1">👨‍🌾 คนขับ: {assignedVehicle.driver_name}</p>
+                        <p className="text-xs text-slate-600 mt-1">👨‍🌾 คนขับ: {assignedVehicle.driver_name}</p>
                       )}
                     </div>
                     <a href={`https://www.google.com/maps/search/?api=1&query=${job.latitude},${job.longitude}`} target="_blank" className="bg-blue-600 text-white text-xs font-bold py-2 px-4 rounded-lg" onClick={(e) => e.stopPropagation()}>📍 นำทาง</a>
