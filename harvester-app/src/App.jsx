@@ -2648,6 +2648,8 @@ function App() {
   const gpsRequestSeq = useRef(0);
   const gpsFleetRequestSeq = useRef(0);
   const gpsTabOpenedRef = useRef(false);
+  // เปิด GPS จากแปลงในคิว: จำเจตนาไว้ ไม่ให้ effect 'เข้า GPS = สด' ทับวันย้อนหลัง
+  const gpsPlotEntryRef = useRef(null);
 
   const getLocalDateString = () => {
     const now = new Date();
@@ -2736,7 +2738,7 @@ function App() {
           return [String(v.id), []];
         }
       }));
-      if (gpsFleetRequestSeq.current !== seq) return {};
+      if (gpsFleetRequestSeq.current !== seq || gpsPlotEntryRef.current) return {};
       const next = Object.fromEntries(settled);
       setGpsFleetPaths(next);
 
@@ -2765,6 +2767,7 @@ function App() {
   const selectGpsVehicle = async (id) => {
     const vehicleId = String(id || '');
     if (!vehicleId) return;
+    setGpsFocusPlot(null); // เลือกรถอื่นแล้วไม่เด้งกลับไปแปลงเก่าที่เคยเปิด
     setTrackingVehicleId(vehicleId);
 
     if (trackingMode === 'realtime') {
@@ -2777,14 +2780,14 @@ function App() {
       } else {
         setTimeout(() => loadSelectedGps(vehicleId, date, { focus:true, silent:true }), 0);
       }
-    } else {
-      const date = trackingDate || getLocalDateString();
-      setTimeout(() => loadSelectedGps(vehicleId, date, { focus:true, silent:true }), 0);
     }
+    // โหมดประวัติให้ useEffect ที่ฟังรถ+วันเป็นผู้โหลดหนึ่งครั้งเท่านั้น
   };
 
   const changeGpsMode = (mode) => {
     if (mode === trackingMode) return;
+    setGpsFocusPlot(null);
+    if (mode === 'history') gpsFleetRequestSeq.current += 1; // กัน fetch สดที่ค้างทับวันเก่า
     setTrackingMode(mode);
     if (mode === 'realtime') {
       setTrackingDate(getLocalDateString());
@@ -2794,7 +2797,7 @@ function App() {
       setTrackingDate(date);
       const fallbackId = trackingVehicleId || String(vehicles[0]?.id || '');
       if (fallbackId && !trackingVehicleId) setTrackingVehicleId(fallbackId);
-      setTimeout(() => fallbackId && loadSelectedGps(fallbackId, date, { focus:true, silent:true }), 0);
+      // history effect โหลดตามค่าที่ React อัปเดตแล้ว ลด request ซ้ำและการแย่งกล้อง
     }
   };
 
@@ -2802,10 +2805,33 @@ function App() {
     const base = new Date(`${trackingDate || getLocalDateString()}T12:00:00`);
     base.setDate(base.getDate() + days);
     const next = `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}-${String(base.getDate()).padStart(2,'0')}`;
+    setGpsFocusPlot(null);
     setTrackingDate(next);
   };
 
-  // เข้าเมนู "พิกัด" = สดทันที + เลือกรถที่มี GPS ล่าสุด + พาไปหารถ
+  // เปิดแปลงจาก Job ID ด้วยรถและวันที่ที่บันทึกไว้จริง (ไม่ใช้วันนัดของคิวหรือวันนี้)
+  const openGpsPlotFromJob = (plot) => {
+    const vehicleId = String(plot?.vehicle_id || '');
+    const workDate = String(plot?.work_date || '').slice(0, 10);
+    if (!vehicleId || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) {
+      alert('แปลงนี้ยังไม่มีรถหรือวันที่ GPS ที่ถูกต้องครับ');
+      return;
+    }
+    // ยกเลิกคำขอ GPS สด/รถเก่าที่ยังวิ่งอยู่ ไม่ให้ผลลัพธ์กลับมาทับประวัติ
+    gpsFleetRequestSeq.current += 1;
+    gpsRequestSeq.current += 1;
+    gpsPlotEntryRef.current = { vehicleId, workDate };
+    setGpsDataScope('');
+    setGpsPathData([]);
+    setGpsFocusPlot({ ...plot, vehicle_id: plot.vehicle_id, work_date: workDate, request: Date.now() });
+    setTrackingVehicleId(vehicleId);
+    setTrackingDate(workDate);
+    setTrackingMode('history');
+    setActiveTab('gps');
+    setIsMapFullScreen(true);
+  };
+
+  // เข้าเมนู "พิกัด" โดยตรง = สดอัตโนมัติ; เปิดผ่านแปลงในคิว = ประวัติวันแปลง
   useEffect(() => {
     if (activeTab !== 'gps') {
       gpsTabOpenedRef.current = false;
@@ -2813,6 +2839,11 @@ function App() {
     }
     if (gpsTabOpenedRef.current || !vehicles.length) return;
     gpsTabOpenedRef.current = true;
+    // ผู้ใช้กดดูแปลงจากคิว: ข้าม auto LIVE เพื่อรักษารถ+วันที่ย้อนหลัง
+    if (gpsPlotEntryRef.current) {
+      gpsPlotEntryRef.current = null;
+      return; // history effect ด้านล่างจะโหลด GPS วันของแปลงเอง
+    }
     setTrackingMode('realtime');
     setTrackingDate(getLocalDateString());
     loadFleetGps({ chooseBest:true, focusBest:true });
@@ -3953,7 +3984,7 @@ function App() {
           
           <button onClick={() => setActiveTab('calendar')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
           
-          <button onClick={() => setActiveTab('gps')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัด</button>
+          <button onClick={() => { gpsPlotEntryRef.current = null; setGpsFocusPlot(null); setActiveTab('gps'); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัด</button>
           
           {/* 👇 ซ่อนปุ่ม บัญชี และ ตั้งค่า ถ้าเป็นคนขับรถ 👇 */}
           {userRole === 'BOSS' && (
@@ -4071,6 +4102,8 @@ function App() {
                   </div>
                   <button
                     onClick={() => {
+                      gpsPlotEntryRef.current = null;
+                      setGpsFocusPlot(null);
                       setActiveTab('gps');
                       setTrackingMode('realtime');
                       if (mainVehicle) setTrackingVehicleId(String(mainVehicle.id));
@@ -4415,12 +4448,12 @@ function App() {
                   <input
                     type="date"
                     value={trackingDate || getLocalDateString()}
-                    onChange={(e) => setTrackingDate(e.target.value)}
+                    onChange={(e) => { setGpsFocusPlot(null); setTrackingDate(e.target.value); }}
                     className="min-w-0 h-9 rounded-lg border border-orange-200 bg-white px-2 text-xs font-bold text-gray-800"
                   />
                   <button
                     type="button"
-                    onClick={() => setTrackingDate(getLocalDateString())}
+                    onClick={() => { setGpsFocusPlot(null); setTrackingDate(getLocalDateString()); }}
                     className="h-9 px-2.5 rounded-lg bg-white border border-orange-200 text-[10px] font-black text-orange-800 whitespace-nowrap"
                   >
                     วันนี้
@@ -4656,7 +4689,7 @@ function App() {
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
-                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={plot => { setTrackingMode('history'); setTrackingVehicleId(String(plot.vehicle_id)); setTrackingDate(plot.work_date); setGpsFocusPlot({ ...plot, request: Date.now() }); setActiveTab('gps'); setIsMapFullScreen(true); }} />
+                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={openGpsPlotFromJob} />
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
@@ -6122,7 +6155,7 @@ function App() {
             ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {formatRaiNgan(job.billing_area ?? 0)}</p>
             : <p className="text-sm text-amber-700">🗣️ ลูกค้าแจ้งประมาณ: {job.area_size ? `~${formatRaiNgan(job.area_size)}` : 'ไม่ระบุ'}</p>}
           {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
-          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);setTrackingMode('history');setTrackingVehicleId(String(plot.vehicle_id));setTrackingDate(plot.work_date);setGpsFocusPlot({...plot,request:Date.now()});setActiveTab('gps');setIsMapFullScreen(true);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
+          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);openGpsPlotFromJob(plot);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
           {userRole==='BOSS' && job.status==='DONE' && <button disabled={!summary?.plot_count || !!summary?.invalid_count || job.payment_status==='PAID'} onClick={()=>{setGpsJobDetail(null);openBillingAreaAdjust(job);setBillingAdjustArea(String(normalizeRaiNganValue(summary.area_rai)));}} className="w-full bg-emerald-600 text-white font-black rounded-xl py-3 disabled:opacity-40">📐 ใช้ GPS เป็นตัวช่วยตรวจไร่คิดเงิน</button>}
           {job.status!=='DONE' && <p className="text-xs text-blue-700 mt-2 font-bold">GPS เป็นข้อมูลหน้างาน • ปิดรอบวันนี้จะดึงเฉพาะยอดที่ยังไม่ลงรอบให้อัตโนมัติ</p>}
           {job.status==='DONE' && <p className="text-xs text-gray-500 mt-2">GPS ไม่แก้ทับข้อเท็จจริงย้อนหลัง • ปรับเฉพาะ 🤝 ไร่คิดเงิน และค่าแรงตามไร่ลูกค้า</p>}
