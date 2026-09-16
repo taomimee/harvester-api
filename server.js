@@ -36,6 +36,39 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
     }
 });
 
+// Worker levels: profiles are shared across devices; historical splits live on rounds/transactions.
+app.get('/api/wage-workers', async (req, res) => {
+    const { data, error } = await supabase.from('wage_workers').select('*').order('name');
+    if (error) return res.status(503).json({ error: 'กรุณารัน wage_levels.sql และตรวจ Service Role ก่อนใช้ระบบระดับค่าแรง' });
+    res.json(data);
+});
+app.post('/api/wage-workers', async (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    const role = req.body?.role;
+    if (!name || name.length > 100 || /[,()\[\]\r\n]/.test(name) || !['DRIVER','HELPER','TRAINEE'].includes(role)) {
+        return res.status(400).json({ error: 'ระบุชื่อไม่เกิน 100 ตัวอักษร (ไม่ใช้ , ( ) [ ]) และเลือกระดับให้ถูกต้อง' });
+    }
+    const { data, error } = await supabase.from('wage_workers').upsert({ name, role }, { onConflict: 'name' }).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+});
+
+// Validate before any job mutation. The database also validates inside atomic finalization.
+app.use('/api/jobs', async (req, res, next) => {
+    const roundRequest = req.method === 'POST' && /^\/[^/]+\/(rounds|finalize)$/.test(req.path);
+    const legacyRequest = req.method === 'PATCH' && /^\/[^/]+\/status$/.test(req.path) && req.body?.status === 'DONE' && req.body?.wageData;
+    if (!roundRequest && !legacyRequest) return next();
+    const workers = String(legacyRequest ? req.body.wageData.workers || '' : req.body?.workers || '').trim();
+    if (legacyRequest) req.body.wageData.wagePerRai = 60;
+    else req.body.wage_per_rai = 60;
+    if (!workers) return next();
+    try {
+        const { error } = await supabase.rpc('wage_crew_snapshot', { worker_text: workers });
+        if (error) return res.status(400).json({ error: error.code === 'PGRST202' ? 'กรุณารัน wage_levels.sql ก่อนบันทึกค่าแรง' : error.message });
+        return next();
+    } catch (e) { return res.status(503).json({ error: 'ตรวจระดับคนงานไม่สำเร็จ กรุณาลองใหม่' }); }
+});
+
 app.get('/', (req, res) => {
     res.send(`🚀 ระบบคิวรถเกี่ยว (Harvester API) กำลังทำงาน! | Supabase backend key: ${supabaseServiceRoleKey ? 'SERVICE_ROLE ✅' : 'FALLBACK/ANON ⚠️'}`);
 });

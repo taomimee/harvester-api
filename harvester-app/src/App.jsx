@@ -3,6 +3,60 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
+const WAGE_API = 'https://harvester-api-server.onrender.com/api';
+const WAGE_ROLES = { DRIVER: '🚜 คนขับ', HELPER: '🔧 เด็กรถเป็นงาน', TRAINEE: '🌱 เด็กฝึกงาน' };
+const wageNames = text => String(text || '').split(',').map(s => s.trim()).filter(Boolean);
+const crewSplit = (names, profiles) => {
+  if (!names.length) throw new Error('เลือกคนทำงานก่อนครับ');
+  if (new Set(names).size !== names.length) throw new Error('ห้ามเลือกชื่อคนงานซ้ำ');
+  const crew = names.map(name => {
+    const profile = profiles.find(p => p.name === name);
+    if (!profile) throw new Error(`กรุณาตั้งระดับของ ${name} ก่อน`);
+    return { name, role: profile.role };
+  });
+  const drivers = crew.filter(p => p.role === 'DRIVER').length;
+  if (!drivers) throw new Error('ต้องมีคนขับอย่างน้อย 1 คน');
+  const supportRate = crew.reduce((sum, p) => sum + (p.role === 'HELPER' ? 20 : p.role === 'TRAINEE' ? 10 : 0), 0);
+  const driverRate = (60 - supportRate) / drivers;
+  if (driverRate < 30) throw new Error('ค่าแรง 60 บาท/ไร่ไม่พอสำหรับทีมนี้ คนขับต้องได้อย่างน้อยคนละ 30 บาท/ไร่ กรุณาตกลงทีมงานก่อนบันทึก');
+  return crew.map(p => ({ ...p, rate: p.role === 'DRIVER' ? driverRate : p.role === 'HELPER' ? 20 : 10 }));
+};
+// Allocate whole satang deterministically; the last member receives the remainder.
+const wageShares = (total, split) => {
+  const cents = Math.round(Number(total || 0) * 100);
+  let used = 0;
+  return split.map((p, i) => {
+    const value = i === split.length - 1 ? cents - used : Math.round(cents * p.rate / 60);
+    used += value;
+    return { ...p, amount: value / 100 };
+  });
+};
+const workerWage = (tx, name, names) => Array.isArray(tx.wage_split) && tx.wage_split.length
+  ? (wageShares(tx.total_amount, tx.wage_split).find(p => p.name === name)?.amount || 0)
+  : Number(tx.total_amount || 0) / Math.max(1, names.length);
+const workerRateLabel = (tx, name, count) => {
+  const part = tx.wage_split?.find(p => p.name === name);
+  return part ? `${part.rate} บาท/ไร่` : count > 1 ? `ส่วนแบ่งเดิมหาร ${count}` : 'งานเดี่ยว';
+};
+function WageWorkerSettings({ profiles, error, onSave, onReload }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
+  const [busy, setBusy] = useState(false);
+  return <details className="my-3 rounded-xl border border-orange-200 bg-orange-50 p-3">
+    <summary className="cursor-pointer font-black text-orange-900">👷 จัดการคนงาน / ระดับค่าแรง</summary>
+    <p className="text-xs my-2 text-gray-600">คนขับ • เด็กรถเป็นงาน 20 • เด็กฝึกงาน 10 บาท/ไร่ — เปลี่ยนระดับมีผลกับรอบใหม่เท่านั้น</p>
+    {error && <p className="text-sm font-bold text-red-700">{error} <button type="button" onClick={onReload} className="underline">ลองใหม่</button></p>}
+    <div className="flex flex-wrap gap-2 my-2">{profiles.map(p => <button type="button" key={p.name} onClick={() => { setName(p.name); setRole(p.role); }} className="bg-white rounded-lg border p-2 text-sm font-bold">{p.name} · {WAGE_ROLES[p.role]}</button>)}</div>
+    <input aria-label="ชื่อคนงาน" placeholder="เพิ่มชื่อ หรือเลือกชื่อเพื่อเปลี่ยนระดับ" value={name} onChange={e => setName(e.target.value)} className="w-full border rounded-lg p-2 mb-2" />
+    <select aria-label="ระดับคนงาน" value={role} onChange={e => setRole(e.target.value)} className="w-full border rounded-lg p-2 mb-2">
+      <option value="">เลือกระดับคนงาน</option>{Object.entries(WAGE_ROLES).map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+    <button type="button" disabled={busy || !name.trim() || !role} onClick={async () => {
+      setBusy(true); try { await onSave(name.trim(), role); setName(''); setRole(''); } catch(e) { alert(e.message); } finally { setBusy(false); }
+    }} className="bg-orange-600 text-white font-bold rounded-lg p-2 w-full disabled:opacity-40">{busy ? 'กำลังบันทึก…' : 'บันทึกคนงาน / ระดับ'}</button>
+  </details>;
+}
+
 // 🛰️ GPS V3.6 — plot→queue linking: create queue from GPS plot or link only unfinished jobs.
 // 🧽 Route Eraser — tap individual route segments to erase/restore; no start/end range selection.
 // Turf 6/7 compatibility: https://turfjs.org/docs/api/difference
@@ -2412,6 +2466,24 @@ function App() {
 
   // 🌾 State ระบบ "รอบทำงาน" — งานข้าว 1 ลูกค้าอาจเกี่ยวหลายวัน/หลายแปลงย่อย
   const [workRoundModal, setWorkRoundModal] = useState(null); // { job, mode: 'PARTIAL' | 'FINAL' }
+  const [wageProfiles, setWageProfiles] = useState([]);
+  const [wageProfileError, setWageProfileError] = useState('');
+  const loadWageProfiles = async () => {
+    try {
+      const res = await fetch(`${WAGE_API}/wage-workers`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data)) throw new Error(data.error || 'โหลดระดับคนงานไม่สำเร็จ');
+      setWageProfiles(data); setWageProfileError('');
+    } catch(e) { setWageProfileError(e.message || 'โหลดระดับคนงานไม่สำเร็จ'); }
+  };
+  useEffect(() => { loadWageProfiles(); }, []);
+  const saveWageProfile = async (name, role) => {
+    const res = await fetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, role }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+    setWageProfiles(prev => [...prev.filter(p => p.name !== data.name), data].sort((a,b) => a.name.localeCompare(b.name, 'th')));
+    setWageProfileError('');
+  };
   const [workRoundData, setWorkRoundData] = useState({
     measuredArea: '',
     measuredMode: 'MANUAL', // GPS = ใช้ยอดที่ยังไม่ลงรอบ, MANUAL = ปรับเอง
@@ -2850,6 +2922,7 @@ function App() {
   useEffect(() => {
     if (showWageSummary) {
       refreshWageLedger();
+      loadWageProfiles();
     }
   }, [showWageSummary]);
 
@@ -3411,6 +3484,7 @@ function App() {
   };
 
   const openWorkRoundModal = (job, mode = 'PARTIAL') => {
+    loadWageProfiles();
     const summary = getJobWorkSummary(job);
     const gpsTotal = getJobGpsArea(job);
     const pendingGps = Math.max(0, gpsTotal - summary.measuredArea);
@@ -3457,7 +3531,11 @@ function App() {
     const billingRaw = String(workRoundData.billingArea ?? '').trim();
     const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
     const workers = String(workRoundData.workers || '').trim();
-    const wagePerRai = Math.max(0, Number(workRoundData.wagePerRai) || 60);
+    const wagePerRai = 60;
+    if (workers) {
+      if (wageProfileError) return alert(wageProfileError);
+      try { crewSplit(wageNames(workers), wageProfiles); } catch(e) { return alert(e.message); }
+    }
 
     if (mode === 'PARTIAL') {
       if (measuredToday <= 0) return alert('กรุณาระบุพื้นที่ที่ทำจริงวันนี้ครับ');
@@ -6099,6 +6177,7 @@ function App() {
               label: `รอบ ${idx + 1}`,
               measured: Math.max(0, Number(r.measured_area) || 0),
               workers: String(r.workers || '').trim() || 'ไม่ระบุ',
+              split: r.wage_split || null,
               rate: Math.max(0, Number(r.wage_per_rai) || 60)
             })),
             ...(isFinal && todayMeasured > 0 ? [{
@@ -6130,7 +6209,7 @@ function App() {
           const money2 = (value) => Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
           const showFinalExtraRound = isFinal && (todayMeasured > 0 || workRoundData.measuredMode !== 'NONE');
           const showFinalWorkerInputs = !isFinal || todayMeasured > 0 || ws.roundCount === 0;
-          const showWageBreakdown = wagePreview.length > 1;
+          const showWageBreakdown = wagePreview.length > 0;
 
           return (
             <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-3 z-[300]">
@@ -6258,6 +6337,14 @@ function App() {
                                   <div className="min-w-0">
                                     <p className="font-bold text-gray-800">{r.label} • {r.workers}</p>
                                     <p className="text-[10px] text-gray-500">วัดจริง {formatRaiNgan(r.measured)} • เรท {r.rate.toLocaleString()} บ./ไร่</p>
+                                    {(() => {
+                                      try {
+                                        const names = wageNames(r.workers);
+                                        const split = r.split || (typeof r.key === 'string' && ['today-final', 'fallback-final'].includes(r.key) ? crewSplit(names, wageProfiles) : names.map(name => ({ name, rate: 60 / names.length })));
+                                        return wageShares(r.wageArea * r.rate, split).map(p => <p key={p.name} className="text-xs font-bold text-orange-800">{p.name}: {money2(p.amount)} บาท {r.split || ['today-final','fallback-final'].includes(r.key) ? `(${p.rate} บ./ไร่)` : '(หารเท่าเดิม)'}</p>);
+                                      } catch(e) { return <p className="text-xs text-red-700">{e.message}</p>; }
+                                    })()}
+
                                   </div>
                                   <b className="text-orange-700 whitespace-nowrap">{formatRaiNgan(r.wageArea)}</b>
                                 </div>
@@ -6296,7 +6383,7 @@ function App() {
                       {isFinal ? 'ถ้าวันนี้ไม่ได้เกี่ยวเพิ่ม ไม่ต้องเลือกใหม่ • ระบบใช้คนจากรอบก่อน' : 'เลือกคนที่ทำรอบนี้ • ค่าแรงจะสรุปตอน 🏁 จบงานทั้งหมด'}
                     </p>
                     <div className="flex flex-wrap gap-2 mb-2">
-                      {['พี่ยันต์', 'จักร กฤษณ์'].map(name => {
+                      {wageProfiles.map(({ name, role }) => {
                         const selected = workersSelected.includes(name);
                         return (
                           <button
@@ -6304,18 +6391,21 @@ function App() {
                             onClick={() => toggleRoundWorker(name)}
                             className={`px-3 py-2 rounded-lg text-xs font-bold border ${selected ? 'bg-orange-500 text-white border-orange-600' : 'bg-white text-orange-700 border-orange-300'}`}
                           >
-                            {selected ? '✅' : '➕'} {name}
+                            {selected ? '✅' : '➕'} {name} · {WAGE_ROLES[role]}
                           </button>
                         );
                       })}
                     </div>
-                    <input
-                      type="text"
-                      className="w-full border border-orange-300 p-2.5 rounded-lg bg-white text-orange-900 font-semibold"
-                      placeholder="พิมพ์ชื่อคนอื่นเพิ่มได้..."
-                      value={workRoundData.workers}
-                      onChange={(e) => setWorkRoundData(prev => ({ ...prev, workers: e.target.value }))}
-                    />
+                    <p className="text-xs font-bold text-orange-800">เลือกได้หลายคน • รวม 60 บาท/ไร่ • คนขับขั้นต่ำคนละ 30 บาท/ไร่</p>
+                    <WageWorkerSettings profiles={wageProfiles} error={wageProfileError} onSave={saveWageProfile} onReload={loadWageProfiles} />
+                    {(() => {
+                      if (!workersSelected.length) return <p className="text-sm">เพิ่มชื่อและระดับ แล้วเลือกคนที่ขึ้นรถครับ</p>;
+                      try {
+                        const split = crewSplit(workersSelected, wageProfiles);
+                        const currentArea = isFinal ? (wagePreview.find(r => r.key === 'today-final' || r.key === 'fallback-final')?.wageArea || (previewBasis <= 0 ? billingArea || 0 : 0)) : todayMeasured;
+                        return <div className="bg-white rounded-lg p-3 space-y-2">{wageShares(currentArea * 60, split).map(p => <div key={p.name} className="flex justify-between gap-2 text-sm font-bold"><span>{p.name} · {p.rate} บาท/ไร่</span><span>{p.amount.toLocaleString('th-TH', { maximumFractionDigits: 2 })} บาท</span></div>)}<p className="text-xs text-gray-500">ประมาณการรอบนี้ • ยอดลงสมุดเมื่อจบงาน ยึดไร่ที่ตกลงกับลูกค้า</p></div>;
+                      } catch(e) { return <p className="text-red-700 font-bold text-sm">{e.message}</p>; }
+                    })()}
                   </div>
 
                   )}
@@ -6328,8 +6418,8 @@ function App() {
                       <input
                         type="number" min="0"
                         className="w-full border border-gray-300 p-2.5 rounded-lg bg-gray-50 font-black"
-                        value={workRoundData.wagePerRai}
-                        onChange={(e) => setWorkRoundData(prev => ({ ...prev, wagePerRai: e.target.value }))}
+                        value={60}
+                        readOnly
                       />
                     </div>
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5">
@@ -6399,7 +6489,8 @@ function App() {
           };
 
           // 👨‍🌾 1. ดึงชื่อลูกจ้างทั้งหมดที่มีในระบบ
-          const uniqueWorkers = new Set(['พี่ยันต์', 'จักร กฤษณ์']);
+          const uniqueWorkers = new Set(wageProfiles.map(p => p.name));
+          expenseTransactions.filter(tx => tx.category === 'เบิกค่าแรง' && tx.spender_name).forEach(tx => uniqueWorkers.add(tx.spender_name));
           wageTransactions.forEach(tx => {
             const { jobWorkers } = parseWageNote(tx.note);
             jobWorkers.forEach(w => uniqueWorkers.add(w));
@@ -6419,7 +6510,7 @@ function App() {
                const { jobWorkers, paidWorkers } = parseWageNote(tx.note);
                if (jobWorkers.includes(workerName)) {
                   const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
-                  const share = Number(tx.total_amount) / divisor;
+                  const share = workerWage(tx, workerName, jobWorkers);
                   earned += share;
                   
                   // ถ้าระบบเก่าเคยกด จ่ายแล้ว/จ่ายเหมา ไปแล้ว ให้ถือว่าเบิกเงินแล้ว
@@ -6491,6 +6582,7 @@ function App() {
                 </div>
                 
                 <div className="p-4 flex-1 overflow-y-auto">
+                    <WageWorkerSettings profiles={wageProfiles} error={wageProfileError} onSave={saveWageProfile} onReload={loadWageProfiles} />
                     {/* 🔍 แถบกรองชื่อ */}
                     <div className="mb-4">
                       <p className="text-[11px] font-bold text-gray-500 mb-2">🔍 กดเลือกชื่อเพื่อดูยอด / จ่ายเงิน:</p>
@@ -6586,7 +6678,7 @@ function App() {
                             .trim();
                           
                           // ถ้าระบุตัวคน ให้โชว์แค่ส่วนแบ่งของเขา ถ้าไม่ได้ระบุ (ดูภาพรวม) ให้โชว์ยอดเต็มบิล
-                          const displayAmount = activeWorker ? (totalAmount / divisor) : totalAmount;
+                          const displayAmount = activeWorker ? workerWage(tx, activeWorker, jobWorkers) : totalAmount;
                           
                           // ดักว่าในบิลเก่าเคยตัดยอดไปหรือยัง (ถ้าดูภาพรวม เช็คว่ามีใครสักคนในบิลนี้รับไปแล้วหรือยัง)
                           const isPaidInOldSystem = activeWorker 
@@ -6624,7 +6716,7 @@ function App() {
                                      +{displayAmount.toLocaleString()} <span className="text-sm">฿</span>
                                    </span>
                                    <span className="inline-block text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-gray-100 text-gray-600 border-gray-200 border">
-                                     {activeWorker ? (divisor > 1 ? `ส่วนแบ่งหาร ${divisor}` : `งานเดี่ยว`) : `ยอดเต็มบิล`}
+                                     {activeWorker ? workerRateLabel(tx, activeWorker, divisor) : `ยอดเต็มบิล`}
                                    </span>
                                    {isPaidInOldSystem && <span className="block text-[9px] text-orange-600 font-bold mt-1 bg-orange-50 px-1 py-0.5 rounded">* มีการตัดยอดแล้ว</span>}
                                  </div>
@@ -6694,7 +6786,7 @@ function App() {
                                         const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
                                         const divisor = jobWorkers.length > 0 ? jobWorkers.length : 1;
                                         const totalAmount = Number(tx.total_amount);
-                                        const displayAmount = activeWorker ? (totalAmount / divisor) : totalAmount;
+                                        const displayAmount = activeWorker ? workerWage(tx, activeWorker, jobWorkers) : totalAmount;
 
                                         return (
                                           <div key={tx.id} className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
@@ -6718,7 +6810,7 @@ function App() {
                                                    +{displayAmount.toLocaleString()} ฿
                                                  </span>
                                                  <span className="inline-block text-[8px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border-gray-200 border">
-                                                   {activeWorker ? (divisor > 1 ? `ส่วนแบ่งหาร ${divisor}` : `งานเดี่ยว`) : `ยอดเต็มบิล`}
+                                                   {activeWorker ? workerRateLabel(tx, activeWorker, divisor) : `ยอดเต็มบิล`}
                                                  </span>
                                                </div>
                                              </div>
