@@ -61,6 +61,35 @@ const workerRateLabel = (tx, name, count) => {
   const part = tx.wage_split?.find(p => cleanWageName(p.name) === cleanWageName(name));
   return part ? `${part.rate} บาท/ไร่` : count > 1 ? `ส่วนแบ่งเดิมหาร ${count}` : 'งานเดี่ยว';
 };
+// Small outline preview from actual linked GPS geometry; interior rings remain holes.
+const plotPreviewPaths = geometry => {
+  const polygons = geometry?.type === 'Polygon' ? [geometry.coordinates] : geometry?.type === 'MultiPolygon' ? geometry.coordinates : [];
+  if (!polygons.length) return [];
+  const points = polygons.flat(2);
+  if (!points.length || points.some(p => !Array.isArray(p) || !Number.isFinite(p[0]) || !Number.isFinite(p[1]))) return [];
+  const [minX, maxX, minY, maxY] = points.reduce((b, p) => [Math.min(b[0], p[0]), Math.max(b[1], p[0]), Math.min(b[2], p[1]), Math.max(b[3], p[1])], [Infinity, -Infinity, Infinity, -Infinity]);
+  const correction = Math.max(0.01, Math.cos((minY + maxY) / 2 * Math.PI / 180));
+  const width = (maxX - minX) * correction, height = maxY - minY;
+  if (!width || !height) return [];
+  const scale = Math.min(88 / width, 52 / height);
+  const x0 = (104 - width * scale) / 2, y0 = (68 - height * scale) / 2;
+  return polygons.map(rings => rings.map(ring => ring.map((p, i) => `${i ? 'L' : 'M'}${(x0 + (p[0] - minX) * correction * scale).toFixed(2)},${(y0 + (maxY - p[1]) * scale).toFixed(2)}`).join(' ') + ' Z').join(' '));
+};
+function JobPlotPreviews({ plots, onOpen, onAll }) {
+  if (!Array.isArray(plots) || !plots.length) return null;
+  return <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50/50 p-2.5" onClick={e => e.stopPropagation()}>
+    <div className="flex items-center justify-between gap-2 mb-2"><span className="text-xs font-bold text-sky-950">🛰️ ขอบแปลง GPS</span><button type="button" onClick={onAll} className="text-xs font-bold text-blue-800 underline">ดูทั้งหมด {plots.length} แปลง</button></div>
+    <div className="grid grid-cols-3 gap-2">{plots.slice(0,3).map((plot, i) => {
+      const paths = plotPreviewPaths(plot.preview_geometry);
+      return <button type="button" key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} onClick={() => onOpen(plot)} className="min-w-0 overflow-hidden rounded-lg border border-sky-200 bg-white text-left" aria-label={`เปิดแผนที่ ${plot.name || `แปลง ${i+1}`}`}>
+        {paths.length ? <svg viewBox="0 0 104 68" className="w-full h-16 bg-slate-50" role="img" aria-label="รูปขอบแปลงจริงจาก GPS"><path d="M0 17H104 M0 34H104 M0 51H104 M26 0V68 M52 0V68 M78 0V68" stroke="#e2e8f0" strokeWidth="0.5" />{paths.map((d, n) => <path key={n} d={d} fill="#bbf7d0" fillRule="evenodd" stroke="#15803d" strokeWidth="1.5" />)}</svg> : <div className="h-16 flex items-center justify-center text-xs text-slate-600">📍 เปิดแผนที่</div>}
+        <span className="block truncate px-1.5 pt-1 text-xs font-bold text-slate-800">{plot.name || `แปลง ${i+1}`}</span>
+        <span className="block px-1.5 pb-1 text-xs text-slate-600">{formatRaiNgan(plot.area_rai)}</span>
+      </button>;
+    })}</div>
+  </div>;
+}
+
 function WageWorkerSettings({ profiles, error, onSave, onReload }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
@@ -4549,7 +4578,7 @@ function App() {
                 <div 
                   key={job.id} 
                   id={`job-card-${job.id}`} 
-                  className="bg-white rounded-xl p-5 shadow-md border border-gray-200 transition-all duration-500"
+                  className="bg-white rounded-xl p-5 shadow-md border-2 border-slate-300 transition-all duration-500"
                 >
                   <div className="bg-slate-100 border border-slate-300 rounded-lg p-2 mb-3">
                     <div className="text-slate-700 font-bold text-sm flex justify-between px-1">
@@ -4627,6 +4656,7 @@ function App() {
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
+                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={plot => { setTrackingMode('history'); setTrackingVehicleId(String(plot.vehicle_id)); setTrackingDate(plot.work_date); setGpsFocusPlot({ ...plot, request: Date.now() }); setActiveTab('gps'); setIsMapFullScreen(true); }} />
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
@@ -4658,7 +4688,7 @@ function App() {
                   </div>
                   
                   {isExpanded && (
-                    <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
+                    <div className="mt-3 p-3 rounded-xl border border-slate-200 bg-slate-50/50">
                       <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-4 border border-yellow-200">
                         <span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>
                         {/* 💡 ดึงหมายเหตุของคิวงานมาโชว์ */}

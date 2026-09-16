@@ -212,7 +212,7 @@ const loadGpsJobSummary = async () => {
         try {
           const geometry=plotGeometry(plot), area=geometry.netSqM/1600;
           group.plot_count++;group.area_rai+=area;
-          group.plots.push({id,name:plot.name || `แปลงที่ ${index+1}`,area_rai:area,vehicle_id:row.vehicle_id,work_date:row.work_date,center:plotCenter(geometry.net || geometry.outer)});
+          group.plots.push({id,name:plot.name || `แปลงที่ ${index+1}`,area_rai:area,vehicle_id:row.vehicle_id,work_date:row.work_date,center:plotCenter(geometry.net || geometry.outer),preview_geometry:geometry.net?.geometry || null});
         } catch (_) { group.invalid_count++; }
       }
     }
