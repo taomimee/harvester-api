@@ -3,6 +3,7 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
+const isAwaitingArea = job => job?.status !== 'DONE' && job?.awaiting_area_confirmation === true;
 const WAGE_API = 'https://harvester-api-server.onrender.com/api';
 const WAGE_ROLES = { DRIVER: '🚜 คนขับ', HELPER: '🔧 เด็กรถเป็นงาน', TRAINEE: '🌱 เด็กฝึกงาน' };
 // Presentation icons are not part of worker identity. Keep source names for existing DB profiles.
@@ -2034,7 +2035,7 @@ function TrackingMap({
                         className="w-full text-left px-3 py-2.5 border-t border-blue-100 bg-white hover:bg-blue-50">
                         <div className="flex justify-between gap-2">
                           <span className="font-black text-sm text-gray-900">{j.customers?.name || 'ไม่ระบุ'} • คิว #{j.id}</span>
-                          <span className="text-[10px] font-bold text-blue-700">{j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'}</span>
+                          <span className="text-[10px] font-bold text-blue-700">{isAwaitingArea(j)?'รอยืนยันไร่':j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'}</span>
                         </div>
                         <p className="text-[10px] text-gray-500 mt-0.5">{j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} • {gpsArea>0?`GPS ${plotThaiArea(gpsArea*1600).text}`:(j.area_size?`ประมาณ ~${formatRaiNgan(j.area_size)}`:'ยังไม่มีพื้นที่')} • ทำแล้ว {measuredArea.toFixed(2)} ไร่</p>
                       </button>
@@ -3077,16 +3078,19 @@ function App() {
   const todayStr = todayStart.toDateString();
 
   const openJobs = jobs.filter(j => j.status !== 'DONE');
-  const scheduledTodayJobs = openJobs.filter(j => {
+  const awaitingAreaJobs = openJobs.filter(isAwaitingArea);
+  const fieldJobs = openJobs.filter(j => !isAwaitingArea(j));
+  const scheduledTodayJobs = fieldJobs.filter(j => {
     const t = new Date(j.job_date);
     return !Number.isNaN(t.getTime()) && t >= todayStart && t < tomorrowStart;
   });
 
   // งานที่ต้องตามต่อบนหน้าแรก: งานค้างจากก่อนวันนี้ + งานที่กำลังทำ
   // งาน PAUSED ที่นัดอนาคตจะรอไปโผล่ในวันนัด ไม่ยึดหน้าแรกตลอดเวลา
-  const carryJobs = openJobs.filter(j => {
+  const carryJobs = fieldJobs.filter(j => {
     const t = new Date(j.job_date);
     const validTime = !Number.isNaN(t.getTime());
+    if (j.status === 'PAUSED' && !validTime) return true;
     const isToday = validTime && t >= todayStart && t < tomorrowStart;
     if (isToday) return false;
     if (j.status === 'IN_PROGRESS') return true;
@@ -3110,8 +3114,8 @@ function App() {
     0
   );
 
-  const overdueJobs = openJobs.filter(j => {
-    if (j.status === 'IN_PROGRESS') return false;
+  const overdueJobs = fieldJobs.filter(j => {
+    if (j.status !== 'PENDING') return false;
     const t = new Date(j.job_date);
     return !Number.isNaN(t.getTime()) && t < todayStart;
   });
@@ -3526,7 +3530,7 @@ function App() {
     const summary = getJobWorkSummary(job);
     const gpsTotal = getJobGpsArea(job);
     const pendingGps = Math.max(0, gpsTotal - summary.measuredArea);
-    const useGps = Number(job?.gps_summary?.plot_count || 0) > 0 && !job?.gps_summary_error && pendingGps > 0.000001;
+    const useGps = !(mode === 'FINAL' && isAwaitingArea(job)) && Number(job?.gps_summary?.plot_count || 0) > 0 && !job?.gps_summary_error && pendingGps > 0.000001;
     setWorkRoundData({
       measuredArea: useGps ? String(Number(pendingGps.toFixed(6))) : '',
       measuredMode: useGps ? 'GPS' : (mode === 'FINAL' ? 'NONE' : 'MANUAL'),
@@ -3535,11 +3539,25 @@ function App() {
       wagePerRai: 60,
       workers: '',
       nextWorkDate: '',
+      awaitArea: false,
       note: ''
     });
     setWorkRoundModal({ job, mode, summary, gpsTotal, pendingGps });
   };
 
+  const [markingAwaitId, setMarkingAwaitId] = useState(null);
+  const markAwaitingArea = async (job) => {
+    if (markingAwaitId) return;
+    if (!getJobWorkSummary(job).roundCount) return alert('บันทึกรอบทำงานและคนลงแปลงก่อนครับ');
+    if (!window.confirm('เกี่ยวเสร็จและบันทึกรอบครบแล้วใช่ไหม? เปลี่ยนเป็นรอยืนยันไร่ โดยยังไม่ลงสมุดค่าแรง')) return;
+    setMarkingAwaitId(job.id);
+    try {
+      const res = await fetch(`${WAGE_API}/jobs/${job.id}/await-area`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
+      await fetchJobs();
+    } catch(e) { alert(e.message); } finally { setMarkingAwaitId(null); }
+  };
   const inspectJobIntegrity = async (job) => {
     setJobIntegrityLoading(true);
     setJobIntegrityModal({ job, loading:true });
@@ -3564,6 +3582,7 @@ function App() {
   const submitWorkRound = async () => {
     if (!workRoundModal || isSavingWorkRound) return;
     const { job, mode } = workRoundModal;
+    if (mode === 'FINAL' && userRole !== 'BOSS') return alert('ให้เถ้าแก่ยืนยันไร่และปิดงานครับ');
     const currentSummary = getJobWorkSummary(job);
     const measuredToday = Math.max(0, Number(workRoundData.measuredArea) || 0);
     const billingRaw = String(workRoundData.billingArea ?? '').trim();
@@ -3600,7 +3619,8 @@ function App() {
             measured_source: workRoundData.measuredMode,
             workers,
             wage_per_rai: wagePerRai,
-            next_work_date: workRoundData.nextWorkDate ? new Date(workRoundData.nextWorkDate).toISOString() : null,
+            awaiting_area_confirmation: workRoundData.awaitArea === true,
+            next_work_date: !workRoundData.awaitArea && workRoundData.nextWorkDate ? new Date(workRoundData.nextWorkDate).toISOString() : null,
             note: workRoundData.note
           }
         : {
@@ -3612,14 +3632,20 @@ function App() {
             note: workRoundData.note
           };
 
+      let bossToken = '';
+      if (!isPartial) {
+        bossToken = sessionStorage.getItem('harvester_boss_token') || await authorizeBoss();
+        if (!bossToken) throw new Error('ยังไม่ได้ยืนยันสิทธิ์เถ้าแก่');
+      }
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(bossToken ? { Authorization: `Bearer ${bossToken}` } : {}) },
         body: JSON.stringify(payload)
       });
 
       let result = {};
       try { result = await res.json(); } catch (_) {}
+      if (res.status === 403) sessionStorage.removeItem('harvester_boss_token');
       if (!res.ok) throw new Error(`${result.error || `HTTP ${res.status}`}${result.code ? ` [${result.code}]` : ''}`);
 
       if (isPartial) {
@@ -3631,7 +3657,7 @@ function App() {
           `👷 คนทำรอบนี้: ${workers}\n` +
           `💵 เรทค่าแรง: ${wagePerRai.toLocaleString()} บาท/ไร่\n\n` +
           `📝 ยังไม่ลงสมุดค่าแรง — จะลงพร้อมกันตอน 🏁 จบงานทั้งหมด\n` +
-          `${workRoundData.nextWorkDate ? '📅 บันทึกวันนัดเกี่ยวต่อแล้ว' : '⏸ รอลูกค้านัดวันเกี่ยวต่อ'}`
+          `${workRoundData.awaitArea ? '📐 เกี่ยวเสร็จแล้ว รอยืนยันไร่ — ยังไม่ลงค่าแรง' : workRoundData.nextWorkDate ? '📅 บันทึกวันนัดเกี่ยวต่อแล้ว' : '⏸ รอลูกค้านัดวันเกี่ยวต่อ'}`
         );
       } else {
         const s = result.summary || {};
@@ -3724,6 +3750,7 @@ function App() {
       case 'PENDING': return { text: 'รอคิว', color: 'bg-amber-100 text-amber-950 border-amber-500' }
       case 'IN_PROGRESS': return { text: 'กำลังเกี่ยว', color: 'bg-blue-700 text-white border-blue-800' }
       case 'DONE': return { text: 'เสร็จสิ้น', color: 'bg-emerald-700 text-white border-emerald-800' }
+      case 'WAITING_AREA': return { text: 'เกี่ยวเสร็จ · รอยืนยันไร่', color: 'bg-violet-100 text-violet-950 border-violet-400' }
       case 'PAUSED': return { text: 'รอเกี่ยวต่อ', color: 'bg-orange-100 text-orange-950 border-orange-400' }
       default: return { text: status, color: 'bg-gray-100 text-gray-800 border-gray-300' }
     }
@@ -3816,7 +3843,7 @@ function App() {
         <div className="grid grid-cols-7 gap-2 text-center">
           {days.map((day, idx) => {
             if (!day) return <div key={idx} className="p-2"></div>;
-            const jobsOnThisDay = jobs.filter(j => new Date(j.job_date).toDateString() === day.toDateString());
+            const jobsOnThisDay = jobs.filter(j => !isAwaitingArea(j) && new Date(j.job_date).toDateString() === day.toDateString());
             const hasJobs = jobsOnThisDay.length > 0;
             const isToday = new Date().toDateString() === day.toDateString();
 
@@ -3844,7 +3871,7 @@ function App() {
       <div className="max-w-md mx-auto">
 
         {/* 🐘 Header ช้างขาวเจริญทรัพย์ (พร้อมทางลับเถ้าแก่) */}
-        <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
+        <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-2.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
           
           {/* 👇 ทางลับเถ้าแก่ (ปุ่มกุญแจมุมขวาบน - อัปเกรดจำสถานะ) 👇 */}
           <div 
@@ -3913,7 +3940,7 @@ function App() {
               setWageFilter([]); 
               setShowWageSummary(true); 
             }}
-            className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-4 rounded-2xl mb-5 shadow-md cursor-pointer transition flex items-center justify-between group relative overflow-hidden"
+            className="bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white p-3 rounded-2xl mb-4 shadow-md cursor-pointer transition flex items-center justify-between group relative overflow-hidden"
           >
             <div className="absolute -right-2 -bottom-2 text-6xl opacity-10 drop-shadow-md pointer-events-none group-hover:scale-110 transition-transform duration-300">💰</div>
             
@@ -3954,7 +3981,7 @@ function App() {
             {/* 1. ภาพรวมวันนี้ */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🚜 คิววันนี้</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🚜 นัดเกี่ยววันนี้</span>
                 <span className="text-2xl font-black text-gray-900">
                   {scheduledTodayJobs.length} <span className="text-sm font-normal">งาน</span>
                 </span>
@@ -3964,8 +3991,8 @@ function App() {
                 <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้</span>
                 <span className="text-2xl font-black text-emerald-600 leading-none">{formatRaiNgan(todayOnlyArea)}</span>
                 {carryJobs.length > 0 && (
-                  <span className="mt-2 text-[10px] sm:text-xs font-black text-red-700 bg-red-100 px-2.5 py-1 rounded-lg border border-red-400">
-                    ⚠️ ค้าง/รอ {carryJobs.length} คิว • {formatRaiNgan(oldJobsArea)}
+                  <span className="mt-2 text-xs sm:text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-300">
+                    ⏳ งานก่อนหน้า {carryJobs.length} คิว • {formatRaiNgan(oldJobsArea)}
                   </span>
                 )}
               </div>
@@ -3976,20 +4003,22 @@ function App() {
                   <span className="text-2xl font-black text-blue-600">
                     {Math.round(todayIncome).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
                   </span>
-                  <span className="text-[9px] text-slate-600 mt-1">ประมาณจากพื้นที่ × ราคา/ไร่</span>
+                  <span className="text-xs text-slate-600 mt-1">ประมาณจากพื้นที่ × ราคา/ไร่</span>
                 </div>
               )}
 
+              {userRole === 'BOSS' && (
               <div
                 onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                className={`bg-red-100 p-4 rounded-xl shadow-sm border border-red-400 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-red-100 transition ${userRole === 'BOSS' ? '' : 'col-span-2'}`}
+                className={`bg-red-100 p-4 rounded-xl shadow-sm border border-orange-300 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-red-100 transition ${userRole === 'BOSS' ? '' : 'col-span-2'}`}
               >
                 <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ค้าง</span>
                 <span className="text-2xl font-black text-red-600">
                   {Math.round(totalDebtValue).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
                 </span>
-                <span className="text-[9px] text-red-500 mt-1">{debtorCustomerCount} ราย • แตะเพื่อดู</span>
+                <span className="text-xs text-red-500 mt-1">{debtorCustomerCount} ราย • แตะเพื่อดู</span>
               </div>
+              )}
             </div>
 
             {/* 2. รถเกี่ยว */}
@@ -4033,7 +4062,7 @@ function App() {
                       {activeJobNow ? activeJobNow.customers?.name || 'ไม่ระบุลูกค้า' : 'รอรับคิวงานถัดไป'}
                     </span>
                     {activeJobNow && (
-                      <span className="block text-[10px] text-slate-600 font-semibold mt-0.5">
+                      <span className="block text-xs text-slate-600 font-semibold mt-0.5">
                         {Number(activeJobNow.gps_summary?.area_rai || 0) > 0 ? '🛰️ GPS ' : '🗣️ ประมาณ '}
                         {formatRaiNgan(queueAreaRai(activeJobNow))}
                       </span>
@@ -4047,8 +4076,8 @@ function App() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
               <div className="flex justify-between items-center mb-3">
                 <div>
-                  <h3 className="font-bold text-gray-800 text-sm">🚜 งานที่ต้องจัดการ</h3>
-                  <p className="text-[9px] text-slate-600 mt-0.5">คิววันนี้ + งานค้างที่ยังไม่จบ</p>
+                  <h3 className="font-bold text-gray-800 text-sm">🚜 งานเกี่ยวที่ต้องติดตาม</h3>
+                  <p className="text-xs text-slate-600 mt-0.5">นัดวันนี้ {scheduledTodayJobs.length} · งานก่อนหน้า {carryJobs.length} · ยังไม่รวมงานรอยืนยันไร่</p>
                 </div>
                 <button onClick={() => setActiveTab('active')} className="text-xs text-orange-600 font-bold hover:underline">
                   ทั้งหมด {todayJobs.length} ▶
@@ -4079,13 +4108,13 @@ function App() {
                             if (targetCard) targetCard.scrollIntoView({ behavior:'smooth', block:'center' });
                           }, 120);
                         }}
-                        className="flex items-center p-3 rounded-xl border border-slate-200 bg-white hover:bg-gray-50 shadow-sm cursor-pointer transition"
+                        className="flex flex-wrap items-center gap-y-2 p-3 rounded-xl border border-slate-200 bg-white hover:bg-gray-50 shadow-sm cursor-pointer transition"
                       >
                         <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3">
                           {!isToday && <span className="block text-xs font-black text-gray-800">{dateText}</span>}
                           <span className="block text-xs font-black text-gray-800">{timeText}</span>
                           {!isToday && (
-                            <span className={`text-[9px] font-bold block mt-1 ${job.status === 'PAUSED' ? 'text-rose-600' : 'text-red-500'}`}>
+                            <span className={`text-xs font-bold block mt-1 ${job.status === 'PAUSED' ? 'text-orange-800' : 'text-red-500'}`}>
                               {job.status === 'PAUSED' ? 'รอนัด' : job.status === 'IN_PROGRESS' ? 'กำลังทำ' : 'ค้าง'}
                             </span>
                           )}
@@ -4096,25 +4125,25 @@ function App() {
                           <p className="text-xs text-slate-600 font-semibold mt-1">
                             {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'}{' '}
                             {Number(job.gps_summary?.area_rai || 0) > 0
-                              ? `🛰️ ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
+                              ? `🛰️ พื้นที่แปลง GPS ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
                               : job.area_size ? `🗣️ ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่'}
                           </p>
                           {ws.roundCount > 0 && (
-                            <p className="text-[10px] text-emerald-700 font-black mt-0.5">
-                              ✅ ทำจริง {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ
+                            <p className="text-xs text-emerald-700 font-black mt-0.5">
+                              ✅ ทำสะสมทุกรอบ {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ
                             </p>
                           )}
                         </div>
 
-                        <div className="shrink-0 pl-2">
+                        <div className="w-full text-right">
                           {job.status === 'IN_PROGRESS' ? (
-                            <span className="bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">กำลังเกี่ยว</span>
+                            <span className="bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg text-xs font-bold">กำลังเกี่ยว</span>
                           ) : job.status === 'PAUSED' ? (
-                            <span className="bg-rose-100 text-rose-800 border border-rose-200 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">
+                            <span className="bg-orange-100 text-orange-950 border border-orange-300 px-2.5 py-1.5 rounded-lg text-xs font-bold">
                               {jobDate > new Date() ? '📅 นัดเกี่ยวต่อ' : '⏸ รอลูกค้านัด'}
                             </span>
                           ) : (
-                            <span className="bg-gray-100 text-gray-600 px-2.5 py-1.5 rounded-lg text-[10px] font-bold">รอคิว</span>
+                            <span className="bg-gray-100 text-gray-600 px-2.5 py-1.5 rounded-lg text-xs font-bold">รอคิว</span>
                           )}
                         </div>
                       </div>
@@ -4123,6 +4152,12 @@ function App() {
                 </div>
               )}
             </div>
+
+            {awaitingAreaJobs.length > 0 && <section className="bg-white rounded-xl border border-violet-300 p-4 space-y-3">
+              <h3 className="font-black text-violet-950 text-base">📐 เกี่ยวเสร็จ · รอยืนยันไร่ {awaitingAreaJobs.length} งาน</h3>
+              <p className="text-sm text-slate-700">ไม่ต้องไปเกี่ยวต่อ • ค่าแรงรอบที่ยังไม่ปิดจะลงเมื่อเถ้าแก่ยืนยันไร่</p>
+              {awaitingAreaJobs.map(job => <button key={job.id} onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 150); }} className="w-full text-left rounded-lg border border-violet-200 bg-violet-50 p-3 text-violet-950"><b>{job.customers?.name || 'ไม่ระบุลูกค้า'}</b><span className="block text-sm mt-1">{userRole === 'BOSS' ? 'เปิดงานเพื่อยืนยันไร่ →' : 'รอเถ้าแก่ยืนยันไร่'}</span></button>)}
+            </section>}
 
             {/* 4. แจ้งเตือน — สิ่งที่ต้องจัดการมาก่อนอากาศ */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
@@ -4136,26 +4171,13 @@ function App() {
                   >
                     <div className="text-xl">⚠️</div>
                     <div className="min-w-0">
-                      <p className="text-xs font-black text-orange-900">งานค้าง / ผิดนัด {overdueJobs.length} คิว</p>
-                      <p className="text-[10px] text-orange-700 font-semibold mt-0.5">แตะเพื่อจัดวันนัดหรือเริ่มงาน</p>
+                      <p className="text-xs font-black text-orange-900">เลยวันนัดเริ่มงาน {overdueJobs.length} คิว</p>
+                      <p className="text-xs text-orange-700 font-semibold mt-0.5">แตะเพื่อจัดวันนัดหรือเริ่มงาน</p>
                     </div>
                   </div>
                 )}
 
-                {debtorsList.length > 0 && (
-                  <div
-                    onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                    className="flex items-center gap-3 bg-red-100 p-3 rounded-lg border border-red-400 cursor-pointer hover:bg-red-100 transition"
-                  >
-                    <div className="text-xl">🔴</div>
-                    <div>
-                      <p className="text-xs font-black text-red-800">ลูกหนี้ค้าง {debtorCustomerCount} ราย</p>
-                      <p className="text-[10px] text-red-600 mt-0.5">{Math.round(totalDebtValue).toLocaleString('th-TH')} บาท • แตะเพื่อดู</p>
-                    </div>
-                  </div>
-                )}
-
-                {overdueJobs.length === 0 && debtorsList.length === 0 && (
+                {overdueJobs.length === 0 && (
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
                     <p className="text-xs font-black text-emerald-800">✅ ไม่มีรายการเร่งด่วน</p>
                   </div>
@@ -4166,11 +4188,11 @@ function App() {
                   <div className="flex justify-between items-start gap-2 border-b border-blue-100 pb-2">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-blue-900">🌤️ สภาพอากาศ</p>
-                      <p className="text-[10px] text-blue-700 truncate mt-0.5">📍 {weatherLocationName || radarLocationName}</p>
+                      <p className="text-xs text-blue-700 truncate mt-0.5">📍 {weatherLocationName || radarLocationName}</p>
                     </div>
 
                     {radarOverride ? (
-                      <button onClick={() => setRadarOverride(null)} className="bg-red-100 text-red-600 border border-red-400 px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap">
+                      <button onClick={() => setRadarOverride(null)} className="bg-red-100 text-red-600 border border-orange-300 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">
                         กลับไปดูรถ
                       </button>
                     ) : (
@@ -4183,7 +4205,7 @@ function App() {
                             );
                           }
                         }}
-                        className="bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded text-[10px] font-bold whitespace-nowrap"
+                        className="bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded text-xs font-bold whitespace-nowrap"
                       >
                         🎯 ตำแหน่งฉัน
                       </button>
@@ -4205,7 +4227,7 @@ function App() {
                         <button
                           type="button"
                           onClick={() => setShowHomeWeatherForecast(v => !v)}
-                          className="w-full mt-2 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-[10px] font-black"
+                          className="w-full mt-2 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-xs font-black"
                         >
                           {showHomeWeatherForecast ? 'ซ่อนพยากรณ์ 24 ชม. ▲' : 'ดูพยากรณ์ 24 ชม. ▼'}
                         </button>
@@ -4223,9 +4245,9 @@ function App() {
                                 return (
                                   <div key={offset} className={`snap-center shrink-0 w-[31%] p-2 rounded-lg border text-center shadow-sm ${w.bg} ${w.border} ${w.color}`}>
                                     {isTomorrow && <p className="text-[8px] font-black text-blue-700 mb-1">พรุ่งนี้</p>}
-                                    <p className="text-[10px] font-bold">{t.getHours()}:00 น.</p>
+                                    <p className="text-xs font-bold">{t.getHours()}:00 น.</p>
                                     <p className="text-xl leading-none my-1">{w.text.split(' ')[1]}</p>
-                                    <p className="text-[9px] font-bold">{w.text.split(' ')[0]}</p>
+                                    <p className="text-xs font-bold">{w.text.split(' ')[0]}</p>
                                   </div>
                                 );
                               })}
@@ -4494,7 +4516,7 @@ function App() {
             )}
 
             {displayJobs.map((job) => {
-              const statusObj = getStatusDisplay(job.status);
+              const statusObj = getStatusDisplay(isAwaitingArea(job) ? 'WAITING_AREA' : job.status);
               const isExpanded = expandedId === job.id;
               const jobDateTime = formatDate(job.job_date);
               const assignedVehicle = vehicles.find(v => v.id === job.vehicle_id);
@@ -4565,18 +4587,19 @@ function App() {
                         </div>
 
                         {job.gps_summary_error ? <p className="text-xs font-bold text-red-700 bg-red-100 border border-red-400 rounded-lg p-2">🛰️ โหลด GPS ไม่สำเร็จ</p>
-                          : gpsArea>0 ? <p className="text-sm font-black text-sky-900">🛰️ GPS {plotThaiArea(gpsArea*1600).text}</p>
+                          : gpsArea>0 ? <p className="text-sm font-black text-sky-900">🛰️ พื้นที่แปลง GPS {plotThaiArea(gpsArea*1600).text}</p>
                           : estimate>0 ? <p className="text-sm font-black text-amber-900">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)}</p>
                           : <p className="text-xs font-bold text-slate-600">ยังไม่มีพื้นที่ • ผูกแปลง GPS หรือใส่ยอดประมาณได้ภายหลัง</p>}
 
                         {gpsArea>0 && estimate>0 && <p className="text-[10px] text-amber-700">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)} • เก็บแยกจาก GPS</p>}
 
                         {ws.roundCount>0 ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-gray-700">
-                          <span>✅ ทำแล้ว {formatRaiNgan(ws.measuredArea)}</span>
+                          <span>✅ ทำสะสมทุกรอบ {formatRaiNgan(ws.measuredArea)}</span>
                           <span>🗂️ {ws.roundCount} รอบ</span>
                           <span className="text-orange-700">⏳ รอปิดค่าแรง {ws.pendingRoundCount} รอบ</span>
                         </div> : <p className="text-[10px] text-slate-600">ยังไม่มีรอบทำงาน</p>}
 
+                        {userRole === 'BOSS' && gpsArea > 0 && ws.measuredArea > gpsArea + 0.025 && <p className="text-sm font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg p-2">ยอดทำสะสมมากกว่าพื้นที่แปลง GPS — ตรวจว่ารอบงานซ้ำหรือ GPS ยังไม่ครบก่อนยืนยันไร่</p>}
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
@@ -4731,9 +4754,11 @@ function App() {
                       </div>
                       {/* 👆 จบส่วนแกลเลอรี่ 👆 */}
 
+                      {isAwaitingArea(job) && <div className="bg-violet-50 border border-violet-300 rounded-xl p-3 mb-3 text-violet-950 font-bold text-sm">เกี่ยวเสร็จแล้ว รอลูกค้ายืนยันจำนวนไร่ • ยังไม่ลงค่าแรงของรอบที่รอปิดงาน{userRole === 'BOSS' ? ' — ยืนยันไร่แล้วกดปิดงานด้านล่าง' : ' — ให้เถ้าแก่ยืนยันและปิดงาน'}</div>}
+                      {job.status === 'PAUSED' && !isAwaitingArea(job) && <button disabled={!!markingAwaitId} onClick={() => markAwaitingArea(job)} className="w-full mb-3 bg-violet-700 text-white rounded-xl py-3 text-sm font-bold disabled:opacity-50">{markingAwaitId === job.id ? 'กำลังบันทึก…' : '✓ เกี่ยวเสร็จแล้ว · รอยืนยันไร่'}</button>}
                       {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
-                      <div className="flex gap-2 pt-3 border-t border-gray-200">
-                        {job.status !== 'IN_PROGRESS' && (
+                      <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-200">
+                        {job.status !== 'IN_PROGRESS' && (!isAwaitingArea(job) || userRole === 'BOSS') && (
                           <button 
                             onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
                             className={`flex-1 bg-blue-700 hover:bg-blue-800 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
@@ -4764,7 +4789,7 @@ function App() {
                             }}
                             className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
                           >
-                            🏁 จบงานทั้งหมด
+                            {isAwaitingArea(job) ? '🤝 ยืนยันไร่ / ปิดงาน' : '🏁 จบงานทั้งหมด'}
                           </button>
                         )}
 
@@ -6399,7 +6424,7 @@ function App() {
                     </div>
                   )}
 
-                  {!isFinal && (
+                  {!isFinal && !workRoundData.awaitArea && (
                     <div className="bg-rose-50 border border-rose-200 rounded-xl p-3">
                       <label className="block text-rose-900 font-black mb-1 text-sm">📅 นัดมาเกี่ยวต่อเมื่อไร? <span className="font-normal text-gray-500">(ไม่รู้วัน ปล่อยว่าง)</span></label>
                       <input
@@ -6481,6 +6506,7 @@ function App() {
                     </div>
                   )}
 
+                  {!isFinal && <label className="flex items-start gap-3 p-3 rounded-xl bg-violet-50 border border-violet-300 text-violet-950 font-bold text-sm"><input type="checkbox" checked={!!workRoundData.awaitArea} onChange={e => setWorkRoundData(prev => ({ ...prev, awaitArea: e.target.checked, nextWorkDate: e.target.checked ? '' : prev.nextWorkDate }))} className="mt-1 w-5 h-5" /><span>เกี่ยวเสร็จทั้งหมดแล้ว · รอลูกค้ายืนยันไร่<span className="block font-normal mt-1">บันทึกรอบและคนทำไว้ก่อน ยังไม่ลงสมุดค่าแรง และไม่ใช้วันนัดเกี่ยวต่อ</span></span></label>}
                   <div className="flex gap-3 pt-2">
                     <button disabled={isSavingWorkRound} onClick={() => setWorkRoundModal(null)} className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-xl font-bold disabled:opacity-50">ยกเลิก</button>
                     <button

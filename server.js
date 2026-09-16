@@ -359,10 +359,27 @@ app.post('/api/jobs', async (req, res) => {
     }
 });
 
+// Mark an already recorded job as harvested, without creating any wage transaction.
+app.post('/api/jobs/:id/await-area', async (req, res) => {
+    const jobId = Number(req.params.id);
+    if (!Number.isSafeInteger(jobId) || jobId <= 0) return res.status(400).json({ error: 'job_id ไม่ถูกต้อง' });
+    try {
+        const { data: rounds, error: roundError } = await supabase.from('job_work_rounds').select('id').eq('job_id', jobId).limit(1);
+        if (roundError) throw roundError;
+        if (!rounds?.length) return res.status(400).json({ error: 'กรุณาบันทึกรอบทำงานและคนที่ลงแปลงก่อน' });
+        const { data, error } = await supabase.from('jobs').update({ status: 'PAUSED', awaiting_area_confirmation: true }).eq('id', jobId).eq('status', 'PAUSED').select().maybeSingle();
+        if (error) throw error;
+        if (!data) return res.status(409).json({ error: 'กรุณาบันทึกรอบวันนี้ก่อน หรือรีเฟรชหากสถานะงานเปลี่ยนแล้ว' });
+        await writeJobAudit(jobId, 'AWAITING_AREA', 'เกี่ยวเสร็จ รอลูกค้ายืนยันไร่ — ยังไม่ลงค่าแรง', null, {});
+        res.json({ success: true, job: data, wage_posted: false });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // API สำหรับอัปเดตเปลี่ยนสถานะงาน (เช่น กดเสร็จสิ้น หรือ กำลังเกี่ยว)
 app.patch('/api/jobs/:id/status', async (req, res) => {
     const { id } = req.params;
     const { status, wageData, job_date, payment_status, paid_at } = req.body || {};
+    if (status === 'DONE' && !bossSessionValid(req)) return res.status(403).json({ error: 'ให้เถ้าแก่ยืนยันไร่และปิดงานเท่านั้น' });
 
     try {
         // กันหน้าเว็บรุ่นเก่าปิด DONE มาทับค่าแรงของระบบรอบทำงาน
@@ -990,8 +1007,8 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
         if (roundError) throw roundError;
         roundId = round.id;
 
-        const jobUpdate = { status: 'PAUSED' };
-        if (next_work_date) jobUpdate.job_date = next_work_date;
+        const jobUpdate = { status: 'PAUSED', awaiting_area_confirmation: req.body?.awaiting_area_confirmation === true };
+        if (next_work_date && !jobUpdate.awaiting_area_confirmation) jobUpdate.job_date = next_work_date;
 
         const { data: updatedJob, error: updateError } = await supabase
             .from('jobs')
@@ -1026,6 +1043,7 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
 // 3) แบ่ง billing_area กลับเข้าทุกรอบตามสัดส่วน measured_area ของรอบนั้น
 // 4) จากนั้นค่อยสร้าง/อัปเดต transactions ค่าแรงทั้งหมดของงานนี้ครั้งเดียว
 app.post('/api/jobs/:id/finalize', async (req, res) => {
+    if (!bossSessionValid(req)) return res.status(403).json({ error: 'ให้เถ้าแก่ยืนยันไร่และปิดงานเท่านั้น' });
     const jobId = Number(req.params.id);
     const {
         measured_area = 0,
@@ -1050,7 +1068,7 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
     try {
         const { data: job, error: jobError } = await supabase
             .from('jobs')
-            .select('id,status,price_per_rai,crop_type,billing_area,total_price,job_date,closed_at')
+            .select('id,status,price_per_rai,crop_type,billing_area,total_price,job_date,closed_at,awaiting_area_confirmation')
             .eq('id', jobId)
             .single();
 
