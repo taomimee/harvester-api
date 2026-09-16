@@ -36,6 +36,41 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
     }
 });
 
+// Boss authorization is enforced for worker profile writes, not a client-supplied role.
+const bossCrypto = require('crypto');
+const bossSessions = new Map();
+const bossAttempts = new Map();
+const bossSessionValid = req => {
+    const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+    const expires = bossSessions.get(token);
+    if (!expires || expires <= Date.now()) { bossSessions.delete(token); return false; }
+    return true;
+};
+app.post('/api/boss/session', (req, res) => {
+    const expected = process.env.BOSS_PIN;
+    if (!expected) return res.status(503).json({ error: 'กรุณาตั้ง BOSS_PIN ที่ Server ก่อนใช้งานโหมดเถ้าแก่' });
+    const now = Date.now();
+    for (const [key, value] of bossAttempts) if (value.until <= now) bossAttempts.delete(key);
+    for (const [key, value] of bossSessions) if (value <= now) bossSessions.delete(key);
+    const key = req.ip;
+    const attempt = bossAttempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
+    if (attempt.count >= 5) return res.status(429).json({ error: 'ใส่รหัสผิดหลายครั้ง กรุณารอ 15 นาที' });
+    const received = bossCrypto.createHash('sha256').update(String(req.body?.pin || '')).digest();
+    const wanted = bossCrypto.createHash('sha256').update(expected).digest();
+    if (!bossCrypto.timingSafeEqual(received, wanted)) {
+        attempt.count++; bossAttempts.set(key, attempt);
+        return res.status(401).json({ error: 'รหัสเถ้าแก่ไม่ถูกต้อง' });
+    }
+    bossAttempts.delete(key);
+    const token = bossCrypto.randomBytes(32).toString('hex');
+    bossSessions.set(token, now + 8 * 60 * 60 * 1000);
+    res.json({ token });
+});
+app.delete('/api/boss/session', (req, res) => {
+    bossSessions.delete(String(req.headers.authorization || '').replace(/^Bearer /, ''));
+    res.json({ success: true });
+});
+
 // Worker levels: profiles are shared across devices; historical splits live on rounds/transactions.
 app.get('/api/wage-workers', async (req, res) => {
     const { data, error } = await supabase.from('wage_workers').select('*').order('name');
@@ -43,6 +78,7 @@ app.get('/api/wage-workers', async (req, res) => {
     res.json(data);
 });
 app.post('/api/wage-workers', async (req, res) => {
+    if (!bossSessionValid(req)) return res.status(403).json({ error: 'เฉพาะเถ้าแก่ที่ยืนยันรหัสแล้วเท่านั้นที่แก้ไขคนงานหรือระดับค่าแรงได้' });
     const name = String(req.body?.name || '').trim();
     const role = req.body?.role;
     if (!name || name.length > 100 || /[,()\[\]\r\n]/.test(name) || !['DRIVER','HELPER','TRAINEE'].includes(role)) {

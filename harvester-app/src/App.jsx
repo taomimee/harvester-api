@@ -16,6 +16,11 @@ const normalizeWageProfiles = profiles => {
     const group = groups.get(name) || [];
     group.push(p); groups.set(name, group);
   });
+  // Names supplied by the pre-registry UI must remain discoverable even without wage history.
+  // Pending entries are persisted by saveWageProfile after the user chooses a real role.
+  ['พี่ยันต์', 'จักร กฤษณ์'].forEach(name => {
+    if (!groups.has(name)) groups.set(name, [{ name, role: '', needsSetup: true }]);
+  });
   return [...groups].map(([name, rows]) => {
     const exact = rows.find(p => p.name === name);
     const chosen = exact || rows[0];
@@ -28,7 +33,7 @@ const crewSplit = (names, profiles) => {
   if (new Set(names).size !== names.length) throw new Error('ห้ามเลือกชื่อคนงานซ้ำ');
   const crew = names.map(name => {
     const profile = profiles.find(p => p.name === name);
-    if (!profile || !WAGE_ROLES[profile.role]) throw new Error(`กรุณาตั้งระดับของ ${name} ก่อน`);
+    if (!profile || !WAGE_ROLES[profile.role]) throw new Error(`ให้เถ้าแก่ตั้งระดับของ ${name} ก่อนครับ`);
     return { name, role: profile.role };
   });
   const drivers = crew.filter(p => p.role === 'DRIVER').length;
@@ -62,8 +67,9 @@ function WageWorkerSettings({ profiles, error, onSave, onReload }) {
   return <details className="my-3 rounded-xl border border-orange-200 bg-orange-50 p-3">
     <summary className="cursor-pointer font-black text-orange-900">👷 จัดการคนงาน / ระดับค่าแรง</summary>
     <p className="text-xs my-2 text-gray-600">คนขับ • เด็กรถเป็นงาน 20 • เด็กฝึกงาน 10 บาท/ไร่ — เปลี่ยนระดับมีผลกับรอบใหม่เท่านั้น</p>
+    {profiles.some(p => !WAGE_ROLES[p.role]) && <p className="my-2 rounded-lg bg-amber-100 p-2 text-sm font-bold text-amber-900">นำชื่อคนงานเดิมมาให้แล้ว กดชื่อที่ขึ้น “รอตั้งระดับ” เลือกระดับแล้วบันทึกครั้งเดียว ยอดงานเก่ายังคงเดิม</p>}
     {error && <p className="text-sm font-bold text-red-700">{error} <button type="button" onClick={onReload} className="underline">ลองใหม่</button></p>}
-    <div className="flex flex-wrap gap-2 my-2">{profiles.map(p => <button type="button" key={p.name} onClick={() => { setName(p.name); setRole(p.role); }} className="bg-white rounded-lg border p-2 text-sm font-bold">{p.name} · {WAGE_ROLES[p.role] || 'กรุณาตั้งระดับ'}</button>)}</div>
+    <div className="flex flex-wrap gap-2 my-2">{profiles.map(p => <button type="button" key={p.name} onClick={() => { setName(p.name); setRole(WAGE_ROLES[p.role] ? p.role : ''); }} className="bg-white rounded-lg border p-2 text-sm font-bold">{p.name} · {WAGE_ROLES[p.role] || 'รอตั้งระดับ'}</button>)}</div>
     <input aria-label="ชื่อคนงาน" placeholder="ชื่ออย่างเดียว ไม่ต้องใส่อีโมจิ เช่น จักร กฤษณ์" value={name} onChange={e => setName(e.target.value)} className="w-full border rounded-lg p-2 mb-2" />
     <select aria-label="ระดับคนงาน" value={role} onChange={e => setRole(e.target.value)} className="w-full border rounded-lg p-2 mb-2">
       <option value="">เลือกระดับคนงาน</option>{Object.entries(WAGE_ROLES).map(([v,l]) => <option key={v} value={v}>{l}</option>)}
@@ -2495,11 +2501,16 @@ function App() {
   };
   useEffect(() => { loadWageProfiles(); }, []);
   const saveWageProfile = async (name, role) => {
+    if (userRole !== 'BOSS') throw new Error('เฉพาะเถ้าแก่เท่านั้นที่แก้ไขระดับค่าแรงได้');
+    let bossToken = sessionStorage.getItem('harvester_boss_token');
+    if (!bossToken) bossToken = await authorizeBoss();
+    if (!bossToken) throw new Error('ยังไม่ได้ยืนยันสิทธิ์เถ้าแก่');
     name = cleanWageName(name);
-    const res = await fetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, role }) });
+    const res = await fetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bossToken}` }, body: JSON.stringify({ name, role }) });
     const data = await res.json();
+    if (res.status === 403) sessionStorage.removeItem('harvester_boss_token');
     if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
-    setWageProfiles(prev => [...prev.filter(p => p.name !== cleanWageName(data.name)), ...normalizeWageProfiles([data])].sort((a,b) => a.name.localeCompare(b.name, 'th')));
+    setWageProfiles(prev => [...prev.filter(p => p.name !== cleanWageName(data.name)), ...normalizeWageProfiles([data]).filter(p => p.name === cleanWageName(data.name))].sort((a,b) => a.name.localeCompare(b.name, 'th')));
     setWageProfileError('');
   };
   const [workRoundData, setWorkRoundData] = useState({
@@ -2540,6 +2551,15 @@ function App() {
   const [userRole, setUserRole] = useState(() => {
     return localStorage.getItem('harvester_role') || 'DRIVER';
   });
+  const authorizeBoss = async () => {
+    const pin = window.prompt('กรุณาใส่ PIN เถ้าแก่');
+    if (!pin) return null;
+    const res = await fetch(`${WAGE_API}/boss/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'ยืนยันสิทธิ์ไม่สำเร็จ');
+    sessionStorage.setItem('harvester_boss_token', data.token);
+    return data.token;
+  };
   const [currentDriverName, setCurrentDriverName] = useState(''); // เก็บชื่อคนขับเพื่อให้ดึงค่าแรงถูกคน
 
   // 👇 เพิ่ม State ดึงพิกัดอัตโนมัติตอนเปิดเว็บ 👇
@@ -3821,28 +3841,31 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
-      <div className="max-w-md mx-auto">
+      <div className={`max-w-md mx-auto ${['home','active'].includes(activeTab) ? 'field-readable' : ''}`}>
+        <style>{`
+          .field-readable { color: #0f172a; }
+          .field-readable [class*="text-[9px]"], .field-readable [class*="text-[10px]"], .field-readable [class*="text-[11px]"], .field-readable .text-xs { font-size: 14px; line-height: 1.55; }
+          .field-readable .text-sm { font-size: 16px; line-height: 1.55; }
+          .field-readable .text-gray-400, .field-readable .text-gray-500 { color: #475569; }
+          .field-readable button { min-height: 44px; }
+          .field-readable [id^="job-card-"] h2 { font-size: 24px; line-height: 1.4; }
+        `}</style>
         {/* 🐘 Header ช้างขาวเจริญทรัพย์ (พร้อมทางลับเถ้าแก่) */}
         <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-3.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
           
           {/* 👇 ทางลับเถ้าแก่ (ปุ่มกุญแจมุมขวาบน - อัปเกรดจำสถานะ) 👇 */}
           <div 
             className="absolute top-3 right-3 z-50 bg-black/20 hover:bg-black/40 backdrop-blur-sm p-1.5 rounded-full cursor-pointer transition text-xs border border-white/10"
-            onClick={() => {
+            onClick={async () => {
               if (userRole === 'DRIVER') {
-                const pin = window.prompt("🧑‍💼 โหมดเถ้าแก่\nกรุณาใส่รหัสผ่าน (PIN):");
-                if (pin === '2518') { 
-                  setUserRole('BOSS');
-                  localStorage.setItem('harvester_role', 'BOSS'); // 💾 สั่งจำลงเครื่อง
-                  alert("✅ เข้าสู่โหมดเถ้าแก่เรียบร้อย");
-                } else if (pin) {
-                  alert("❌ รหัสผ่านไม่ถูกต้อง");
-                }
-              } else {
-                if (window.confirm("ต้องการออกจากโหมดเถ้าแก่ กลับไปเป็นโหมดคนขับ ใช่หรือไม่?")) {
-                  setUserRole('DRIVER');
-                  localStorage.setItem('harvester_role', 'DRIVER'); // 💾 ล้างความจำกลับเป็นคนขับ
-                }
+                try {
+                  if (await authorizeBoss()) { setUserRole('BOSS'); localStorage.setItem('harvester_role', 'BOSS'); }
+                } catch(e) { alert(e.message); }
+              } else if (window.confirm('กลับไปโหมดลูกน้องใช่ไหม?')) {
+                const token = sessionStorage.getItem('harvester_boss_token');
+                sessionStorage.removeItem('harvester_boss_token');
+                setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER');
+                if (token) fetch(`${WAGE_API}/boss/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
               }
             }}
           >
@@ -3932,7 +3955,27 @@ function App() {
         )}
 
         {/* 🏠 หน้าแรก — เน้นสิ่งที่ต้องทำ ไม่เอาข้อมูลคนละสถานะมาปนกัน */}
-        {activeTab === 'home' && (
+        {activeTab === 'home' && userRole === 'DRIVER' && (
+          <section className="space-y-4">
+            <div className="rounded-2xl bg-slate-900 p-5 text-white">
+              <p className="text-base font-bold">งานวันนี้</p>
+              <h2 className="text-2xl font-black mt-2">{scheduledTodayJobs.length} คิวนัดวันนี้</h2>
+              <p className="text-base mt-2">{carryJobs.length > 0 ? `มีงานค้าง / รอนัดอีก ${carryJobs.length} คิว` : 'ไม่มีงานค้าง'}</p>
+            </div>
+            <button onClick={() => setActiveTab('active')} className="w-full rounded-xl bg-blue-700 text-white py-4 text-lg font-black">เปิดคิวงานทั้งหมด →</button>
+            <h3 className="text-xl font-black text-slate-900">งานที่ต้องทำ</h3>
+            {todayJobs.length === 0 && <p className="bg-white border rounded-xl p-5 text-lg text-slate-700">ยังไม่มีงานวันนี้</p>}
+            {todayJobs.map(job => <article key={job.id} className="bg-white border-2 border-slate-300 rounded-2xl p-4 space-y-3">
+              <span className={`inline-block rounded-lg px-3 py-2 font-bold ${job.status === 'IN_PROGRESS' ? 'bg-blue-700 text-white' : 'bg-amber-100 text-amber-950'}`}>{getStatusDisplay(job.status).text}</span>
+              <h3 className="text-2xl font-black text-slate-900 break-words">{job.customers?.name || 'ไม่ระบุลูกค้า'}</h3>
+              <p className="text-base font-bold text-slate-700">🚜 {vehicles.find(v => v.id === job.vehicle_id)?.name || 'ยังไม่ระบุรถ'} · {job.crop_type || 'ข้าว'}</p>
+              <p className="text-base text-slate-700">📍 {job.address_note || job.customers?.address_note || 'ยังไม่มีรายละเอียดสถานที่'}</p>
+              <button onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150); }} className="w-full bg-blue-700 text-white rounded-xl py-3 text-lg font-bold">เปิดงานนี้ →</button>
+            </article>)}
+          </section>
+        )}
+
+        {activeTab === 'home' && userRole === 'BOSS' && (
           <div className="space-y-4">
 
             {/* 1. ภาพรวมวันนี้ */}
@@ -4514,12 +4557,12 @@ function App() {
                           )}
                         </p>
                       </div>
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${statusObj.color}`}>
+                      <span className={`px-3 py-2 rounded-lg text-base font-black border ${job.status === 'IN_PROGRESS' ? 'bg-blue-700 text-white border-blue-800' : job.status === 'DONE' ? 'bg-emerald-700 text-white border-emerald-800' : 'bg-amber-100 text-amber-950 border-amber-400'}`}>
                         {statusObj.text}
                       </span>
                     </div>
 
-                    {(() => {
+                    {(isExpanded || activeTab !== 'active') && (() => {
                       const ws = getJobWorkSummary(job);
                       const gpsArea = getJobGpsArea(job);
                       const gpsCount = Number(job.gps_summary?.plot_count || 0);
@@ -4565,7 +4608,7 @@ function App() {
                       </div>;
                     })()}
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
-                    {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
+                    {userRole === 'BOSS' && (isExpanded || activeTab !== 'active') && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
@@ -4594,6 +4637,13 @@ function App() {
                     ) : null}
                   </div>
                   
+                  {!isExpanded && activeTab === 'active' && <div className="space-y-2 mb-3 text-base text-slate-700">
+                    <p className="font-bold">🚜 {assignedVehicle?.name || 'ยังไม่ระบุรถ'} · {job.crop_type || 'ข้าว'}</p>
+                    <p>📍 {job.address_note || job.customers?.address_note || 'ยังไม่มีรายละเอียดสถานที่'}</p>
+                    <p>พื้นที่ {formatRaiNgan(queueAreaRai(job))}</p>
+                  </div>}
+                  <button aria-expanded={isExpanded} onClick={() => setExpandedId(isExpanded ? null : job.id)} className="w-full border-2 border-slate-300 bg-white text-slate-800 rounded-xl py-3 text-base font-bold mb-3">{isExpanded ? 'ย่อรายละเอียด ▴' : 'ดูรายละเอียดงาน ▾'}</button>
+                  {userRole === 'DRIVER' && activeTab === 'active' && job.status !== 'DONE' && <button onClick={() => job.status === 'IN_PROGRESS' ? openWorkRoundModal(job, 'PARTIAL') : updateStatus(job.id, 'IN_PROGRESS')} className={`w-full rounded-xl py-4 text-lg font-black text-white ${job.status === 'IN_PROGRESS' ? 'bg-emerald-700' : 'bg-blue-700'}`}>{job.status === 'IN_PROGRESS' ? '✓ จบงานรอบวันนี้' : '▶ เริ่มเกี่ยว'}</button>}
                   {isExpanded && (
                     <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
                       <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-4 border border-yellow-200">
@@ -4717,7 +4767,7 @@ function App() {
 
                       {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
                       <div className="flex gap-2 pt-3 border-t border-gray-200">
-                        {job.status !== 'IN_PROGRESS' && (
+                        {userRole === 'BOSS' && job.status !== 'IN_PROGRESS' && (
                           <button 
                             onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
                             className={`flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
@@ -4727,7 +4777,7 @@ function App() {
                         )}
 
                         {/* 🌾 จบเฉพาะรอบวันนี้: จำพื้นที่จริง + คนรับค่าแรงไว้ก่อน ยังไม่ลงสมุด */}
-                        {job.status === 'IN_PROGRESS' && (
+                        {userRole === 'BOSS' && job.status === 'IN_PROGRESS' && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -6410,15 +6460,15 @@ function App() {
                             onClick={() => toggleRoundWorker(name)}
                             className={`px-3 py-2 rounded-lg text-xs font-bold border ${selected ? 'bg-orange-500 text-white border-orange-600' : 'bg-white text-orange-700 border-orange-300'}`}
                           >
-                            {selected ? '✅' : '➕'} {name} · {WAGE_ROLES[role]}
+                            {selected ? '✅' : '➕'} {name} · {WAGE_ROLES[role] || 'รอตั้งระดับ'}
                           </button>
                         );
                       })}
                     </div>
                     <p className="text-xs font-bold text-orange-800">เลือกได้หลายคน • รวม 60 บาท/ไร่ • คนขับขั้นต่ำคนละ 30 บาท/ไร่</p>
-                    <WageWorkerSettings profiles={wageProfiles} error={wageProfileError} onSave={saveWageProfile} onReload={loadWageProfiles} />
+                    {userRole === 'BOSS' && <WageWorkerSettings profiles={wageProfiles} error={wageProfileError} onSave={saveWageProfile} onReload={loadWageProfiles} />}
                     {(() => {
-                      if (!workersSelected.length) return <p className="text-sm">เพิ่มชื่อและระดับ แล้วเลือกคนที่ขึ้นรถครับ</p>;
+                      if (!workersSelected.length) return <p className="text-sm">เลือกคนที่ขึ้นรถ • ถ้าไม่มีชื่อ ให้เถ้าแก่เพิ่มคนงานครับ</p>;
                       try {
                         const split = crewSplit(workersSelected, wageProfiles);
                         const currentArea = isFinal ? (wagePreview.find(r => r.key === 'today-final' || r.key === 'fallback-final')?.wageArea || (previewBasis <= 0 ? billingArea || 0 : 0)) : todayMeasured;
@@ -6601,7 +6651,7 @@ function App() {
                 </div>
                 
                 <div className="p-4 flex-1 overflow-y-auto">
-                    <WageWorkerSettings profiles={wageProfiles} error={wageProfileError} onSave={saveWageProfile} onReload={loadWageProfiles} />
+                    {userRole === 'BOSS' && <WageWorkerSettings profiles={wageProfiles} error={wageProfileError} onSave={saveWageProfile} onReload={loadWageProfiles} />}
                     {/* 🔍 แถบกรองชื่อ */}
                     <div className="mb-4">
                       <p className="text-[11px] font-bold text-gray-500 mb-2">🔍 กดเลือกชื่อเพื่อดูยอด / จ่ายเงิน:</p>
