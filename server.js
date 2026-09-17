@@ -89,7 +89,33 @@ app.post('/api/wage-workers', async (req, res) => {
     res.json(data);
 });
 
-// Validate before any job mutation. The database also validates inside atomic finalization.
+// Validate before any job mutation. Never skip wage/driver rules when an RPC fails.
+// Older wage_crew_snapshot definitions may contain an integer=text comparison (PG 42883).
+// For *that code only*, validate against the actual wage_workers records instead.
+const validateRoundCrewFromProfiles = async (workerText) => {
+    const names = String(workerText || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!names.length) throw Object.assign(new Error('กรุณาเลือกคนทำงาน'), {code:'CREW_MISSING'});
+    if (new Set(names).size !== names.length) throw Object.assign(new Error('ห้ามเลือกคนงานซ้ำ'), {code:'CREW_DUPLICATE'});
+    const { data, error } = await supabase.from('wage_workers')
+        .select('name,role').in('name', names);
+    if (error) throw error;
+    const byName = new Map((data || []).map(row => [String(row.name), row]));
+    const crew = names.map(name => {
+        const row = byName.get(name);
+        if (!row || !['DRIVER','HELPER','TRAINEE'].includes(row.role)) {
+            throw Object.assign(new Error(`ให้เถ้าแก่ตั้งระดับของ ${name} ก่อนบันทึกครับ`), {code:'CREW_ROLE_MISSING'});
+        }
+        return row;
+    });
+    const drivers = crew.filter(row => row.role === 'DRIVER').length;
+    if (!drivers) throw Object.assign(new Error('ต้องมีคนขับอย่างน้อย 1 คน'), {code:'CREW_DRIVER_MISSING'});
+    const support = crew.reduce((sum,row) => sum + (row.role === 'HELPER' ? 20 : row.role === 'TRAINEE' ? 10 : 0), 0);
+    if ((60 - support) / drivers < 30) {
+        throw Object.assign(new Error('ค่าแรง 60 บาท/ไร่ไม่พอสำหรับทีมนี้ คนขับต้องได้อย่างน้อยคนละ 30 บาท/ไร่'), {code:'CREW_RATE_INVALID'});
+    }
+    return crew;
+};
+
 app.use('/api/jobs', async (req, res, next) => {
     const roundRequest = req.method === 'POST' && /^\/[^/]+\/(rounds|finalize)$/.test(req.path);
     const legacyRequest = req.method === 'PATCH' && /^\/[^/]+\/status$/.test(req.path) && req.body?.status === 'DONE' && req.body?.wageData;
@@ -100,9 +126,25 @@ app.use('/api/jobs', async (req, res, next) => {
     if (!workers) return next();
     try {
         const { error } = await supabase.rpc('wage_crew_snapshot', { worker_text: workers });
-        if (error) return res.status(400).json({ error: error.code === 'PGRST202' ? 'กรุณารัน wage_levels.sql ก่อนบันทึกค่าแรง' : error.message });
-        return next();
-    } catch (e) { return res.status(503).json({ error: 'ตรวจระดับคนงานไม่สำเร็จ กรุณาลองใหม่' }); }
+        if (!error) return next();
+        if (error.code === '42883') {
+            console.warn('⚠️ wage_crew_snapshot PG 42883; validating against wage_workers by name instead:', error.message);
+            await validateRoundCrewFromProfiles(workers);
+            return next();
+        }
+        return res.status(400).json({
+            error: error.code === 'PGRST202' ? 'กรุณารัน wage_levels.sql ก่อนบันทึกค่าแรง' : error.message,
+            code: error.code || 'CREW_VALIDATION_FAILED',
+            stage: 'validate_crew_rpc'
+        });
+    } catch (e) {
+        console.error('Crew validation failed:', e.message);
+        return res.status(['CREW_MISSING','CREW_DUPLICATE','CREW_ROLE_MISSING','CREW_DRIVER_MISSING','CREW_RATE_INVALID'].includes(e.code) ? 400 : 503).json({
+            error: e.message || 'ตรวจระดับคนงานไม่สำเร็จ กรุณาลองใหม่',
+            code: e.code || 'CREW_VALIDATION_FAILED',
+            stage: 'validate_crew_profiles'
+        });
+    }
 });
 
 app.get('/', (req, res) => {
@@ -975,6 +1017,7 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
     if (!Number.isFinite(wagePerRai) || wagePerRai < 0) return res.status(400).json({ error: 'เรทค่าแรงไม่ถูกต้อง' });
 
     let roundId = null;
+    let saveStage = 'load_job';
     try {
         const { data: job, error: jobError } = await supabase
             .from('jobs')
@@ -986,6 +1029,7 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
         if (!job) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
         if (job.status === 'DONE') return res.status(400).json({ error: 'งานนี้ปิดจบแล้ว ไม่สามารถเพิ่มรอบได้' });
 
+        saveStage = 'insert_job_work_rounds';
         const nowIso = new Date().toISOString();
         const { data: round, error: roundError } = await supabase
             .from('job_work_rounds')
@@ -1007,6 +1051,7 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
         if (roundError) throw roundError;
         roundId = round.id;
 
+        saveStage = 'update_jobs_status';
         const jobUpdate = { status: 'PAUSED', awaiting_area_confirmation: req.body?.awaiting_area_confirmation === true };
         if (next_work_date && !jobUpdate.awaiting_area_confirmation) jobUpdate.job_date = next_work_date;
 
@@ -1019,6 +1064,7 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
 
         if (updateError) throw updateError;
 
+        saveStage = 'audit_best_effort';
         await writeJobAudit(jobId, 'ROUND_SAVED', `ปิดรอบ ${measuredArea.toFixed(2)} ไร่ • ${workerText} • ${String(measured_source).toUpperCase()==='GPS'?'GPS':'ปรับเอง'}`, null, {round_id:roundId, measured_area:measuredArea, workers:workerText, source:measured_source, next_work_date});
 
         res.status(201).json({
@@ -1032,8 +1078,17 @@ app.post('/api/jobs/:id/rounds', async (req, res) => {
         if (roundId) {
             try { await supabase.from('job_work_rounds').delete().eq('id', roundId); } catch (_) {}
         }
-        console.error('Create Work Round Error:', err.message);
-        res.status(500).json({ error: err.message });
+        console.error('Create Work Round Error:', {jobId, stage:saveStage, code:err.code, message:err.message, details:err.details, hint:err.hint});
+        const labels = {
+            load_job: 'ค้นหาคิวงาน',
+            insert_job_work_rounds: 'บันทึกตารางรอบงาน (รวม Trigger ฐานข้อมูล)',
+            update_jobs_status: 'เปลี่ยนสถานะคิว',
+            audit_best_effort: 'เขียนประวัติคิว'
+        };
+        res.status(500).json({
+            error: `ผิดพลาดขั้น ${labels[saveStage] || saveStage}: ${err.message}`,
+            code: err.code || 'ROUND_SAVE_FAILED', stage: saveStage
+        });
     }
 });
 
