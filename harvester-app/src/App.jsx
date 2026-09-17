@@ -2695,6 +2695,7 @@ function App() {
 
   // 🔍 State สำหรับระบบค้นหาประวัติ
   const [historySearch, setHistorySearch] = useState('');
+  const [showAllTodayWork, setShowAllTodayWork] = useState(false);
 
   const [editingId, setEditingId] = useState(null);
   const [currentCoords, setCurrentCoords] = useState([15.7012, 101.1012]); 
@@ -3230,6 +3231,22 @@ function App() {
     return new Date(a.job_date || 0) - new Date(b.job_date || 0);
   });
 
+  // 📒 สมุดงานวันนี้: แยกจากคิวที่ยังต้องติดตาม และอิงวันที่รอบงานจริงเป็นหลัก
+  // งานที่ปิดวันนี้แต่ไม่มีรอบของวันนี้ แสดงว่า "ปิดวันนี้" ไม่อ้างว่าเพิ่งเกี่ยววันนี้
+  const todayWorkLogJobs = [...new Map([
+    ...workedTodayJobs,
+    ...completedTodayJobs
+  ].map(job => [String(job.id), job])).values()].map(job => {
+    const dayRounds = (Array.isArray(job.work_rounds) ? job.work_rounds : [])
+      .filter(round => isInHomeDay(round.work_date, todayStart, tomorrowStart));
+    const areaToday = dayRounds.reduce((sum, round) => sum + Math.max(0, Number(round.measured_area) || 0), 0);
+    const lastRoundAt = dayRounds.reduce((latest, round) => Math.max(latest, new Date(round.work_date).getTime() || 0), 0);
+    const closedWithoutNewRound = job.status === 'DONE' && dayRounds.length === 0;
+    const eventAt = lastRoundAt || (closedWithoutNewRound ? new Date(job.closed_at || job.job_date).getTime() : 0);
+    return { job, areaToday, roundCountToday: dayRounds.length, closedWithoutNewRound, eventAt };
+  }).sort((a, b) => b.eventAt - a.eventAt);
+  const todayWorkLogShown = showAllTodayWork ? todayWorkLogJobs : todayWorkLogJobs.slice(0, 5);
+
   // แยกตัวเลข 3 ความหมาย: เกี่ยวจริงวันนี้ / พื้นที่รอทำ / ปิดยอดขายวันนี้
   // ห้ามใช้ยอดไร่ที่ลูกค้าตกลงแทนพื้นที่เกี่ยววันนี้ หรือรวมคิวที่ DONE ซ้ำสองครั้ง
   const todayAreaInfo = todaySummaryJobs.map(job => ({
@@ -3348,7 +3365,8 @@ function App() {
     try {
       const res = await fetch(`https://harvester-api-server.onrender.com/api/jobs/${id}/attachments`);
       const data = await res.json();
-      setJobAttachments(data || []);
+      // ซ่อนสลิปจากหน้าลูกน้องและจากรูปเต็มจอ (ยังต้องป้องกันที่ API สำหรับสิทธิ์จริง)
+      setJobAttachments((Array.isArray(data) ? data : []).filter(img => userRole === 'BOSS' || String(img.category || '').toUpperCase() !== 'SLIP'));
     } catch(e) { console.error(e); }
   }
 
@@ -3358,7 +3376,7 @@ function App() {
       setJobAttachments([]); // ล้างรูปเก่าออกก่อน
       fetchAttachments(expandedId);
     }
-  }, [expandedId]);
+  }, [expandedId, userRole]);
 
 // 📸 3. ฟังก์ชันอัปโหลดรูปร่วมกับ "ระบบบีบอัดภาพ" (เซฟพื้นที่ Supabase)
   const handleImageUpload = async (e, jobId) => {
@@ -3934,13 +3952,29 @@ function App() {
      const phone = (j.customers?.phone || '').toLowerCase();
      const crop = (j.crop_type || '').toLowerCase();
      const note = (j.address_note || j.customers?.address_note || '').toLowerCase();
-     return name.includes(keyword) || phone.includes(keyword) || crop.includes(keyword) || note.includes(keyword);
+     const workers = (j.work_rounds || []).map(round => round.workers || '').join(' ').toLowerCase();
+     const vehicle = (j.vehicles?.name || vehicles.find(v => String(v.id) === String(j.vehicle_id))?.name || '').toLowerCase();
+     return name.includes(keyword) || phone.includes(keyword) || crop.includes(keyword) || note.includes(keyword) || workers.includes(keyword) || vehicle.includes(keyword) || String(j.id).includes(keyword);
   });
 
   // 🔍 2. เอาผลลัพธ์ที่กรองแล้วมาแบ่งหน้า
   const totalPages = Math.ceil(filteredHistoryJobs.length / itemsPerPage);
   const currentHistoryJobs = filteredHistoryJobs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   const displayJobs = activeTab === 'active' ? activeJobs : currentHistoryJobs;
+  const isHistoryView = activeTab === 'history' || (activeTab === 'finance' && financeSubTab === 'history');
+  // หน้าแรกเปิดรายละเอียดจากสถานะจริง: DONE ไปประวัติ, ที่เหลือไปคิวงาน
+  const openJobDetails = job => {
+    setExpandedId(job.id);
+    if (job.status === 'DONE') {
+      setHistorySearch('');
+      const index = historyJobs.findIndex(item => String(item.id) === String(job.id));
+      setCurrentPage(index >= 0 ? Math.floor(index / itemsPerPage) + 1 : 1);
+      setActiveTab('history');
+    } else {
+      setActiveTab('active');
+    }
+    setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({behavior:'smooth',block:'center'}), 160);
+  };
 
   const searchKeyword = formData.customer_name.trim().toLowerCase();
   const isExactMatch = customersList.some(c => c.name === formData.customer_name && (c.phone || '') === formData.phone);
@@ -4017,7 +4051,7 @@ function App() {
               } else if (window.confirm('กลับไปโหมดลูกน้องใช่ไหม?')) {
                 const token = sessionStorage.getItem('harvester_boss_token');
                 sessionStorage.removeItem('harvester_boss_token');
-                setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER');
+                setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); setActiveTab('home'); setFullScreenIndex(null);
                 if (token) fetch(`${WAGE_API}/boss/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
               }
             }}
@@ -4029,12 +4063,14 @@ function App() {
           <p className="mt-0.5 text-xs font-semibold text-emerald-100">ระบบจัดการคิวรถเกี่ยว</p>
         </header>
 
-        {/* 🔘 ปุ่มสลับแท็บหลัก (Main Tab Bar - จำกัด 5 เมนู) */}
+        {/* 🔘 เมนูหลัก — ประวัติคิวงานใช้ร่วมกันทั้งสองโหมด (บัญชีแยกเฉพาะเถ้าแก่) */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
 
           <button onClick={() => setActiveTab('home')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'home' ? 'bg-gradient-to-r from-gray-800 to-black text-white shadow-md scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🏠 หน้าแรก</button>
 
           <button onClick={() => setActiveTab('active')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
+
+          <button type="button" onClick={() => { setActiveTab('history'); setCurrentPage(1); setExpandedId(null); fetchJobs(); }} className={`min-w-[64px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'history' ? 'bg-slate-800 text-white shadow-md' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📚 ประวัติ</button>
           
           <button onClick={() => setActiveTab('calendar')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
           
@@ -4087,7 +4123,7 @@ function App() {
              <button onClick={() => setFinanceSubTab('debt')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'debt' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ลูกหนี้</button>
              <button onClick={() => setFinanceSubTab('income')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'income' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💵 รับเงิน</button>
              <button onClick={() => { setFinanceSubTab('expense'); fetchExpenses(); }} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'expense' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📉 รายจ่าย</button>
-             <button onClick={() => setFinanceSubTab('history')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'history' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📋 ประวัติ</button>
+             <button type="button" onClick={() => { setActiveTab('history'); setCurrentPage(1); fetchJobs(); }} className="min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs text-slate-700 hover:bg-white">📚 คิวงานย้อนหลัง ↗</button>
           </div>
         )}
 
@@ -4204,14 +4240,7 @@ function App() {
                     return <button
                       type="button"
                       key={job.id}
-                      onClick={() => {
-                        setActiveTab('active');
-                        setExpandedId(job.id);
-                        setTimeout(() => {
-                          const card = document.getElementById(`job-card-${job.id}`);
-                          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }, 120);
-                      }}
+                      onClick={() => openJobDetails(job)}
                       aria-label={`เปิดคิว ${job.customers?.name || 'ไม่ระบุลูกค้า'} สถานะ${statusText}`}
                       className="block w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
                     >
@@ -4244,6 +4273,45 @@ function App() {
               )}
             </section>
 
+            {/* 📒 งานที่ทำไปแล้ววันนี้: ต่อให้เปลี่ยนเป็นรอยืนยันไร่หรือ DONE ก็อยู่ในบันทึกวันเดิม */}
+            <section aria-label="บันทึกงานวันนี้" className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+                <div>
+                  <h2 className="text-sm font-black text-slate-900">📒 บันทึกงานวันนี้ <span className="ml-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">{todayWorkLogJobs.length}</span></h2>
+                  <p className="mt-1 text-xs font-medium text-slate-600">งานที่ลงรอบหรือปิดวันนี้ · ไม่ใช่คิวรอทำ</p>
+                </div>
+                <button type="button" className="shrink-0 text-xs font-bold text-blue-700 hover:underline" onClick={() => { setActiveTab('history'); setCurrentPage(1); setExpandedId(null); fetchJobs(); }}>ดูประวัติคิวที่ปิดแล้ว →</button>
+              </div>
+              <div className="space-y-2 p-3">
+                {todayWorkLogJobs.length === 0 ? (
+                  <p className="rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-600">ยังไม่มีรอบทำงานที่บันทึกวันนี้</p>
+                ) : todayWorkLogShown.map(({job, areaToday, roundCountToday, closedWithoutNewRound, eventAt}) => {
+                  const done = job.status === 'DONE';
+                  const awaiting = isAwaitingArea(job);
+                  const statusText = done ? '✅ ปิดงานแล้ว' : awaiting ? '📐 รอยืนยันไร่' : job.status === 'PAUSED' ? '⏸ รอเกี่ยวต่อ' : job.status === 'IN_PROGRESS' ? '🚜 กำลังทำต่อ' : '🗂️ บันทึกรอบแล้ว';
+                  const statusColor = done ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : awaiting ? 'bg-violet-50 text-violet-800 border-violet-200' : 'bg-amber-50 text-amber-900 border-amber-200';
+                  const eventTime = Number.isFinite(eventAt) && eventAt > 0 ? new Date(eventAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : '';
+                  return <button type="button" key={job.id} onClick={() => openJobDetails(job)}
+                    className="block w-full rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
+                    aria-label={`เปิดรายละเอียด ${job.customers?.name || 'ลูกค้า'} ${statusText}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="min-w-0 flex-1 truncate text-sm font-black text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
+                      <span className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black ${statusColor}`}>{statusText}</span>
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
+                      <span className="min-w-0 truncate font-medium text-slate-600">{eventTime ? `${eventTime} · ` : ''}{job.crop_type || 'ข้าว'}{roundCountToday ? ` · ${roundCountToday} รอบวันนี้` : ''}</span>
+                      <span className="shrink-0 font-black text-emerald-800">{closedWithoutNewRound ? 'ปิดวันนี้' : formatRaiNgan(areaToday)}</span>
+                    </div>
+                    {closedWithoutNewRound && <p className="mt-1 text-[11px] font-medium text-slate-500">วันนี้ไม่มีรอบเกี่ยวใหม่ · ดูรอบเก่าในรายละเอียด</p>}
+                  </button>;
+                })}
+                {todayWorkLogJobs.length > 5 && <button type="button" onClick={() => setShowAllTodayWork(value => !value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 text-xs font-bold text-slate-800">
+                  {showAllTodayWork ? 'ย่อรายการ ↑' : `ดูอีก ${todayWorkLogJobs.length - 5} งาน ↓`}
+                </button>}
+              </div>
+            </section>
+
             {awaitingAreaJobs.length > 0 && <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="text-sm font-black text-violet-950">📐 เกี่ยวเสร็จ · รอยืนยันไร่</h2>
@@ -4256,7 +4324,7 @@ function App() {
                   return <button
                     type="button"
                     key={job.id}
-                    onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 150); }}
+                    onClick={() => openJobDetails(job)}
                     className="block w-full rounded-xl border border-violet-200 bg-violet-50/30 p-3 text-left transition hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500"
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -4572,18 +4640,24 @@ function App() {
 
         {/* แสดงข้อความแจ้งเตือนเมื่อไม่มีข้อมูล */}
         {((activeTab === 'active' && activeJobs.length === 0) || 
-          (activeTab === 'finance' && financeSubTab === 'history' && historyJobs.length === 0)) && (
+          (isHistoryView && historyJobs.length === 0)) && (
           <div className="text-center text-gray-500 mt-10">
             <p className="text-4xl mb-2">🍃</p>
             <p>ยังไม่มีข้อมูลในหน้านี้ครับ</p>
           </div>
         )}
 
-        {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
+        {(activeTab === 'active' || isHistoryView) && (
           <div className="space-y-4">
             
             {/* 🔍 กล่องค้นหาอัจฉริยะ (โชว์เฉพาะแท็บประวัติ) */}
-            {activeTab === 'finance' && financeSubTab === 'history' && (
+            {isHistoryView && (
+               <div className="mb-3">
+                 <h2 className="text-lg font-black text-slate-900">📚 ประวัติคิวงาน</h2>
+                 <p className="text-xs text-slate-600 mt-1">{historyJobs.length} งานที่ปิดแล้ว · ค้นหาและเปิดดูรอบงาน / GPS ได้{userRole === 'DRIVER' ? ' (อ่านอย่างเดียว)' : ''}</p>
+               </div>
+            )}
+            {isHistoryView && (
                <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-200 mb-4 sticky top-2 z-10">
                  <div className="relative">
                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -4591,7 +4665,7 @@ function App() {
                    </div>
                    <input
                      type="text"
-                     placeholder="ค้นหา ชื่อ, เบอร์, พืช, หรือหมายเหตุ..."
+                     placeholder="ค้นหา ลูกค้า คนทำ รถ พืช หรือเลขคิว..."
                      className="w-full pl-10 pr-10 py-2.5 border border-gray-300 rounded-lg bg-gray-50 text-sm font-bold text-gray-800 focus:ring-2 focus:ring-blue-400 outline-none transition"
                      value={historySearch}
                      onChange={(e) => {
@@ -4613,9 +4687,9 @@ function App() {
                  {historySearch && (
                    <div className="mt-2 px-1 flex justify-between items-center text-[11px] font-bold text-gray-500">
                      <span>พบ {filteredHistoryJobs.length} รายการ</span>
-                     <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
+                     {userRole === 'BOSS' && <span className="text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
                        ยอดรวม: {filteredHistoryJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0).toLocaleString()} ฿
-                     </span>
+                     </span>}
                    </div>
                  )}
                </div>
@@ -4789,10 +4863,10 @@ function App() {
 
                       {/* 👇 📸 ส่วนของแกลเลอรี่รูปภาพ 👇 */}
                       <div className="mb-4">
-                        <h3 className="font-bold text-gray-800 text-sm mb-3">📸 แกลเลอรี่ภาพ (รูปงาน & สลิป)</h3>
+                        <h3 className="font-bold text-gray-800 text-sm mb-3">📸 {userRole === 'BOSS' ? 'แกลเลอรี่รูปงาน / สลิป' : 'แกลเลอรี่รูปงาน'}</h3>
 
-                        {/* ฟอร์มอัปโหลดรูป */}
-                        <div className="flex gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200 items-center">
+                        {/* ลูกน้องอ่านประวัติได้ แต่แก้รูปของงานที่จบแล้วไม่ได้ */}
+                        {(userRole === 'BOSS' || !isHistoryView) && <div className="flex gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200 items-center">
                           <select
                             className="text-xs p-2 rounded-md border border-gray-300 flex-1 outline-none font-bold text-gray-700 bg-white"
                             value={uploadCategory}
@@ -4817,7 +4891,7 @@ function App() {
                               onChange={(e) => handleImageUpload(e, job.id)}
                             />
                           </label>
-                        </div>
+                        </div>}
 
                         {/* ตะแกรงโชว์รูปภาพ */}
                         {jobAttachments.length === 0 ? (
@@ -4940,7 +5014,7 @@ function App() {
         )}
 
         {/* ปุ่มแบ่งหน้า (ประวัติ) */}
-        {activeTab === 'finance' && financeSubTab === 'history' && historyJobs.length > 0 && (
+        {isHistoryView && historyJobs.length > 0 && (
           <div className="flex justify-between items-center mt-6 bg-white p-3 rounded-xl shadow-sm border border-gray-200">
             <button onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} disabled={currentPage === 1} className={`px-4 py-2 rounded-lg font-bold text-sm transition ${currentPage === 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-orange-100 text-orange-700 hover:bg-orange-200 shadow-sm'}`}>◀ ก่อนหน้า</button>
             <span className="text-sm font-bold text-gray-600">หน้า {currentPage} / {totalPages || 1}</span>
@@ -5646,7 +5720,8 @@ function App() {
                                       }
                                       
                                       // 2. เปลี่ยนหน้าไปที่ประวัติ และสั่งกางการ์ดออก
-                                      setFinanceSubTab('history');
+                                      setHistorySearch('');
+                                      setActiveTab('history');
                                       setExpandedId(job.id);
                                       
                                       // 3. เลื่อนจอไปหาการ์ดใบนั้น แล้วทำเอฟเฟกต์กระพริบสีส้มเหมือนหน้าแรก
@@ -5906,7 +5981,7 @@ function App() {
         )}
 
         {/* ปุ่ม + เพิ่มคิวงาน */}
-        {(activeTab === 'active' || (activeTab === 'finance' && financeSubTab === 'history')) && (
+        {activeTab === 'active' && (
           <button 
             onClick={() => { 
               setEditingId(null); 
