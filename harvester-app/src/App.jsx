@@ -197,6 +197,12 @@ const formatSignedRaiNgan = (raiValue) => {
   return `${n > 0 ? '+' : '-'}${formatRaiNgan(Math.abs(n))}`;
 };
 
+const meaningfulNote = value => {
+  const text = String(value || '').trim();
+  return ['', '-', 'ไม่มีข้อมูล', 'ไม่มี', 'null', 'undefined'].includes(text) ? '' : text;
+};
+const plotPaymentKey = p => `${p.vehicle_id}/${p.work_date}/${p.id}`;
+const receivedForJob = j => Number(j.plot_paid_total) > 0 ? Number(j.plot_paid_total) : j.payment_status === 'PAID' ? Number(j.total_price || 0) : j.payment_status === 'DEPOSIT' ? Math.max(0, Number(j.billing_area ?? j.area_size ?? 0) * Number(j.price_per_rai || 0) - Number(j.total_price || 0)) : 0;
 const cleanPhoneForUi = (phone) => {
   const value = String(phone || '').trim();
   return !value || value.startsWith('ไม่มี-') ? '' : value;
@@ -2642,6 +2648,14 @@ function App() {
   // 🔍 ตรวจความสัมพันธ์ของ Job ID เดียวกัน: GPS / รอบงาน / ค่าแรง / ลูกหนี้ / audit
   const [jobIntegrityModal, setJobIntegrityModal] = useState(null);
   const [jobIntegrityLoading, setJobIntegrityLoading] = useState(false);
+  const [plotSelection, setPlotSelection] = useState({});
+  const [integrityTab, setIntegrityTab] = useState('plots');
+  const [savingPlotPayment, setSavingPlotPayment] = useState(false);
+  const paymentRequest = useRef(null);
+  const paymentBusy = useRef(false);
+  const [homeQueueTab, setHomeQueueTab] = useState('follow');
+  const [homeQueuePage, setHomeQueuePage] = useState(1);
+
 
   // 📐 แก้ไร่ที่ลูกค้ายืนยันหลังปิดงาน — กระทบยอดลูกค้า + ค่าแรง แต่ไม่แตะวัดจริง
   const [billingAdjustModal, setBillingAdjustModal] = useState(null);
@@ -2695,7 +2709,6 @@ function App() {
 
   // 🔍 State สำหรับระบบค้นหาประวัติ
   const [historySearch, setHistorySearch] = useState('');
-  const [showAllTodayWork, setShowAllTodayWork] = useState(false);
 
   const [editingId, setEditingId] = useState(null);
   const [currentCoords, setCurrentCoords] = useState([15.7012, 101.1012]); 
@@ -3245,7 +3258,6 @@ function App() {
     const eventAt = lastRoundAt || (closedWithoutNewRound ? new Date(job.closed_at || job.job_date).getTime() : 0);
     return { job, areaToday, roundCountToday: dayRounds.length, closedWithoutNewRound, eventAt };
   }).sort((a, b) => b.eventAt - a.eventAt);
-  const todayWorkLogShown = showAllTodayWork ? todayWorkLogJobs : todayWorkLogJobs.slice(0, 5);
 
   // แยกตัวเลข 3 ความหมาย: เกี่ยวจริงวันนี้ / พื้นที่รอทำ / ปิดยอดขายวันนี้
   // ห้ามใช้ยอดไร่ที่ลูกค้าตกลงแทนพื้นที่เกี่ยววันนี้ หรือรวมคิวที่ DONE ซ้ำสองครั้ง
@@ -3707,6 +3719,9 @@ function App() {
     } catch(e) { alert(e.message); } finally { setMarkingAwaitId(null); }
   };
   const inspectJobIntegrity = async (job) => {
+    setPlotSelection({});
+    setIntegrityTab(userRole === 'BOSS' ? 'plots' : 'rounds');
+    paymentRequest.current = null;
     setJobIntegrityLoading(true);
     setJobIntegrityModal({ job, loading:true });
     try {
@@ -3717,6 +3732,34 @@ function App() {
     } catch (e) {
       setJobIntegrityModal({ job, loading:false, error:e.message || String(e) });
     } finally { setJobIntegrityLoading(false); }
+  };
+
+  const receivePlotPayment = async (mode = 'PLOTS') => {
+    if (paymentBusy.current || userRole !== 'BOSS') return;
+    const job = jobIntegrityModal?.job;
+    const data = jobIntegrityModal?.data;
+    if (!job || !data) return;
+    const items = Object.entries(plotSelection).map(([key, area]) => ({ key, area: Number(area) }));
+    if (mode === 'PLOTS' && (!items.length || items.some(p => !Number.isFinite(p.area) || p.area <= 0))) return alert('เลือกแปลงและระบุไร่คิดเงินให้ถูกต้อง');
+    const amount = mode === 'BALANCE' ? Number(data.payment?.outstanding || 0) : items.reduce((sum, p) => sum + Math.round(p.area * Number(data.payment?.rate || 0) * 100) / 100, 0);
+    if (!(amount > 0)) return alert('กรุณาระบุราคาต่อไร่ก่อนรับเงิน');
+    const retrying = !!paymentRequest.current;
+    if (!window.confirm(retrying ? 'ตรวจสอบและบันทึกรายการเดิมอีกครั้ง? ระบบจะไม่รับเงินซ้ำ' : `รับเงิน ${amount.toLocaleString()} บาท${mode === 'PLOTS' ? ` จาก ${items.length} แปลงที่เลือก` : ' เพื่อปิดยอดค้าง'} ใช่ไหม?`)) return;
+    paymentBusy.current = true; setSavingPlotPayment(true);
+    try {
+      const token = sessionStorage.getItem('harvester_boss_token') || await authorizeBoss();
+      if (!token) throw new Error('กรุณายืนยันสิทธิ์เถ้าแก่');
+      if (!paymentRequest.current) paymentRequest.current = { request_id: crypto.randomUUID(), mode, items, expected_amount: amount, expected_rate: Number(data.payment?.rate || 0) };
+      const res = await fetch(`${WAGE_API}/jobs/${job.id}/plot-payments`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(paymentRequest.current) });
+      const result = await res.json();
+      if (res.status === 403) sessionStorage.removeItem('harvester_boss_token');
+      if (!res.ok) { if (res.status < 500) paymentRequest.current = null; throw new Error(result.error || 'รับเงินไม่สำเร็จ'); }
+      paymentRequest.current = null;
+      await fetchJobs(); await fetchDashboard();
+      await inspectJobIntegrity({ ...job, ...(result.job || {}) });
+      alert(result.replayed ? 'รายการนี้บันทึกไว้แล้ว ไม่รับเงินซ้ำ' : 'บันทึกรับเงินแล้ว');
+    } catch (error) { alert(error.message + (paymentRequest.current ? '\nผลการบันทึกยังไม่แน่ชัด กดรับเงินอีกครั้งเพื่อตรวจรายการเดิม' : '')); }
+    finally { paymentBusy.current = false; setSavingPlotPayment(false); }
   };
 
   const toggleRoundWorker = (name) => {
@@ -3923,6 +3966,8 @@ function App() {
   });
   
   const updatePaymentStatus = async (id, newStatus) => {
+    const managed = jobs.find(j => String(j.id) === String(id) && Number(j.plot_paid_total) > 0);
+    if (managed) return inspectJobIntegrity(managed);
     try {
       const payload = { payment_status: newStatus };
       
@@ -4210,133 +4255,32 @@ function App() {
               </div>
             </section>
 
-            {/* 3. งานติดตาม — ชื่อ / สถานะ / พื้นที่วันนี้ / ยอดสะสม ไม่โชว์ GPS ซ้ำกับยอดสะสม */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 className="text-sm font-black text-slate-900">🚜 งานเกี่ยวที่ต้องติดตาม <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{todayJobs.length}</span></h2>
-                <button type="button" onClick={() => setActiveTab('active')} className="shrink-0 text-xs font-bold text-blue-700 hover:underline">ดูคิวทั้งหมด →</button>
-              </div>
-              {todayJobs.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-center text-sm font-semibold text-slate-600">ไม่มีงานที่ต้องติดตามขณะนี้</p>
-              ) : (
-                <div className="space-y-2.5">
-                  {todayJobs.map(job => {
-                    const jobDate = new Date(job.job_date);
-                    const hasJobDate = !Number.isNaN(jobDate.getTime());
-                    const isToday = hasJobDate && jobDate >= todayStart && jobDate < tomorrowStart;
-                    const timeLabel = hasJobDate
-                      ? `${isToday ? '' : `${jobDate.getDate()}/${jobDate.getMonth() + 1} · `}${jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}`
-                      : 'ยังไม่ระบุเวลานัด';
+            {(() => {
+              const following = todayJobs.filter(j => !isAwaitingArea(j));
+              const tabs = [['follow', 'ต้องติดตาม', following.length], ['area', 'รอยืนยันไร่', awaitingAreaJobs.length], ['log', 'บันทึกวันนี้', todayWorkLogJobs.length]];
+              const entries = homeQueueTab === 'area' ? awaitingAreaJobs : homeQueueTab === 'log' ? todayWorkLogJobs.map(r => r.job) : following;
+              const pages = Math.max(1, Math.ceil(entries.length / 5));
+              const page = Math.min(homeQueuePage, pages);
+              return <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3"><h2 className="text-sm font-black text-slate-900">🚜 งานเกี่ยวที่ต้องติดตาม</h2><button onClick={() => setActiveTab('active')} className="text-xs font-bold text-blue-700">ดูคิวทั้งหมด →</button></div>
+                <div className="grid grid-cols-3 border-y border-slate-100 bg-slate-50" role="tablist" aria-label="รายการงานหน้าแรก">
+                  {tabs.map(([key, title, count]) => <button key={key} role="tab" aria-selected={homeQueueTab === key} onClick={() => { setHomeQueueTab(key); setHomeQueuePage(1); }} className={`px-1 py-3 text-xs font-bold border-b-2 ${homeQueueTab === key ? 'border-emerald-600 text-emerald-800 bg-emerald-50' : 'border-transparent text-slate-500'}`}>{title}<span className="ml-1">{count}</span></button>)}
+                </div>
+                <div className="p-3 space-y-2" role="tabpanel">
+                  {!entries.length && <p className="py-6 text-center text-sm text-slate-500">ไม่มีงานในรายการนี้</p>}
+                  {entries.slice((page - 1) * 5, page * 5).map(job => {
                     const ws = getJobWorkSummary(job);
-                    const dayArea = getQueueDayAreaInfo(job, todayStart, tomorrowStart);
-                    const gpsCount = job.gps_summary_error ? 0 : Number(job.gps_summary?.plot_count || 0);
-                    const hasMeasuredToday = dayArea.measuredToday > 0.0125;
-                    const hasPendingArea = dayArea.notRecordedYet > 0.0125;
-                    const showCumulative = ws.measuredArea > 0.0125 && (!hasMeasuredToday || Math.abs(ws.measuredArea - dayArea.measuredToday) > 0.0125);
-                    const statusText = job.status === 'IN_PROGRESS' ? 'กำลังเกี่ยว'
-                      : job.status === 'PAUSED' ? (hasJobDate && jobDate > new Date() ? 'นัดเกี่ยวต่อ' : 'รอลูกค้านัด') : 'รอคิว';
-                    const statusClass = job.status === 'IN_PROGRESS' ? 'border-blue-200 bg-blue-50 text-blue-800'
-                      : job.status === 'PAUSED' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-700';
-                    return <button
-                      type="button"
-                      key={job.id}
-                      onClick={() => openJobDetails(job)}
-                      aria-label={`เปิดคิว ${job.customers?.name || 'ไม่ระบุลูกค้า'} สถานะ${statusText}`}
-                      className="block w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="min-w-0 flex-1 truncate text-sm font-black text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
-                        <span className={`shrink-0 rounded-lg border px-2 py-1 text-[11px] font-bold ${statusClass}`}>{statusText}</span>
-                      </div>
-                      <p className="mt-1 truncate text-xs font-medium text-slate-600">
-                        {timeLabel} · {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {job.crop_type || 'ข้าว'}{gpsCount > 0 ? ` · GPS ${gpsCount} แปลง` : ''}{ws.roundCount > 0 ? ` · ${ws.roundCount} รอบ` : ''}
-                      </p>
-                      {(hasMeasuredToday || hasPendingArea || showCumulative) ? (
-                        <div className="mt-2.5 flex flex-wrap gap-x-5 gap-y-2 border-t border-slate-100 pt-2.5">
-                          {hasMeasuredToday && <div>
-                            <span className="block text-[11px] font-semibold text-emerald-700">เกี่ยววันนี้</span>
-                            <span className="block text-base font-black text-emerald-800">{formatRaiNgan(dayArea.measuredToday)}</span>
-                          </div>}
-                          {showCumulative && <div>
-                            <span className="block text-[11px] font-semibold text-slate-500">ทำสะสม</span>
-                            <span className="block text-base font-black text-slate-900">{formatRaiNgan(ws.measuredArea)}</span>
-                          </div>}
-                          {hasPendingArea && <div>
-                            <span className="block text-[11px] font-semibold text-blue-700">พื้นที่รอลงรอบ{dayArea.source === 'ESTIMATE' ? ' (ประมาณ)' : ''}</span>
-                            <span className="block text-base font-black text-blue-800">{formatRaiNgan(dayArea.notRecordedYet)}</span>
-                          </div>}
-                        </div>
-                      ) : <p className="mt-2 text-xs font-semibold text-amber-800">{dayArea.needsArea ? 'รอระบุพื้นที่รอบนี้' : 'ยังไม่มีพื้นที่ที่บันทึก'}</p>}
+                    const record = homeQueueTab === 'log' ? todayWorkLogJobs.find(r => r.job.id === job.id) : null;
+                    const status = getStatusDisplay(isAwaitingArea(job) ? 'WAITING_AREA' : job.status);
+                    return <button key={job.id} onClick={() => openJobDetails(job)} className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/30">
+                      <div className="flex items-center justify-between gap-2"><b className="truncate text-sm text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</b><span className={`shrink-0 rounded-lg px-2 py-1 text-xs border ${status.color}`}>{status.text}</span></div>
+                      <div className="flex items-center justify-between mt-2 gap-2 text-xs text-slate-600"><span>{job.crop_type || 'ข้าว'} · #{job.id}</span><b className="text-slate-800">{record ? (record.closedWithoutNewRound ? 'ปิดงานวันนี้' : `วันนี้ ${formatRaiNgan(record.areaToday)}`) : ws.measuredArea > 0 ? `ทำแล้ว ${formatRaiNgan(ws.measuredArea)}` : formatRaiNgan(queueAreaRai(job))}</b></div>
                     </button>;
                   })}
                 </div>
-              )}
-            </section>
-
-            {/* 📒 งานที่ทำไปแล้ววันนี้: ต่อให้เปลี่ยนเป็นรอยืนยันไร่หรือ DONE ก็อยู่ในบันทึกวันเดิม */}
-            <section aria-label="บันทึกงานวันนี้" className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                <div>
-                  <h2 className="text-sm font-black text-slate-900">📒 บันทึกงานวันนี้ <span className="ml-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800">{todayWorkLogJobs.length}</span></h2>
-                  <p className="mt-1 text-xs font-medium text-slate-600">งานที่ลงรอบหรือปิดวันนี้ · ไม่ใช่คิวรอทำ</p>
-                </div>
-                <button type="button" className="shrink-0 text-xs font-bold text-blue-700 hover:underline" onClick={() => { setActiveTab('history'); setCurrentPage(1); setExpandedId(null); fetchJobs(); }}>ดูประวัติคิวที่ปิดแล้ว →</button>
-              </div>
-              <div className="space-y-2 p-3">
-                {todayWorkLogJobs.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 px-3 py-4 text-center text-sm text-slate-600">ยังไม่มีรอบทำงานที่บันทึกวันนี้</p>
-                ) : todayWorkLogShown.map(({job, areaToday, roundCountToday, closedWithoutNewRound, eventAt}) => {
-                  const done = job.status === 'DONE';
-                  const awaiting = isAwaitingArea(job);
-                  const statusText = done ? '✅ ปิดงานแล้ว' : awaiting ? '📐 รอยืนยันไร่' : job.status === 'PAUSED' ? '⏸ รอเกี่ยวต่อ' : job.status === 'IN_PROGRESS' ? '🚜 กำลังทำต่อ' : '🗂️ บันทึกรอบแล้ว';
-                  const statusColor = done ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : awaiting ? 'bg-violet-50 text-violet-800 border-violet-200' : 'bg-amber-50 text-amber-900 border-amber-200';
-                  const eventTime = Number.isFinite(eventAt) && eventAt > 0 ? new Date(eventAt).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}) : '';
-                  return <button type="button" key={job.id} onClick={() => openJobDetails(job)}
-                    className="block w-full rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
-                    aria-label={`เปิดรายละเอียด ${job.customers?.name || 'ลูกค้า'} ${statusText}`}>
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="min-w-0 flex-1 truncate text-sm font-black text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
-                      <span className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-black ${statusColor}`}>{statusText}</span>
-                    </div>
-                    <div className="mt-1.5 flex items-center justify-between gap-2 text-xs">
-                      <span className="min-w-0 truncate font-medium text-slate-600">{eventTime ? `${eventTime} · ` : ''}{job.crop_type || 'ข้าว'}{roundCountToday ? ` · ${roundCountToday} รอบวันนี้` : ''}</span>
-                      <span className="shrink-0 font-black text-emerald-800">{closedWithoutNewRound ? 'ปิดวันนี้' : formatRaiNgan(areaToday)}</span>
-                    </div>
-                    {closedWithoutNewRound && <p className="mt-1 text-[11px] font-medium text-slate-500">วันนี้ไม่มีรอบเกี่ยวใหม่ · ดูรอบเก่าในรายละเอียด</p>}
-                  </button>;
-                })}
-                {todayWorkLogJobs.length > 5 && <button type="button" onClick={() => setShowAllTodayWork(value => !value)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 text-xs font-bold text-slate-800">
-                  {showAllTodayWork ? 'ย่อรายการ ↑' : `ดูอีก ${todayWorkLogJobs.length - 5} งาน ↓`}
-                </button>}
-              </div>
-            </section>
-
-            {awaitingAreaJobs.length > 0 && <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-sm font-black text-violet-950">📐 เกี่ยวเสร็จ · รอยืนยันไร่</h2>
-                <span className="shrink-0 rounded-lg bg-violet-100 px-2 py-1 text-xs font-black text-violet-900">{awaitingAreaJobs.length} งาน</span>
-              </div>
-              <div className="space-y-2.5">
-                {awaitingAreaJobs.map(job => {
-                  const ws = getJobWorkSummary(job);
-                  const gpsCount = job.gps_summary_error ? 0 : Number(job.gps_summary?.plot_count || 0);
-                  return <button
-                    type="button"
-                    key={job.id}
-                    onClick={() => openJobDetails(job)}
-                    className="block w-full rounded-xl border border-violet-200 bg-violet-50/30 p-3 text-left transition hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate text-sm font-black text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</span>
-                      <span className="shrink-0 text-xs font-bold text-violet-800">เปิดคิว →</span>
-                    </div>
-                    <p className="mt-1 text-xs font-medium text-slate-600">{gpsCount > 0 ? `🛰️ GPS ${gpsCount} แปลง · ` : ''}{ws.roundCount} รอบ</p>
-                    <p className="mt-2 text-base font-black text-emerald-800">ทำสะสม {formatRaiNgan(ws.measuredArea)}</p>
-                  </button>;
-                })}
-              </div>
-            </section>}
+                {pages > 1 && <div className="flex justify-between items-center border-t p-3 text-xs"><button disabled={page <= 1} onClick={() => setHomeQueuePage(page - 1)} className="rounded-lg border px-3 py-2 disabled:opacity-30">← ก่อนหน้า</button><span>{page} / {pages} · {entries.length} งาน</span><button disabled={page >= pages} onClick={() => setHomeQueuePage(page + 1)} className="rounded-lg border px-3 py-2 disabled:opacity-30">ถัดไป →</button></div>}
+              </section>;
+            })()}
 
             {/* 4. แจ้งเตือนแบบย่อและพยากรณ์อากาศ — ไม่ขยายการ์ดเมื่อไม่มีเรื่องด่วน */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -4705,7 +4649,7 @@ function App() {
                 <div 
                   key={job.id} 
                   id={`job-card-${job.id}`} 
-                  className="bg-white rounded-xl p-5 shadow-md border-2 border-slate-300 transition-all duration-500"
+                  className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 transition-all duration-300"
                 >
                   <div className="bg-slate-100 border border-slate-300 rounded-lg p-2 mb-3">
                     <div className="text-slate-700 font-bold text-sm flex justify-between px-1">
@@ -4755,8 +4699,8 @@ function App() {
                             <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-slate-600">📐 ทำจริง</span><b>{formatRaiNgan(ws.measuredArea)}</b></div>
                             <div className="bg-white rounded-xl border border-emerald-100 p-2"><span className="block text-slate-600">🤝 คิดเงิน</span><b className="text-emerald-800">{formatRaiNgan(billing)}</b></div>
                           </div>
-                          {userRole==='BOSS' && <p className="text-xs font-black text-emerald-900">💰 ยอดบิล {Number(job.total_price || 0).toLocaleString()} บาท</p>}
-                          {gpsArea>0 && <p className="text-[10px] text-sky-700">🛰️ GPS เก็บไว้เป็นข้อเท็จจริง {plotThaiArea(gpsArea*1600).text}</p>}
+                          
+                          
                         </div>;
                       }
 
@@ -4771,12 +4715,12 @@ function App() {
                           : estimate>0 ? <p className="text-sm font-black text-amber-900">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)}</p>
                           : <p className="text-xs font-bold text-slate-600">ยังไม่มีพื้นที่ • ผูกแปลง GPS หรือใส่ยอดประมาณได้ภายหลัง</p>}
 
-                        {gpsArea>0 && estimate>0 && <p className="text-[10px] text-amber-700">🗣️ ลูกค้าแจ้งประมาณ ~{formatRaiNgan(estimate)} • เก็บแยกจาก GPS</p>}
+                        
 
                         {ws.roundCount>0 ? <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-gray-700">
-                          <span>✅ ทำสะสมทุกรอบ {formatRaiNgan(ws.measuredArea)}</span>
-                          <span>🗂️ {ws.roundCount} รอบ</span>
-                          <span className="text-orange-700">⏳ รอปิดค่าแรง {ws.pendingRoundCount} รอบ</span>
+                          <span>ทำแล้ว {formatRaiNgan(ws.measuredArea)}</span>
+                          <span>{ws.roundCount} รอบ</span>
+                          
                         </div> : <p className="text-[10px] text-slate-600">ยังไม่มีรอบทำงาน</p>}
 
                         {userRole === 'BOSS' && gpsArea > 0 && ws.measuredArea > gpsArea + 0.025 && <p className="text-sm font-bold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg p-2">ยอดทำสะสมมากกว่าพื้นที่แปลง GPS — ตรวจว่ารอบงานซ้ำหรือ GPS ยังไม่ครบก่อนยืนยันไร่</p>}
@@ -4789,10 +4733,10 @@ function App() {
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
-                            {job.status === 'DONE' ? 'ยอดตกลง' : 'ยอดประเมิน'} ({job.price_per_rai || 0} บ./ไร่)
+                            {job.status === 'DONE' ? (job.payment_status === 'PAID' ? 'รับครบแล้ว' : 'ยอดค้าง') : 'ยอดประมาณ'} ({job.price_per_rai || 0} บ./ไร่)
                           </span>
                           <span className="font-bold text-green-800 text-lg">
-                            {job.total_price ? Number(job.total_price).toLocaleString() : '0'} บาท
+                            {Number(job.status === 'DONE' ? job.total_price : (job.gps_summary?.area_rai || job.area_size || 0) * Number(job.price_per_rai || 0)).toLocaleString('th-TH', { maximumFractionDigits: 2 })} บาท
                           </span>
                         </div>
                         <div>
@@ -4806,7 +4750,7 @@ function App() {
                             {job.payment_status === 'PAID'
                               ? '✅ ชำระเรียบร้อย'
                               : job.payment_status === 'DEPOSIT'
-                              ? '💳 มัดจำแล้ว'
+                              ? '💳 รับบางส่วนแล้ว'
                               : '⏳ รอชำระเงิน'}
                           </span>
                         </div>
@@ -4814,56 +4758,23 @@ function App() {
                     ) : null}
                   </div>
                   
+                  <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                    <button type="button" onClick={() => setExpandedId(isExpanded ? null : job.id)} aria-expanded={isExpanded} className="text-sm font-bold text-slate-600">{isExpanded ? 'ย่อรายละเอียด ↑' : 'จัดการงาน ↓'}</button>
+                    {userRole === 'BOSS' && <button type="button" onClick={() => inspectJobIntegrity(job)} className="rounded-xl bg-indigo-50 border border-indigo-200 px-3 py-2 text-sm font-bold text-indigo-800">🔍 ตรวจยอด / รับเงิน</button>}
+                  </div>
+                  {Number(job.plot_paid_total) > 0 && userRole === 'BOSS' && <p className="mt-2 text-sm font-semibold text-emerald-700">รับแล้ว {Number(job.plot_paid_total).toLocaleString()} บาท{job.status !== 'DONE' ? ' · รอสรุปยอดทั้งงาน' : ''}</p>}
                   {isExpanded && (
                     <div className="mt-3 p-3 rounded-xl border border-slate-200 bg-slate-50/50">
-                      <div className="bg-yellow-50 p-3 rounded-lg text-sm text-gray-800 mb-4 border border-yellow-200">
+                      {meaningfulNote(job.address_note || job.customers?.address_note) && <div className="bg-amber-50/60 p-3 rounded-xl text-sm text-slate-700 mb-3 border border-amber-100">
                         <span className="font-bold text-yellow-700">📍 หมายเหตุ:</span><br/>
                         {/* 💡 ดึงหมายเหตุของคิวงานมาโชว์ */}
-                        {job.address_note || job.customers?.address_note || 'ไม่มีข้อมูล'}
-                      </div>
-
-                      {(() => {
-                        const ws = getJobWorkSummary(job);
-                        if (ws.roundCount === 0) return null;
-                        return (
-                          <div className="mb-4 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
-                            <div className="flex items-center justify-between mb-2">
-                              <h3 className="font-black text-emerald-900 text-sm">🌾 ประวัติรอบทำงาน</h3>
-                              <span className="text-[10px] font-bold text-emerald-700">{ws.roundCount} รอบ • วัดจริง {formatRaiNgan(ws.measuredArea)}</span>
-                            </div>
-                            <div className="space-y-2">
-                              {ws.rounds.map((round, rIdx) => {
-                                const source = /\[พื้นที่:GPS\]/.test(String(round.note || '')) ? 'GPS' : 'MANUAL';
-                                const cleanNote = String(round.note || '').replace(/\s*\[พื้นที่:(?:GPS|MANUAL)\]\s*/g, ' ').trim();
-                                return (
-                                  <div key={round.id || rIdx} className="bg-white rounded-lg border border-emerald-100 p-2 text-xs">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="font-black text-gray-800">
-                                        {round.round_type === 'FINAL' ? '🏁 รอบปิดงาน' : `รอบ ${rIdx + 1}`}
-                                      </span>
-                                      <span className="text-slate-600">
-                                        {round.work_date ? new Date(round.work_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '-'}
-                                      </span>
-                                    </div>
-                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
-                                      <span className="text-blue-700 font-bold">📐 ทำจริง {formatRaiNgan(round.measured_area)} {source==='GPS'?'• 🛰️ GPS':'• ✏️ ปรับเอง'}</span>
-                                      {round.wage_transaction_id
-                                        ? <span className="text-orange-700 font-bold">💰 ลงสมุดแล้ว {formatRaiNgan(round.wage_area)}</span>
-                                        : <span className="text-orange-700 font-bold">⏳ รอแบ่งค่าแรงตอนจบ</span>}
-                                      <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
-                                    </div>
-                                    {cleanNote && <p className="mt-1 text-[10px] text-slate-600">📝 {cleanNote}</p>}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                        {meaningfulNote(job.address_note || job.customers?.address_note)}
+                      </div>}
 
                       {/* 👇 📸 ส่วนของแกลเลอรี่รูปภาพ 👇 */}
-                      <div className="mb-4">
-                        <h3 className="font-bold text-gray-800 text-sm mb-3">📸 {userRole === 'BOSS' ? 'แกลเลอรี่รูปงาน / สลิป' : 'แกลเลอรี่รูปงาน'}</h3>
+                      <details className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+                        <summary className="cursor-pointer font-bold text-slate-700 text-sm">📸 รูปงาน{userRole === 'BOSS' ? ' / สลิป' : ''} · {jobAttachments.length} รูป</summary>
+                        <div className="mt-3">
 
                         {/* ลูกน้องอ่านประวัติได้ แต่แก้รูปของงานที่จบแล้วไม่ได้ */}
                         {(userRole === 'BOSS' || !isHistoryView) && <div className="flex gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200 items-center">
@@ -4908,7 +4819,7 @@ function App() {
                                 {userRole === 'BOSS' && (
                                   <button 
                                     onClick={(e) => handleDeleteImage(e, img.id, img.image_url, job.id)}
-                                    className="absolute top-1 right-1 bg-red-1000/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
+                                    className="absolute top-1 right-1 bg-red-600/90 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow-md hover:bg-red-600 z-10"
                                   >
                                     ✕
                                   </button>
@@ -4932,14 +4843,15 @@ function App() {
                             ))}
                           </div>
                         )}
-                      </div>
+                        </div>
+                      </details>
                       {/* 👆 จบส่วนแกลเลอรี่ 👆 */}
 
-                      {isAwaitingArea(job) && <div className="bg-violet-50 border border-violet-300 rounded-xl p-3 mb-3 text-violet-950 font-bold text-sm">เกี่ยวเสร็จแล้ว รอลูกค้ายืนยันจำนวนไร่ • ยังไม่ลงค่าแรงของรอบที่รอปิดงาน{userRole === 'BOSS' ? ' — ยืนยันไร่แล้วกดปิดงานด้านล่าง' : ' — ให้เถ้าแก่ยืนยันและปิดงาน'}</div>}
+                      {isAwaitingArea(job) && <div className="bg-violet-50 border border-violet-300 rounded-xl p-3 mb-3 text-violet-950 font-bold text-sm">{userRole === 'BOSS' ? 'ยืนยันไร่เพื่อปิดงานและลงค่าแรง' : 'รอเถ้าแก่ยืนยันไร่และปิดงาน'}</div>}
                       {job.status === 'PAUSED' && !isAwaitingArea(job) && <button disabled={!!markingAwaitId} onClick={() => markAwaitingArea(job)} className="w-full mb-3 bg-violet-700 text-white rounded-xl py-3 text-sm font-bold disabled:opacity-50">{markingAwaitId === job.id ? 'กำลังบันทึก…' : '✓ เกี่ยวเสร็จแล้ว · รอยืนยันไร่'}</button>}
                       {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
                       <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-200">
-                        {job.status !== 'IN_PROGRESS' && (!isAwaitingArea(job) || userRole === 'BOSS') && (
+                        {job.status !== 'DONE' && job.status !== 'IN_PROGRESS' && (!isAwaitingArea(job) || userRole === 'BOSS') && (
                           <button 
                             onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
                             className={`flex-1 bg-blue-700 hover:bg-blue-800 text-white font-bold shadow-sm transition ${userRole === 'DRIVER' ? 'py-4 text-lg rounded-xl shadow-lg' : 'py-2.5 text-xs rounded-lg'}`}
@@ -4975,7 +4887,7 @@ function App() {
                         )}
 
                         {/* 👇 ซ่อนปุ่มรอคิวให้โชว์เฉพาะเถ้าแก่ 👇 */}
-                        {userRole === 'BOSS' && job.status !== 'PENDING' && (
+                        {userRole === 'BOSS' && job.status !== 'DONE' && job.status !== 'PENDING' && (
                           <button 
                             onClick={() => updateStatus(job.id, 'PENDING')} 
                             className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white text-xs py-2.5 rounded-lg font-bold shadow-sm transition"
@@ -4988,9 +4900,9 @@ function App() {
                       {/* 👇 ซ่อนกลุ่มปุ่มแก้ไข/ลบงานจากคนขับ (แถมไปให้เพื่อความสมบูรณ์ครับ) 👇 */}
                       {userRole === 'BOSS' && (
                         <div className="grid grid-cols-3 gap-2 pt-2 mt-2">
-                          <button onClick={(e) => { e.stopPropagation(); inspectJobIntegrity(job); }} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs py-2 rounded-lg font-bold transition">🔍 ตรวจยอดงาน</button>
+                          <button onClick={(e) => { e.stopPropagation(); inspectJobIntegrity(job); }} className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs py-2 rounded-lg font-bold transition">🌾 รอบงาน / รับเงิน</button>
                           <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="bg-red-1000 hover:bg-red-600 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="bg-red-600 hover:bg-red-700 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
                         </div>
                       )}
                     </div>
@@ -5055,6 +4967,10 @@ function App() {
             areaTotal += (Number(j.area_size) || 0);
             const currentTotal = Number(j.total_price) || 0;
             
+            if (Number(j.plot_paid_total) > 0) {
+              if (j.payment_status !== 'PAID') calcTotalUnpaid += currentTotal;
+              return;
+            }
             if (j.payment_status === 'PAID') {
               calcTotalIncome += currentTotal;
             } else if (j.payment_status === 'DEPOSIT') {
@@ -5069,6 +4985,11 @@ function App() {
               calcTotalUnpaid += currentTotal;
             }
           });
+
+          for (const job of jobs) for (const receipt of job.plot_receipts || []) {
+            const paidDate = new Date(receipt.paid_at);
+            if (paidDate.getFullYear() === dashYear && (dashMonth === 0 || paidDate.getMonth() + 1 === dashMonth)) calcTotalIncome += Number(receipt.amount || 0);
+          }
 
           // ✅ 'ค่าแรง' คือการรับรู้ต้นทุนตอนปิดงานแล้ว
           // ส่วน 'เบิกค่าแรง' คือการจ่ายหนี้ค่าแรง จึงห้ามนับเป็นต้นทุนซ้ำ
@@ -5536,7 +5457,9 @@ function App() {
 
           // ✅ 1. ฟังก์ชันรับชำระแบบเหมาปิดบิล (หักส่วนลดอัตโนมัติจากบิลสุดท้าย)
           const handleBulkPay = async (customerName, customerJobs, totalDebt) => {
-             const amountStr = window.prompt(`ยอดหนี้รวมของ [ ${customerName} ] (ค้าง ${customerJobs.length} แปลง)\nคือยอด: ${totalDebt.toLocaleString()} บาท\n\n💰 ลูกค้าจ่ายมาเท่าไหร่? (พิมพ์ยอดเงินสดที่รับจริง):`, totalDebt);
+             const managed = customerJobs.find(j => Number(j.plot_paid_total) > 0);
+             if (managed) { alert('มีงานรับเงินรายแปลงในกลุ่มนี้ ให้เลือกรับยอดค้างในตรวจยอดงานทีละงาน'); return inspectJobIntegrity(managed); }
+             const amountStr = window.prompt(`ยอดหนี้รวมของ [ ${customerName} ] (ค้าง ${customerJobs.length} งาน)\nคือยอด: ${totalDebt.toLocaleString()} บาท\n\n💰 ลูกค้าจ่ายมาเท่าไหร่? (พิมพ์ยอดเงินสดที่รับจริง):`, totalDebt);
              if (amountStr === null) return;
              
              const actualPaid = Number(amountStr);
@@ -5545,8 +5468,8 @@ function App() {
 
              const totalDiscount = totalDebt - actualPaid;
              let confirmMsg = actualPaid === totalDebt 
-                 ? `✅ รับชำระเต็มจำนวน ${actualPaid.toLocaleString()} บาท\nปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`
-                 : `✅ รับชำระ: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลดรวม: ${totalDiscount.toLocaleString()} บาท\n\nยืนยันปิดบิลทั้งหมด ${customerJobs.length} แปลง ใช่หรือไม่?`;
+                 ? `✅ รับชำระเต็มจำนวน ${actualPaid.toLocaleString()} บาท\nปิดบิลทั้งหมด ${customerJobs.length} งาน ใช่หรือไม่?`
+                 : `✅ รับชำระ: ${actualPaid.toLocaleString()} บาท\n🎁 ให้ส่วนลดรวม: ${totalDiscount.toLocaleString()} บาท\n\nยืนยันปิดบิลทั้งหมด ${customerJobs.length} งาน ใช่หรือไม่?`;
 
              if (!window.confirm(confirmMsg)) return;
 
@@ -5597,6 +5520,8 @@ function App() {
 
           // 💳 2. ฟังก์ชันชำระบางส่วนแบบเหมา (ไล่ตัดหนี้จากบิลที่เก่าที่สุดไปหาใหม่สุด)
           const handleBulkDeposit = async (customerName, customerJobs, totalDebt) => {
+             const managed = customerJobs.find(j => Number(j.plot_paid_total) > 0);
+             if (managed) { alert('มีงานรับเงินรายแปลงในกลุ่มนี้ ให้เลือกรับยอดค้างในตรวจยอดงานทีละงาน'); return inspectJobIntegrity(managed); }
              const amountStr = window.prompt(`ยอดหนี้รวม [ ${customerName} ] คือ ${totalDebt.toLocaleString()} บาท\n\n💳 ลูกค้าชำระบางส่วนมาก่อนเท่าไหร่?:`);
              if (!amountStr) return;
              
@@ -5684,7 +5609,7 @@ function App() {
                                <h3 className="font-black text-red-900 text-lg flex items-center gap-2">
                                   👤 {customerName}
                                </h3>
-                               <p className="text-xs text-red-600 font-bold mt-1">ค้างชำระ {group.jobs.length} แปลง</p>
+                               <p className="text-xs text-red-600 font-bold mt-1">ค้างชำระ {group.jobs.length} งาน</p>
                             </div>
                             <div className="w-full sm:w-auto text-right flex flex-col items-end">
                                <span className="block font-black text-2xl text-red-600 mb-2">{group.total.toLocaleString()} ฿</span>
@@ -5787,7 +5712,8 @@ function App() {
                  <span className="block text-xs text-green-700 font-bold mb-1">ยอดรับรวมทั้งหมด</span>
                  <span className="text-3xl font-black text-green-600">
                    {jobs.filter(j => j.payment_status === 'PAID' || j.payment_status === 'DEPOSIT').reduce((sum, j) => {
-                      const orig = Number(j.area_size || 0) * Number(j.price_per_rai || 0);
+                      if (Number(j.plot_paid_total) > 0) return sum + Number(j.plot_paid_total);
+                      const orig = Number(j.billing_area ?? j.area_size ?? 0) * Number(j.price_per_rai || 0);
                       const trueTotal = orig > Number(j.total_price) ? orig : (Number(j.total_price) || 0);
 
                       // 👇 ถ้ารับเงินเต็มแล้ว (PAID) ให้ดึงยอดที่หักส่วนลดแล้วมาใช้คำนวณเลย
@@ -5800,13 +5726,17 @@ function App() {
                </div>
             </div>
 
-            {jobs.filter(j => j.payment_status === 'PAID' || (j.payment_status === 'DEPOSIT' && (Number(j.area_size || 0) * Number(j.price_per_rai || 0)) > Number(j.total_price))).length === 0 ? (
+            {jobs.flatMap(job => (job.plot_receipts || []).map(receipt => ({ job, receipt }))).sort((a,b) => new Date(b.receipt.paid_at) - new Date(a.receipt.paid_at)).map(({job,receipt}) => <button key={`${job.id}/${receipt.request_id}`} onClick={() => inspectJobIntegrity(job)} className="w-full rounded-xl border border-emerald-200 bg-white p-4 text-left shadow-sm">
+              <div className="flex justify-between gap-3"><b className="text-slate-900">{job.customers?.name || 'ลูกค้า'} · #{job.id}</b><b className="text-emerald-700">{Number(receipt.amount).toLocaleString()} ฿</b></div>
+              <p className="mt-1 text-xs text-slate-500">{new Date(receipt.paid_at).toLocaleString('th-TH')}</p><p className="mt-2 text-sm text-slate-700">{receipt.mode === 'BALANCE' ? 'รับยอดค้างทั้งหมด' : receipt.items.map(i => `${i.name} ${formatRaiNgan(i.area)}`).join(' / ')}</p>
+            </button>)}
+            {jobs.filter(j => receivedForJob(j) > 0).length === 0 ? (
                <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
                  <span className="text-4xl mb-2 block">🍃</span>
                  <p className="font-bold">ยังไม่มีประวัติการรับเงินครับ</p>
               </div>
             ) : (
-              jobs.filter(j => j.payment_status === 'PAID' || (j.payment_status === 'DEPOSIT' && (Number(j.area_size || 0) * Number(j.price_per_rai || 0)) > Number(j.total_price)))
+              jobs.filter(j => receivedForJob(j) > 0 && !Number(j.plot_paid_total))
                   .sort((a, b) => new Date(b.paid_at || b.job_date) - new Date(a.paid_at || a.job_date))
                   .slice(0, 50)
                   .map(job => {
@@ -5815,7 +5745,7 @@ function App() {
                     const trueTotal = orig > Number(job.total_price) ? orig : (Number(job.total_price) || 0);
                     
                     // 👇 บิลที่ปิดแล้ว จะดึงยอดเงินสดที่ได้รับจริงมาโชว์ตรงๆ
-                    const displayIncome = isDeposit ? (trueTotal - Number(job.total_price)) : Number(job.total_price);
+                    const displayIncome = receivedForJob(job);
 
                     return (
                     <div key={job.id} className={`bg-white p-4 rounded-xl shadow-md relative overflow-hidden flex justify-between items-center ${isDeposit ? 'border border-amber-100' : 'border border-green-100'}`}>
@@ -5981,7 +5911,7 @@ function App() {
         )}
 
         {/* ปุ่ม + เพิ่มคิวงาน */}
-        {activeTab === 'active' && (
+        {activeTab === 'active' && expandedId === null && !jobIntegrityModal && (
           <button 
             onClick={() => { 
               setEditingId(null); 
@@ -6337,6 +6267,7 @@ function App() {
           const audits = Array.isArray(d?.audit) ? d.audit : [];
           const integrityDone = jobIntegrityModal.job?.status === 'DONE';
           const visibleIntegrityChecks = checks.filter(c => {
+            if (c.level === 'OK') return false;
             const message = `${c?.title || ''} ${c?.detail || ''}`.toLowerCase();
             if (!integrityDone && (
               message.includes('ยังไม่ลงสมุดค่าแรง') ||
@@ -6350,13 +6281,13 @@ function App() {
             <div className="bg-white rounded-3xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl">
               <div className="sticky top-0 bg-white border-b p-4 flex justify-between items-start gap-3 z-10">
                 <div><h2 className="text-lg font-black text-indigo-900">🔍 ตรวจยอดงาน • Job #{jobIntegrityModal.job?.id}</h2><p className="text-xs text-gray-500">{jobIntegrityModal.job?.customers?.name || 'ไม่ระบุลูกค้า'}</p></div>
-                <button onClick={()=>setJobIntegrityModal(null)} className="w-9 h-9 rounded-full bg-gray-100 font-bold">✕</button>
+                <button disabled={savingPlotPayment} aria-label="ปิดตรวจยอดงาน" onClick={()=>setJobIntegrityModal(null)} className="w-9 h-9 rounded-full bg-gray-100 font-bold disabled:opacity-30">✕</button>
               </div>
               <div className="p-4 space-y-3">
                 {jobIntegrityModal.loading ? <p className="text-center py-8 font-bold text-blue-700">⏳ กำลังตรวจ GPS / รอบงาน / ค่าแรง / ลูกหนี้…</p>
                   : jobIntegrityModal.error ? <p className="bg-red-50 border border-red-200 rounded-xl p-3 font-bold text-red-700">❌ {jobIntegrityModal.error}</p>
                   : <>
-                    <div className="flex justify-between items-center"><span className="font-black">สถานะความสัมพันธ์ของข้อมูล</span><span className={`px-3 py-1 rounded-full text-xs font-black ${badge}`}>{d?.health || 'WARN'}</span></div>
+                    <div className="flex justify-between items-center"><span className="font-black">สรุปยอดงาน</span><span className={`px-3 py-1 rounded-full text-xs font-black ${badge}`}>{d?.health === 'OK' ? 'ข้อมูลตรงกัน' : 'ต้องตรวจสอบ'}</span></div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="bg-sky-50 border border-sky-200 rounded-xl p-3"><span className="block text-gray-500">🛰️ GPS</span><b>{formatRaiNgan(d?.summary?.gps_area || 0)}</b></div>
                       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3"><span className="block text-gray-500">✅ ทำจริง</span><b>{formatRaiNgan(d?.summary?.measured_area || 0)}</b></div>
@@ -6374,14 +6305,91 @@ function App() {
                         <b>{c.level==='ERROR'?'❌':c.level==='WARN'?'⚠️':'✅'} {c.title === 'ชื่อคนงานครบ' ? 'ข้อมูลรอบงานครบ' : c.title}</b>
                         {c.detail && <p className="text-gray-600 mt-0.5">{formatAreaText(c.detail)}</p>}
                       </div>)}
-                      {!visibleIntegrityChecks.length && !integrityDone && (
-                        <div className="rounded-xl border border-green-200 bg-green-50 p-2.5 text-xs font-bold text-green-800">
-                          ✅ ข้อมูลรอบงานพร้อม
-                        </div>
-                      )}
                     </div>
-                    <div className="border-t pt-3">
-                      <p className="font-black text-sm mb-2">🕘 ประวัติแก้ไขล่าสุด</p>
+                    <div className="flex gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="รายละเอียดตรวจยอด">
+                      {userRole === 'BOSS' && <button role="tab" aria-selected={integrityTab === 'plots'} onClick={() => setIntegrityTab('plots')} className={`flex-1 rounded-lg py-2.5 text-sm font-bold ${integrityTab === 'plots' ? 'bg-white shadow-sm text-indigo-800' : 'text-slate-500'}`}>แปลง / รับเงิน</button>}
+                      <button role="tab" aria-selected={integrityTab === 'rounds'} onClick={() => setIntegrityTab('rounds')} className={`flex-1 rounded-lg py-2.5 text-sm font-bold ${integrityTab === 'rounds' ? 'bg-white shadow-sm text-indigo-800' : 'text-slate-500'}`}>รอบทำงาน ({d?.summary?.round_count || 0})</button>
+                    </div>
+                    {userRole === 'BOSS' && integrityTab === 'plots' && (() => {
+                      const payment = d?.payment || {};
+                      const receipts = payment.receipts || [];
+                      const paidKeys = new Set(receipts.flatMap(r => (r.items || []).map(i => i.key)));
+                      const plots = d?.plots || [];
+                      const selectionTotal = Object.values(plotSelection).reduce((sum, area) => sum + Math.round(Number(area || 0) * Number(payment.rate || 0) * 100) / 100, 0);
+                      const blocked = !payment.available || payment.legacy || payment.status === 'PAID' || d?.gps_error || savingPlotPayment;
+                      return <section className="rounded-2xl border border-slate-200 bg-white p-3 text-left">
+                        <h3 className="font-black text-slate-900">💳 รับเงินแยกตามแปลง</h3>
+                        <p className="mt-1 text-xs text-slate-500">{plots.length} แปลง · {d?.summary?.round_count || 0} รอบทำงาน — หนึ่งรอบเกี่ยวได้หลายแปลง</p>
+                        <div className="my-3 grid grid-cols-2 gap-2 text-sm">
+                          <div className="rounded-xl bg-emerald-50 p-3"><span className="block text-xs text-emerald-800">รับแล้ว{payment.legacy ? ' (ระบบเดิม)' : ''}</span><b>{Number(payment.legacy ? receivedForJob(jobIntegrityModal.job) : payment.received || 0).toLocaleString()} ฿</b></div>
+                          <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs text-slate-600">ยอดค้างทั้งงาน</span><b>{payment.outstanding == null ? 'รอยืนยันไร่' : `${Number(payment.outstanding).toLocaleString()} ฿`}</b></div>
+                        </div>
+                        {!payment.available && <p className="text-sm text-amber-800 mb-3">ต้องติดตั้ง plot_payments.sql ก่อนรับเงินรายแปลง</p>}
+                        {payment.legacy && <p className="text-sm text-amber-800 mb-3">งานนี้มีเงินรับแบบเดิม ให้รับยอดที่เหลือผ่านหน้าลูกหนี้</p>}
+                        {d?.gps_error && <p className="text-sm text-red-700">โหลดแปลงไม่สำเร็จ กรุณาปิดแล้วเปิดตรวจยอดใหม่</p>}
+                        {!plots.length && !d?.gps_error && <p className="text-sm text-slate-500 py-3">ยังไม่มีแปลง GPS ที่เชื่อมกับงานนี้</p>}
+                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                          {plots.map(plot => {
+                            const key = plotPaymentKey(plot);
+                            const paid = paidKeys.has(key);
+                            const selected = Object.prototype.hasOwnProperty.call(plotSelection, key);
+                            const paidItem = receipts.flatMap(r => r.items || []).find(i => i.key === key);
+                            return <div key={key} className={`rounded-xl border p-3 ${paid ? 'border-emerald-200 bg-emerald-50/50' : selected ? 'border-indigo-300 bg-indigo-50/50' : 'border-slate-200'}`}>
+                              <label className="flex items-start gap-3 cursor-pointer">
+                                <input type="checkbox" className="mt-1 h-4 w-4" checked={selected} disabled={blocked || paid || !!paymentRequest.current} onChange={e => { const checked = e.target.checked; setPlotSelection(prev => { const next = {...prev}; if (checked) next[key] = normalizeRaiNganValue(plot.area_rai); else delete next[key]; return next; }); }} />
+                                <span className="min-w-0 flex-1"><b className="block text-sm text-slate-900">{plot.name}</b><span className="block text-xs text-slate-500 mt-1">{plot.work_date} · GPS {formatRaiNgan(plot.area_rai)}</span></span>
+                                {paid && <b className="text-xs text-emerald-700 shrink-0">รับแล้ว<br/>{Number(paidItem.amount).toLocaleString()} ฿</b>}
+                              </label>
+                              {selected && <div className="mt-3 border-t border-indigo-100 pt-2"><span className="block text-xs font-bold mb-2">ไร่ที่ตกลงคิดเงินแปลงนี้ · {Number(payment.rate).toLocaleString()} บาท/ไร่</span><RaiNganInput value={plotSelection[key]} disabled={savingPlotPayment || !!paymentRequest.current} onChange={value => setPlotSelection(prev => ({...prev, [key]:value}))} /><p className="mt-2 text-right font-black text-indigo-800">{(Math.round(Number(plotSelection[key] || 0) * Number(payment.rate || 0) * 100) / 100).toLocaleString()} บาท</p></div>}
+                            </div>;
+                          })}
+                        </div>
+                        {Object.keys(plotSelection).length > 0 && <button disabled={blocked} onClick={() => receivePlotPayment('PLOTS')} className="mt-3 w-full rounded-xl bg-emerald-700 p-3 text-sm font-bold text-white disabled:opacity-50">{savingPlotPayment ? 'กำลังบันทึก…' : `รับเงิน ${Object.keys(plotSelection).length} แปลง · ${selectionTotal.toLocaleString()} บาท`}</button>}
+                        {payment.done && payment.received > 0 && payment.outstanding > 0 && <button disabled={savingPlotPayment} onClick={() => receivePlotPayment('BALANCE')} className="mt-2 w-full rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm font-bold text-emerald-900">รับยอดค้างทั้งหมด {Number(payment.outstanding).toLocaleString()} บาท</button>}
+                        {receipts.length > 0 && <details className="mt-3 border-t pt-3" open><summary className="cursor-pointer text-sm font-bold">ประวัติรับเงิน {receipts.length} ครั้ง</summary><div className="mt-2 space-y-2 max-h-52 overflow-y-auto">{receipts.slice().reverse().map(r => <div key={r.request_id} className="rounded-lg bg-slate-50 p-2 text-xs"><div className="flex justify-between gap-2"><span>{new Date(r.paid_at).toLocaleString('th-TH')}</span><b className="text-emerald-800">{Number(r.amount).toLocaleString()} ฿</b></div><p className="mt-1 text-slate-600">{r.mode === 'BALANCE' ? 'รับยอดค้างทั้งหมด' : r.items.map(i => `${i.name} · ${formatRaiNgan(i.area)}`).join(' / ')}</p></div>)}</div></details>}
+                      </section>;
+                    })()}
+                      {integrityTab === 'rounds' && (() => {
+                        const ws = getJobWorkSummary({ ...jobIntegrityModal.job, work_rounds: d?.rounds || jobIntegrityModal.job.work_rounds });
+                        if (ws.roundCount === 0) return <p className="py-5 text-center text-sm text-slate-500">ยังไม่มีรอบทำงาน</p>;
+                        return (
+                          <div className="mb-4 bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="font-black text-emerald-900 text-sm">🌾 ประวัติรอบทำงาน</h3>
+                              <span className="text-xs font-bold text-emerald-700">{ws.roundCount} รอบ • วัดจริง {formatRaiNgan(ws.measuredArea)}</span>
+                            </div>
+                            <div className="space-y-2">
+                              {ws.rounds.map((round, rIdx) => {
+                                const source = /\[พื้นที่:GPS\]/.test(String(round.note || '')) ? 'GPS' : 'MANUAL';
+                                const cleanNote = String(round.note || '').replace(/\s*\[พื้นที่:(?:GPS|MANUAL)\]\s*/g, ' ').trim();
+                                return (
+                                  <div key={round.id || rIdx} className="bg-white rounded-lg border border-emerald-100 p-2 text-xs">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="font-black text-gray-800">
+                                        {round.round_type === 'FINAL' ? '🏁 รอบปิดงาน' : `รอบ ${rIdx + 1}`}
+                                      </span>
+                                      <span className="text-slate-600">
+                                        {round.work_date ? new Date(round.work_date).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : '-'}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                                      <span className="text-blue-700 font-bold">📐 ทำจริง {formatRaiNgan(round.measured_area)} {source==='GPS'?'• 🛰️ GPS':'• ✏️ ปรับเอง'}</span>
+                                      {round.wage_transaction_id
+                                        ? <span className="text-orange-700 font-bold">💰 ลงสมุดแล้ว {formatRaiNgan(round.wage_area)}</span>
+                                        : <span className="text-orange-700 font-bold">⏳ รอแบ่งค่าแรงตอนจบ</span>}
+                                      <span className="text-gray-600">คนทำ: {round.workers || '-'}</span>
+                                    </div>
+                                    {cleanNote && <p className="mt-1 text-xs text-slate-600">📝 {cleanNote}</p>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                    <details className="border-t pt-3">
+                      <summary className="cursor-pointer font-bold text-sm mb-2">🕘 ประวัติแก้ไข ({audits.length})</summary>
                       {audits.length ? (
                         <div className="space-y-2">
                           {audits.slice(0,12).map(a=><div key={a.id} className="bg-gray-50 border rounded-xl p-2 text-xs">
@@ -6392,8 +6400,8 @@ function App() {
                             <p className="text-gray-600 mt-1">{formatAreaText(a.summary || '-')}</p>
                           </div>)}
                         </div>
-                      ) : <p className="text-xs text-gray-400">ยังไม่มีประวัติแก้ไข หรือยังไม่ได้รัน SQL Setup</p>}
-                    </div>
+                      ) : <p className="text-xs text-gray-400">ยังไม่มีประวัติแก้ไข</p>}
+                    </details>
                   </>}
               </div>
             </div>

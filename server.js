@@ -89,6 +89,21 @@ app.post('/api/wage-workers', async (req, res) => {
     res.json(data);
 });
 
+// Managed plot receipts must never enter legacy payment / billing writers.
+app.use('/api/jobs', async (req, res, next) => {
+    const match = req.path.match(/^\/(\d+)(?:\/(payment|status|billing-area))?$/);
+    if (!match || !['PUT','PATCH','DELETE'].includes(req.method)) return next();
+    try {
+        const {data: job, error} = await supabase.from('jobs').select('*').eq('id',match[1]).single();
+        if (error) return res.status(400).json({error:error.message});
+        if (Number(job.plot_paid_total) > 0) {
+            const financial = req.method === 'PUT' || req.method === 'DELETE' || match[2] === 'payment' || match[2] === 'billing-area' || req.body?.payment_status || req.body?.status === 'DONE' || job.status === 'DONE';
+            if (financial) return res.status(409).json({error:'งานนี้รับเงินรายแปลงแล้ว ให้เปิดตรวจยอดงานเพื่อรับยอดค้าง ไม่แก้ยอดผ่านระบบเดิม'});
+        }
+        next();
+    } catch (error) { res.status(500).json({error:error.message}); }
+});
+
 // Validate before any job mutation. Never skip wage/driver rules when an RPC fails.
 // Older wage_crew_snapshot definitions may contain an integer=text comparison (PG 42883).
 // For *that code only*, validate against the actual wage_workers records instead.
@@ -1125,7 +1140,7 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
     try {
         const { data: job, error: jobError } = await supabase
             .from('jobs')
-            .select('id,status,price_per_rai,crop_type,billing_area,total_price,job_date,closed_at,awaiting_area_confirmation')
+            .select('*')
             .eq('id', jobId)
             .single();
 
@@ -1146,6 +1161,7 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         // ✅ งานระบบใหม่ที่ยังไม่เคยลง transaction ค่าแรง ใช้ Postgres RPC ตัวเดียว
         // เพื่อให้: เพิ่มรอบสุดท้าย + แบ่งค่าแรง + สร้างสมุด + ปิด job เป็น transaction เดียวจริง ๆ
         const hasLegacyPostedWage = (priorRounds || []).some(r => r.wage_transaction_id);
+        if (hasLegacyPostedWage && Number(job.plot_paid_total) > 0) return res.status(409).json({error:'งานนี้มีค่าแรงเก่าและรับเงินรายแปลง ต้องตรวจฐานข้อมูลก่อนปิดงาน'});
         if (!hasLegacyPostedWage) {
             // New jobs MUST remain atomic: Supabase rolls back the *entire* RPC if it fails.
             // In particular, PG 42883 is a database type mismatch, NOT permission to use the
@@ -1574,6 +1590,47 @@ app.put('/api/jobs/:id', async (req, res) => {
 });
 
 
+const plotPaymentKey = p => `${p.vehicle_id}/${p.work_date}/${p.id}`;
+const plotPaymentSummary = job => ({
+    available: Array.isArray(job.plot_receipts),
+    receipts: Array.isArray(job.plot_receipts) ? job.plot_receipts : [],
+    received: Number(job.plot_paid_total || 0),
+    rate: Number(job.price_per_rai || 0),
+    outstanding: job.status === 'DONE' ? (job.payment_status === 'PAID' ? 0 : Number(job.total_price || 0)) : null,
+    legacy: !Number(job.plot_paid_total) && ['DEPOSIT','PAID'].includes(job.payment_status),
+    status: job.payment_status, done: job.status === 'DONE'
+});
+app.post('/api/jobs/:id/plot-payments', async (req, res) => {
+    if (!bossSessionValid(req)) return res.status(403).json({error:'ให้เถ้าแก่ยืนยันรหัสก่อนรับเงิน'});
+    const jobId = Number(req.params.id);
+    const {request_id, mode, items, expected_amount, expected_rate} = req.body || {};
+    if (!Number.isSafeInteger(jobId) || jobId <= 0 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(request_id)) || !['PLOTS','BALANCE'].includes(mode)) return res.status(400).json({error:'ข้อมูลรับเงินไม่ถูกต้อง'});
+    if (!Number.isFinite(expected_amount) || expected_amount <= 0 || !Number.isFinite(expected_rate) || expected_rate <= 0) return res.status(400).json({error:'ยอดเงินหรือราคาไม่ถูกต้อง'});
+    try {
+        const {data: job,error: jobError} = await supabase.from('jobs').select('*').eq('id',jobId).single();
+        if (jobError) throw jobError;
+        if (!Array.isArray(job.plot_receipts)) return res.status(503).json({error:'กรุณารัน plot_payments.sql ก่อนใช้งานรับเงินรายแปลง'});
+        // Check replay before re-reading plots; edits/deletions must not break retries.
+        const existing = job.plot_receipts.find(r => r.request_id === request_id);
+        if (existing) return res.json({success:true,replayed:true,receipt:existing,job});
+        let snapshots = [];
+        if (mode === 'PLOTS') {
+            if (!Array.isArray(items) || !items.length || items.length > 100 || new Set(items.map(i => i.key)).size !== items.length) return res.status(400).json({error:'เลือกแปลงให้ถูกต้องและไม่ซ้ำ'});
+            const gps = (await loadGpsJobSummary()).get(jobId);
+            const plots = new Map((gps?.plots || []).map(p => [plotPaymentKey(p), p]));
+            for (const item of items) {
+                const plot = plots.get(item.key);
+                if (!plot || !Number.isFinite(item.area) || item.area <= 0 || item.area > 100000) return res.status(400).json({error:'แปลงไม่อยู่ในงานนี้ หรือพื้นที่คิดเงินไม่ถูกต้อง กรุณาเปิดตรวจยอดใหม่'});
+                snapshots.push({key:item.key,id:plot.id,name:plot.name,work_date:plot.work_date,vehicle_id:plot.vehicle_id,gps_area:plot.area_rai,area:item.area});
+            }
+        }
+        const {data,error} = await supabase.rpc('receive_plot_payment',{p_job_id:jobId,p_request_id:request_id,p_mode:mode,p_items:snapshots,p_expected_amount:expected_amount,p_expected_rate:expected_rate});
+        if (error) return res.status(409).json({error: error.code === 'PGRST202' ? 'กรุณารัน plot_payments.sql ก่อนรับเงิน' : error.message});
+        if (!data?.success) throw new Error('ยังยืนยันผลรับเงินไม่ได้ กรุณาตรวจรายการเดิม');
+        res.json(data);
+    } catch (error) { res.status(500).json({error:error.message}); }
+});
+
 // 🔍 ตรวจความสัมพันธ์ของ Job ID เดียวกัน — ไม่แก้ข้อมูล แค่รายงาน
 app.get('/api/jobs/:id/integrity', async (req, res) => {
     const jobId = Number(req.params.id);
@@ -1586,8 +1643,8 @@ app.get('/api/jobs/:id/integrity', async (req, res) => {
         const {data:wages,error:wageError} = await supabase.from('transactions').select('id,total_amount,status,note,transaction_date').eq('job_id',jobId).eq('type','OUT').eq('category','ค่าแรง');
         if(wageError) throw wageError;
 
-        let gps = {plot_count:0,area_rai:0,plots:[],invalid_count:0};
-        try { const map = await loadGpsJobSummary(); gps = map.get(jobId) || gps; } catch (_) {}
+        let gps = {plot_count:0,area_rai:0,plots:[],invalid_count:0}, gpsError = false;
+        try { const map = await loadGpsJobSummary(); gps = map.get(jobId) || gps; } catch (_) { gpsError = true; }
 
         const measured = (rounds||[]).reduce((s,r)=>s+Math.max(0,Number(r.measured_area)||0),0);
         const wageArea = (rounds||[]).reduce((s,r)=>s+Math.max(0,Number(r.wage_area)||0),0);
@@ -1597,7 +1654,8 @@ app.get('/api/jobs/:id/integrity', async (req, res) => {
         const checks = [];
         const add=(level,title,detail)=>checks.push({level,title,detail});
 
-        if(gps.invalid_count>0) add('WARN','ขอบแปลง GPS ต้องตรวจ',`มี ${gps.invalid_count} แปลงที่คำนวณไม่ได้`);
+        if(gpsError) add('ERROR','โหลดแปลง GPS ไม่สำเร็จ','กรุณาลองเปิดตรวจยอดใหม่');
+        else if(gps.invalid_count>0) add('WARN','ขอบแปลง GPS ต้องตรวจ',`มี ${gps.invalid_count} แปลงที่คำนวณไม่ได้`);
         else add('OK','GPS พร้อมใช้',`${gps.plot_count} แปลง • ${Number(gps.area_rai||0).toFixed(2)} ไร่`);
 
         if((rounds||[]).some(r=>!String(r.workers||'').trim())) add('ERROR','มีรอบที่ไม่มีชื่อคนงาน','กรุณาแก้ชื่อคนรับค่าแรงก่อนปิดบัญชี');
@@ -1623,7 +1681,7 @@ app.get('/api/jobs/:id/integrity', async (req, res) => {
         if(gps.area_rai>0 && measured>gps.area_rai+0.05) add('WARN','ทำจริงมากกว่า GPS',`ทำจริง ${measured.toFixed(2)} > GPS ${Number(gps.area_rai).toFixed(2)} ไร่ • อาจมีการปรับมือหรือขาดแปลง GPS`);
 
         const invoice = billing == null ? null : billing * Math.max(0,Number(job.price_per_rai)||0);
-        if(job.status==='DONE' && invoice != null && Math.abs(Number(job.total_price||0)-invoice)>0.5) add('WARN','ยอดเงินต่างจากไร่ × ราคา',`อาจเป็นส่วนลด/มัดจำ: เต็ม ${invoice.toFixed(2)} • เก็บในงาน ${Number(job.total_price||0).toFixed(2)} บาท`);
+        if(!Number(job.plot_paid_total) && job.status==='DONE' && invoice != null && Math.abs(Number(job.total_price||0)-invoice)>0.5) add('WARN','ยอดเงินต่างจากไร่ × ราคา',`อาจเป็นส่วนลด/มัดจำ: เต็ม ${invoice.toFixed(2)} • เก็บในงาน ${Number(job.total_price||0).toFixed(2)} บาท`);
 
         let audit=[];
         try {
@@ -1632,7 +1690,7 @@ app.get('/api/jobs/:id/integrity', async (req, res) => {
         } catch(_) {}
 
         const health = checks.some(c=>c.level==='ERROR') ? 'ERROR' : checks.some(c=>c.level==='WARN') ? 'WARN' : 'OK';
-        res.set('Cache-Control','no-store').json({health,checks,audit,summary:{
+        res.set('Cache-Control','no-store').json({health,checks,audit,rounds:rounds||[],plots:gps.plots||[],gps_error:gpsError,payment:plotPaymentSummary(job),summary:{
             gps_area:Number(gps.area_rai||0), measured_area:measured, billing_area:billing, wage_area:wageArea,
             wage_amount:wageAmount, expected_wage_amount:expectedWage, plot_count:gps.plot_count, round_count:(rounds||[]).length,
             job_status:job.status, payment_status:job.payment_status
@@ -1876,7 +1934,7 @@ app.get('/api/dashboard', async (req, res) => {
         // 1. ดึงข้อมูลรายรับ (จากคิวงานที่ 'DONE')
         const { data: jobs } = await supabase
             .from('jobs')
-            .select('total_price, payment_status, area_size, billing_area')
+            .select('*')
             .eq('status', 'DONE')
             .gte('job_date', startDate)
             .lte('job_date', endDate);
@@ -1901,11 +1959,17 @@ app.get('/api/dashboard', async (req, res) => {
                 totalArea += Number(job.billing_area ?? job.area_size) || 0;
                 
                 if (job.payment_status === 'PAID') {
-                    totalIncome += price;
+                    if (!Number(job.plot_paid_total)) totalIncome += price;
                 } else {
                     totalUnpaid += price; // ยอดที่ลูกค้ายังไม่จ่าย
                 }
             });
+        }
+
+        const {data: receiptJobs, error: receiptError} = await supabase.from('jobs').select('*');
+        if (receiptError) throw receiptError;
+        for (const job of receiptJobs || []) for (const receipt of job.plot_receipts || []) {
+            if (new Date(receipt.paid_at) >= new Date(startDate) && new Date(receipt.paid_at) <= new Date(endDate)) totalIncome += Number(receipt.amount || 0);
         }
 
         if (expenses) {
