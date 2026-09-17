@@ -133,34 +133,6 @@ const plotThaiArea = (sqMeters) => {
 
 const formatRaiNgan = (raiValue) => plotThaiArea(Math.max(0, Number(raiValue) || 0) * 1600).text;
 
-// 🏠 พื้นที่คิวของ "วันนี้" ไม่ใช่พื้นที่สะสมทั้ง Job ID
-// กติกา: พื้นที่วันนี้ที่รู้ยอด = รอบที่บันทึกวันนี้ + พื้นที่แปลงที่ยังไม่ได้ลงรอบ
-// GPS/พื้นที่ประมาณเป็นยอดรวมทั้งงาน ต้องหักรอบที่บันทึกไปแล้วก่อนเสมอ
-// หากเกี่ยวต่อ แต่พื้นที่เก่าถูกลงรอบหมดแล้ว: รอบใหม่ยังไม่ทราบยอด ห้ามนำยอดเดิมมานับซ้ำ
-const getQueueDayAreaInfo = (job, todayStart, tomorrowStart) => {
-  const positive = value => {
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.max(0, n) : 0;
-  };
-  const rounds = Array.isArray(job?.work_rounds) ? job.work_rounds : [];
-  const measuredAll = rounds.reduce((sum, round) => sum + positive(round.measured_area), 0);
-  const measuredToday = rounds.reduce((sum, round) => {
-    const time = new Date(round.work_date).getTime();
-    return Number.isFinite(time) && time >= todayStart.getTime() && time < tomorrowStart.getTime()
-      ? sum + positive(round.measured_area)
-      : sum;
-  }, 0);
-  const gps = !job?.gps_summary_error ? positive(job?.gps_summary?.area_rai) : 0;
-  const estimate = positive(job?.area_size);
-  const source = gps > 0 ? 'GPS' : estimate > 0 ? 'ESTIMATE' : 'NONE';
-  const knownTotal = gps > 0 ? gps : estimate > 0 ? estimate : 0;
-  // ไม่เอา "GPS รวม" ไปบวกใหม่ ถ้ามันคือไร่เดียวกับที่ลงรอบก่อนแล้ว
-  const notRecordedYet = Math.max(0, knownTotal - measuredAll);
-  const knownToday = measuredToday + notRecordedYet;
-  const needsArea = source === 'NONE' || (measuredAll > 0 && notRecordedYet < 0.0125);
-  return { knownToday, measuredAll, measuredToday, notRecordedYet, needsArea, source };
-};
-
 // ✍️ ช่องกรอกพื้นที่แบบไทย: ไร่ + งาน
 // Backend/API ยังเก็บเป็น "ไร่ทศนิยม" เหมือนเดิม เพื่อไม่ต้องแก้ server/database.
 // UI รับงานละเอียด 0.1 งาน และ normalize อัตโนมัติ เช่น 4 งาน => +1 ไร่.
@@ -1182,7 +1154,7 @@ function TrackingMap({
 
   // ✨ GPS V3.3: Auto Multi-Plot
   // วิเคราะห์รอยเกี่ยวที่หนาแน่น แล้วแยก Polygon ที่ไม่ติดกันเป็นหลายแปลงอัตโนมัติ
-  // กรองก้อนเล็ก/สัญญาณรบกวนออก และบันทึกในเครื่องทันที จากนั้นแก้แต่ละแปลงได้ด้วย ✏️
+  // กรองก้อนเล็ก/สัญญาณรบกวนออก และเพิ่มเฉพาะพื้นที่ใหม่ โดยไม่ลบแปลงที่บันทึกไว้แล้ว
   const generateAutoPlot = async () => {
     if (plotRevision === null) return alert('กรุณาโหลดแปลงล่าสุดให้สำเร็จก่อน');
     if (!routeReady || routeEdit) return alert('กรุณาโหลดการตัดเส้นให้สำเร็จและออกจากโหมดตัดเส้นก่อนครับ');
@@ -1268,6 +1240,37 @@ function TrackingMap({
 
       if (!buffered) return alert('สร้างพื้นที่จากรอย GPS ไม่สำเร็จครับ');
 
+      // ✅ Auto แบบสะสม: แปลงที่บันทึกไว้แล้วถือว่า "จบแล้ว/เก็บไว้"
+      // กด Auto รอบถัดไปจะค้นหาเฉพาะพื้นที่ใหม่ที่ยังไม่อยู่ในแปลงเดิม
+      // ถ้าต้องการลบแปลงเก่า ให้ผู้ใช้ลบเองจาก ☰ เครื่องมือ เท่านั้น
+      let autoCoverage = buffered;
+
+      if (plots.length > 0) {
+        for (const existingPlot of plots) {
+          if (!autoCoverage) break;
+          try {
+            const existingGeometry = plotGeometry(existingPlot);
+            // ใช้ขอบนอกของแปลงเดิมเป็น mask และเผื่อขอบเล็กน้อย
+            // ป้องกัน GPS รอบใหม่คลาดไม่กี่เมตรแล้วสร้างเศษแปลงซ้ำตามขอบเดิม
+            const existingMask = turf.buffer(
+              existingGeometry.outer,
+              Math.max(1.5, headWidthMeters * 0.75),
+              { units: 'meters', steps: 6 }
+            ) || existingGeometry.outer;
+
+            autoCoverage = plotClip('difference', autoCoverage, existingMask);
+          } catch (_) {
+            // ถ้าแปลงเก่าบางแปลงเสียรูป ไม่ลบ/ไม่แก้ของเดิม และข้าม mask แปลงนั้น
+          }
+        }
+      }
+
+      if (!autoCoverage || turf.area(autoCoverage) < 40) {
+        return alert(
+          '✅ แปลงเดิมยังอยู่ครบ\n\nยังไม่พบพื้นที่เกี่ยวใหม่ที่มากพอจะสร้างเป็นแปลงเพิ่มครับ\nถ้าต้องการลบแปลงเดิม ให้ลบเองใน ☰ เครื่องมือ'
+        );
+      }
+
       const getOuterRings = (feature) => {
         if (!feature?.geometry) return [];
         if (feature.geometry.type === 'Polygon') return [feature.geometry.coordinates[0]];
@@ -1316,7 +1319,7 @@ function TrackingMap({
         return { coords: bestCoords, sqM: originalSqM };
       };
 
-      let rings = getOuterRings(buffered)
+      let rings = getOuterRings(autoCoverage)
         .map(simplifyOneRing)
         .filter(Boolean)
         .filter(item => item.coords.length >= 3)
@@ -1337,13 +1340,35 @@ function TrackingMap({
 
       rings = rings
         .filter(item => item.sqM >= minPlotSqM)
+        .filter(item => {
+          // กันซ้ำรอบสุดท้าย: หลัง simplify ห้ามขยายกลับไปทับแปลงเดิมมากเกินไป
+          if (!plots.length) return true;
+          try {
+            const candidate = turf.polygon([[...item.coords, item.coords[0]]]);
+            const candidateArea = Math.max(1, turf.area(candidate));
+            const overlapped = plots.some(existingPlot => {
+              try {
+                const existing = plotGeometry(existingPlot).outer;
+                const overlap = plotClip('intersect', candidate, existing);
+                return overlap && turf.area(overlap) / candidateArea > 0.15;
+              } catch (_) { return false; }
+            });
+            return !overlapped;
+          } catch (_) {
+            return false;
+          }
+        })
         .slice(0, 12); // กันกรณี GPS แตกเป็นเศษจำนวนมากผิดปกติ
 
       if (rings.length === 0) {
-        return alert('พบแต่พื้นที่เล็กเกินไป ระบบจึงยังไม่สร้างเป็นแปลงให้อัตโนมัติครับ');
+        return alert(
+          plots.length
+            ? '✅ แปลงเดิมยังอยู่ครบ\n\nยังไม่พบพื้นที่ใหม่ที่แยกจากแปลงเดิมชัดเจนครับ'
+            : 'พบแต่พื้นที่เล็กเกินไป ระบบจึงยังไม่สร้างเป็นแปลงให้อัตโนมัติครับ'
+        );
       }
 
-      // 6) แปลงทุกก้อนที่แยกจากกันเป็น Plot คนละแปลง
+      // 6) แปลงเฉพาะ "พื้นที่ใหม่" เป็น Plot เพิ่ม โดยไม่แตะแปลงเดิม
       const batchId = `AUTO-${vehicleId}-${workDate}-${Date.now()}`;
       const autoPlots = rings.map((ring, index) => {
         const autoPoints = ring.coords.map(([lng, lat]) => ({ lat, lng }));
@@ -1365,24 +1390,16 @@ function TrackingMap({
         return refreshPlotMetrics(plot);
       });
 
-      // ถ้ากด Auto ซ้ำ ให้เลือกแทนเฉพาะแปลง Auto เดิม ไม่แตะแปลงที่วาดมือ
-      const oldAutoCount = plots.filter(p => String(p?.source || '').startsWith('AUTO_GPS')).length;
-      let basePlots = plots;
-
-      if (oldAutoCount > 0) {
-        const replaceOld = window.confirm(
-          `มีแปลงออโต้เดิม ${oldAutoCount} แปลง\n\nกด ตกลง = สร้างใหม่แทนแปลงออโต้เดิม\nกด ยกเลิก = ไม่เปลี่ยนแปลงข้อมูลเดิม\n\n(แปลงที่วาดมือจะไม่ถูกลบ แต่พื้นที่หักของแปลงออโต้เดิมจะถูกแทนด้วยข้อเสนอใหม่ที่ต้องตรวจอีกครั้ง)`
-        );
-        if (!replaceOld) return;
-        basePlots = plots.filter(p => !String(p?.source || '').startsWith('AUTO_GPS'));
-      }
-
-      const startIndex = basePlots.length;
-      const nextPlots = [...basePlots, ...autoPlots];
+      // ✅ สำคัญ: Auto ไม่มีสิทธิ์ลบ/แทนแปลงเดิม
+      // ทุกครั้งจะ "เพิ่มเฉพาะแปลงใหม่" ต่อท้ายข้อมูลเดิมเท่านั้น
+      const startIndex = plots.length;
+      const nextPlots = [...plots, ...autoPlots];
 
       openLinkReview(nextPlots, autoPlots.map((_,i)=>startIndex+i), () => {
-        exitPlotEditor();setMobileToolsOpen(true);
+        exitPlotEditor();
+        setMobileToolsOpen(true);
         fitPlotForReview(autoPlots[0].points);
+        setPlotSyncStatus(`✨ พบพื้นที่ใหม่ ${autoPlots.length} แปลง • แปลงเดิม ${plots.length} แปลงยังอยู่ครบ`);
       });
     } catch (err) {
       console.error('Auto Multi-Plot Error:', err);
@@ -2285,7 +2302,7 @@ function TrackingMap({
               disabled={isAutoPlotting || isSavingPlot}
               className={`pointer-events-auto h-11 px-4 rounded-full shadow-xl border font-black text-xs active:scale-95 ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 text-white border-indigo-700'}`}
             >
-              {isAutoPlotting ? '⏳...' : '✨ Auto'}
+              {isAutoPlotting ? '⏳...' : '✨ Auto เพิ่ม'}
             </button>
           )}
 
@@ -2365,7 +2382,7 @@ function TrackingMap({
                     disabled={isAutoPlotting || isSavingPlot}
                     className={`col-span-2 rounded-xl py-2.5 px-3 font-black text-xs shadow-sm border ${isAutoPlotting ? 'bg-gray-200 text-gray-400 border-gray-300' : 'bg-indigo-600 text-white border-indigo-700'}`}
                   >
-                    {isAutoPlotting ? '⏳ กำลังแยกหลายแปลง...' : '✨ วาดแปลงออโต้'}
+                    {isAutoPlotting ? '⏳ กำลังหาแปลงใหม่...' : '✨ หาแปลงใหม่ออโต้'}
                   </button>
                 )}
               </div>
@@ -2676,8 +2693,6 @@ function App() {
   const gpsRequestSeq = useRef(0);
   const gpsFleetRequestSeq = useRef(0);
   const gpsTabOpenedRef = useRef(false);
-  // เปิด GPS จากแปลงในคิว: จำเจตนาไว้ ไม่ให้ effect 'เข้า GPS = สด' ทับวันย้อนหลัง
-  const gpsPlotEntryRef = useRef(null);
 
   const getLocalDateString = () => {
     const now = new Date();
@@ -2766,7 +2781,7 @@ function App() {
           return [String(v.id), []];
         }
       }));
-      if (gpsFleetRequestSeq.current !== seq || gpsPlotEntryRef.current) return {};
+      if (gpsFleetRequestSeq.current !== seq) return {};
       const next = Object.fromEntries(settled);
       setGpsFleetPaths(next);
 
@@ -2795,7 +2810,6 @@ function App() {
   const selectGpsVehicle = async (id) => {
     const vehicleId = String(id || '');
     if (!vehicleId) return;
-    setGpsFocusPlot(null); // เลือกรถอื่นแล้วไม่เด้งกลับไปแปลงเก่าที่เคยเปิด
     setTrackingVehicleId(vehicleId);
 
     if (trackingMode === 'realtime') {
@@ -2808,14 +2822,14 @@ function App() {
       } else {
         setTimeout(() => loadSelectedGps(vehicleId, date, { focus:true, silent:true }), 0);
       }
+    } else {
+      const date = trackingDate || getLocalDateString();
+      setTimeout(() => loadSelectedGps(vehicleId, date, { focus:true, silent:true }), 0);
     }
-    // โหมดประวัติให้ useEffect ที่ฟังรถ+วันเป็นผู้โหลดหนึ่งครั้งเท่านั้น
   };
 
   const changeGpsMode = (mode) => {
     if (mode === trackingMode) return;
-    setGpsFocusPlot(null);
-    if (mode === 'history') gpsFleetRequestSeq.current += 1; // กัน fetch สดที่ค้างทับวันเก่า
     setTrackingMode(mode);
     if (mode === 'realtime') {
       setTrackingDate(getLocalDateString());
@@ -2825,7 +2839,7 @@ function App() {
       setTrackingDate(date);
       const fallbackId = trackingVehicleId || String(vehicles[0]?.id || '');
       if (fallbackId && !trackingVehicleId) setTrackingVehicleId(fallbackId);
-      // history effect โหลดตามค่าที่ React อัปเดตแล้ว ลด request ซ้ำและการแย่งกล้อง
+      setTimeout(() => fallbackId && loadSelectedGps(fallbackId, date, { focus:true, silent:true }), 0);
     }
   };
 
@@ -2833,33 +2847,10 @@ function App() {
     const base = new Date(`${trackingDate || getLocalDateString()}T12:00:00`);
     base.setDate(base.getDate() + days);
     const next = `${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}-${String(base.getDate()).padStart(2,'0')}`;
-    setGpsFocusPlot(null);
     setTrackingDate(next);
   };
 
-  // เปิดแปลงจาก Job ID ด้วยรถและวันที่ที่บันทึกไว้จริง (ไม่ใช้วันนัดของคิวหรือวันนี้)
-  const openGpsPlotFromJob = (plot) => {
-    const vehicleId = String(plot?.vehicle_id || '');
-    const workDate = String(plot?.work_date || '').slice(0, 10);
-    if (!vehicleId || !/^\d{4}-\d{2}-\d{2}$/.test(workDate)) {
-      alert('แปลงนี้ยังไม่มีรถหรือวันที่ GPS ที่ถูกต้องครับ');
-      return;
-    }
-    // ยกเลิกคำขอ GPS สด/รถเก่าที่ยังวิ่งอยู่ ไม่ให้ผลลัพธ์กลับมาทับประวัติ
-    gpsFleetRequestSeq.current += 1;
-    gpsRequestSeq.current += 1;
-    gpsPlotEntryRef.current = { vehicleId, workDate };
-    setGpsDataScope('');
-    setGpsPathData([]);
-    setGpsFocusPlot({ ...plot, vehicle_id: plot.vehicle_id, work_date: workDate, request: Date.now() });
-    setTrackingVehicleId(vehicleId);
-    setTrackingDate(workDate);
-    setTrackingMode('history');
-    setActiveTab('gps');
-    setIsMapFullScreen(true);
-  };
-
-  // เข้าเมนู "พิกัด" โดยตรง = สดอัตโนมัติ; เปิดผ่านแปลงในคิว = ประวัติวันแปลง
+  // เข้าเมนู "พิกัด" = สดทันที + เลือกรถที่มี GPS ล่าสุด + พาไปหารถ
   useEffect(() => {
     if (activeTab !== 'gps') {
       gpsTabOpenedRef.current = false;
@@ -2867,11 +2858,6 @@ function App() {
     }
     if (gpsTabOpenedRef.current || !vehicles.length) return;
     gpsTabOpenedRef.current = true;
-    // ผู้ใช้กดดูแปลงจากคิว: ข้าม auto LIVE เพื่อรักษารถ+วันที่ย้อนหลัง
-    if (gpsPlotEntryRef.current) {
-      gpsPlotEntryRef.current = null;
-      return; // history effect ด้านล่างจะโหลด GPS วันของแปลงเอง
-    }
     setTrackingMode('realtime');
     setTrackingDate(getLocalDateString());
     loadFleetGps({ chooseBest:true, focusBest:true });
@@ -3198,18 +3184,12 @@ function App() {
     return new Date(a.job_date || 0) - new Date(b.job_date || 0);
   });
 
-  // แต่ละ Job ID นับพื้นที่ที่ยังไม่ได้ลงรอบ + พื้นที่รอบที่ลง "วันนี้" เท่านั้น
-  // ตัวเลขเก่าที่บันทึกไปแล้ว ไม่กลับมาบวกในพื้นที่/มูลค่าคิววันนี้
-  const todayAreaInfo = todaySummaryJobs.map(job => ({
-    job,
-    area: getQueueDayAreaInfo(job, todayStart, tomorrowStart)
-  }));
-  const todayOnlyArea = todayAreaInfo.reduce((sum, item) => sum + item.area.knownToday, 0);
-  const todayUnknownAreaCount = todayAreaInfo.filter(item => item.area.needsArea && !isAwaitingArea(item.job)).length;
-  const oldJobsArea = carryJobs.reduce((sum, job) =>
-    sum + getQueueDayAreaInfo(job, todayStart, tomorrowStart).knownToday, 0);
-  const todayIncome = todayAreaInfo.reduce((sum, item) =>
-    sum + (item.area.knownToday * Math.max(0, Number(item.job.price_per_rai) || 0)), 0);
+  const todayOnlyArea = todaySummaryJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
+  const oldJobsArea = carryJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
+  const todayIncome = todaySummaryJobs.reduce(
+    (sum, j) => sum + (queueAreaRai(j) * Math.max(0, Number(j.price_per_rai) || 0)),
+    0
+  );
 
   const overdueJobs = fieldJobs.filter(j => {
     if (j.status !== 'PENDING') return false;
@@ -4018,7 +3998,7 @@ function App() {
           
           <button onClick={() => setActiveTab('calendar')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
           
-          <button onClick={() => { gpsPlotEntryRef.current = null; setGpsFocusPlot(null); setActiveTab('gps'); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัด</button>
+          <button onClick={() => setActiveTab('gps')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'gps' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🛰️ พิกัด</button>
           
           {/* 👇 ซ่อนปุ่ม บัญชี และ ตั้งค่า ถ้าเป็นคนขับรถ 👇 */}
           {userRole === 'BOSS' && (
@@ -4086,16 +4066,11 @@ function App() {
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้ที่ทราบยอด</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้</span>
                 <span className="text-2xl font-black text-emerald-600 leading-none">{formatRaiNgan(todayOnlyArea)}</span>
-                {todayUnknownAreaCount > 0 && (
-                  <span className="mt-2 text-[10px] sm:text-xs font-black text-orange-900 bg-orange-50 px-2 py-1 rounded-lg border border-orange-300 text-center">
-                    ⏳ อีก {todayUnknownAreaCount} คิวรอระบุพื้นที่ • ไม่รวมยอดทำสะสมเดิม
-                  </span>
-                )}
                 {carryJobs.length > 0 && (
-                  <span className="mt-1 text-[10px] sm:text-xs font-bold text-slate-600">
-                    งานก่อนหน้า {carryJobs.length} คิว • พื้นที่ทราบยอด {formatRaiNgan(oldJobsArea)}
+                  <span className="mt-2 text-xs sm:text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-300">
+                    ⏳ งานก่อนหน้า {carryJobs.length} คิว • {formatRaiNgan(oldJobsArea)}
                   </span>
                 )}
               </div>
@@ -4106,7 +4081,7 @@ function App() {
                   <span className="text-2xl font-black text-blue-600">
                     {Math.round(todayIncome).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
                   </span>
-                  <span className="text-xs text-slate-600 mt-1">เฉพาะพื้นที่วันนี้ที่ทราบยอด × ราคา/ไร่{todayUnknownAreaCount > 0 ? ` • ยังไม่รวม ${todayUnknownAreaCount} คิว` : ''}</span>
+                  <span className="text-xs text-slate-600 mt-1">ประมาณจากพื้นที่ × ราคา/ไร่</span>
                 </div>
               )}
 
@@ -4141,8 +4116,6 @@ function App() {
                   </div>
                   <button
                     onClick={() => {
-                      gpsPlotEntryRef.current = null;
-                      setGpsFocusPlot(null);
                       setActiveTab('gps');
                       setTrackingMode('realtime');
                       if (mainVehicle) setTrackingVehicleId(String(mainVehicle.id));
@@ -4201,7 +4174,6 @@ function App() {
                     const dateText = Number.isNaN(jobDate.getTime()) ? '-' : `${jobDate.getDate()}/${jobDate.getMonth() + 1}`;
                     const timeText = Number.isNaN(jobDate.getTime()) ? '--:--' : jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
                     const ws = getJobWorkSummary(job);
-                    const dayArea = getQueueDayAreaInfo(job, todayStart, tomorrowStart);
 
                     return (
                       <div
@@ -4231,16 +4203,9 @@ function App() {
                           <p className="text-xs text-slate-600 font-semibold mt-1">
                             {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'}{' '}
                             {Number(job.gps_summary?.area_rai || 0) > 0
-                              ? `🛰️ GPS รวมทั้งคิว ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
-                              : job.area_size ? `🗣️ ลูกค้าประมาณทั้งคิว ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่รวม'}
+                              ? `🛰️ พื้นที่แปลง GPS ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
+                              : job.area_size ? `🗣️ ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่'}
                           </p>
-                          {dayArea.knownToday > 0.0125 ? (
-                            <p className="text-xs text-blue-800 font-black mt-0.5">
-                              🌾 พื้นที่วันนี้ที่ทราบยอด {formatRaiNgan(dayArea.knownToday)}{dayArea.source === 'ESTIMATE' ? ' • ประมาณ' : ''}
-                            </p>
-                          ) : dayArea.needsArea ? (
-                            <p className="text-xs text-orange-800 font-black mt-0.5">⏳ เกี่ยวต่อ • ยังไม่ระบุพื้นที่รอบนี้ (ไม่รวมยอดเดิม)</p>
-                          ) : null}
                           {ws.roundCount > 0 && (
                             <p className="text-xs text-emerald-700 font-black mt-0.5">
                               ✅ ทำสะสมทุกรอบ {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ
@@ -4495,12 +4460,12 @@ function App() {
                   <input
                     type="date"
                     value={trackingDate || getLocalDateString()}
-                    onChange={(e) => { setGpsFocusPlot(null); setTrackingDate(e.target.value); }}
+                    onChange={(e) => setTrackingDate(e.target.value)}
                     className="min-w-0 h-9 rounded-lg border border-orange-200 bg-white px-2 text-xs font-bold text-gray-800"
                   />
                   <button
                     type="button"
-                    onClick={() => { setGpsFocusPlot(null); setTrackingDate(getLocalDateString()); }}
+                    onClick={() => setTrackingDate(getLocalDateString())}
                     className="h-9 px-2.5 rounded-lg bg-white border border-orange-200 text-[10px] font-black text-orange-800 whitespace-nowrap"
                   >
                     วันนี้
@@ -4736,7 +4701,7 @@ function App() {
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
-                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={openGpsPlotFromJob} />
+                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={plot => { setTrackingMode('history'); setTrackingVehicleId(String(plot.vehicle_id)); setTrackingDate(plot.work_date); setGpsFocusPlot({ ...plot, request: Date.now() }); setActiveTab('gps'); setIsMapFullScreen(true); }} />
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
@@ -6202,7 +6167,7 @@ function App() {
             ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {formatRaiNgan(job.billing_area ?? 0)}</p>
             : <p className="text-sm text-amber-700">🗣️ ลูกค้าแจ้งประมาณ: {job.area_size ? `~${formatRaiNgan(job.area_size)}` : 'ไม่ระบุ'}</p>}
           {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
-          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);openGpsPlotFromJob(plot);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
+          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);setTrackingMode('history');setTrackingVehicleId(String(plot.vehicle_id));setTrackingDate(plot.work_date);setGpsFocusPlot({...plot,request:Date.now()});setActiveTab('gps');setIsMapFullScreen(true);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
           {userRole==='BOSS' && job.status==='DONE' && <button disabled={!summary?.plot_count || !!summary?.invalid_count || job.payment_status==='PAID'} onClick={()=>{setGpsJobDetail(null);openBillingAreaAdjust(job);setBillingAdjustArea(String(normalizeRaiNganValue(summary.area_rai)));}} className="w-full bg-emerald-600 text-white font-black rounded-xl py-3 disabled:opacity-40">📐 ใช้ GPS เป็นตัวช่วยตรวจไร่คิดเงิน</button>}
           {job.status!=='DONE' && <p className="text-xs text-blue-700 mt-2 font-bold">GPS เป็นข้อมูลหน้างาน • ปิดรอบวันนี้จะดึงเฉพาะยอดที่ยังไม่ลงรอบให้อัตโนมัติ</p>}
           {job.status==='DONE' && <p className="text-xs text-gray-500 mt-2">GPS ไม่แก้ทับข้อเท็จจริงย้อนหลัง • ปรับเฉพาะ 🤝 ไร่คิดเงิน และค่าแรงตามไร่ลูกค้า</p>}
