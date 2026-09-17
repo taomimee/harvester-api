@@ -133,6 +133,34 @@ const plotThaiArea = (sqMeters) => {
 
 const formatRaiNgan = (raiValue) => plotThaiArea(Math.max(0, Number(raiValue) || 0) * 1600).text;
 
+// 🏠 พื้นที่คิวของ "วันนี้" ไม่ใช่พื้นที่สะสมทั้ง Job ID
+// กติกา: พื้นที่วันนี้ที่รู้ยอด = รอบที่บันทึกวันนี้ + พื้นที่แปลงที่ยังไม่ได้ลงรอบ
+// GPS/พื้นที่ประมาณเป็นยอดรวมทั้งงาน ต้องหักรอบที่บันทึกไปแล้วก่อนเสมอ
+// หากเกี่ยวต่อ แต่พื้นที่เก่าถูกลงรอบหมดแล้ว: รอบใหม่ยังไม่ทราบยอด ห้ามนำยอดเดิมมานับซ้ำ
+const getQueueDayAreaInfo = (job, todayStart, tomorrowStart) => {
+  const positive = value => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, n) : 0;
+  };
+  const rounds = Array.isArray(job?.work_rounds) ? job.work_rounds : [];
+  const measuredAll = rounds.reduce((sum, round) => sum + positive(round.measured_area), 0);
+  const measuredToday = rounds.reduce((sum, round) => {
+    const time = new Date(round.work_date).getTime();
+    return Number.isFinite(time) && time >= todayStart.getTime() && time < tomorrowStart.getTime()
+      ? sum + positive(round.measured_area)
+      : sum;
+  }, 0);
+  const gps = !job?.gps_summary_error ? positive(job?.gps_summary?.area_rai) : 0;
+  const estimate = positive(job?.area_size);
+  const source = gps > 0 ? 'GPS' : estimate > 0 ? 'ESTIMATE' : 'NONE';
+  const knownTotal = gps > 0 ? gps : estimate > 0 ? estimate : 0;
+  // ไม่เอา "GPS รวม" ไปบวกใหม่ ถ้ามันคือไร่เดียวกับที่ลงรอบก่อนแล้ว
+  const notRecordedYet = Math.max(0, knownTotal - measuredAll);
+  const knownToday = measuredToday + notRecordedYet;
+  const needsArea = source === 'NONE' || (measuredAll > 0 && notRecordedYet < 0.0125);
+  return { knownToday, measuredAll, measuredToday, notRecordedYet, needsArea, source };
+};
+
 // ✍️ ช่องกรอกพื้นที่แบบไทย: ไร่ + งาน
 // Backend/API ยังเก็บเป็น "ไร่ทศนิยม" เหมือนเดิม เพื่อไม่ต้องแก้ server/database.
 // UI รับงานละเอียด 0.1 งาน และ normalize อัตโนมัติ เช่น 4 งาน => +1 ไร่.
@@ -3170,12 +3198,18 @@ function App() {
     return new Date(a.job_date || 0) - new Date(b.job_date || 0);
   });
 
-  const todayOnlyArea = todaySummaryJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
-  const oldJobsArea = carryJobs.reduce((sum, j) => sum + queueAreaRai(j), 0);
-  const todayIncome = todaySummaryJobs.reduce(
-    (sum, j) => sum + (queueAreaRai(j) * Math.max(0, Number(j.price_per_rai) || 0)),
-    0
-  );
+  // แต่ละ Job ID นับพื้นที่ที่ยังไม่ได้ลงรอบ + พื้นที่รอบที่ลง "วันนี้" เท่านั้น
+  // ตัวเลขเก่าที่บันทึกไปแล้ว ไม่กลับมาบวกในพื้นที่/มูลค่าคิววันนี้
+  const todayAreaInfo = todaySummaryJobs.map(job => ({
+    job,
+    area: getQueueDayAreaInfo(job, todayStart, tomorrowStart)
+  }));
+  const todayOnlyArea = todayAreaInfo.reduce((sum, item) => sum + item.area.knownToday, 0);
+  const todayUnknownAreaCount = todayAreaInfo.filter(item => item.area.needsArea && !isAwaitingArea(item.job)).length;
+  const oldJobsArea = carryJobs.reduce((sum, job) =>
+    sum + getQueueDayAreaInfo(job, todayStart, tomorrowStart).knownToday, 0);
+  const todayIncome = todayAreaInfo.reduce((sum, item) =>
+    sum + (item.area.knownToday * Math.max(0, Number(item.job.price_per_rai) || 0)), 0);
 
   const overdueJobs = fieldJobs.filter(j => {
     if (j.status !== 'PENDING') return false;
@@ -4052,11 +4086,16 @@ function App() {
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้ที่ทราบยอด</span>
                 <span className="text-2xl font-black text-emerald-600 leading-none">{formatRaiNgan(todayOnlyArea)}</span>
+                {todayUnknownAreaCount > 0 && (
+                  <span className="mt-2 text-[10px] sm:text-xs font-black text-orange-900 bg-orange-50 px-2 py-1 rounded-lg border border-orange-300 text-center">
+                    ⏳ อีก {todayUnknownAreaCount} คิวรอระบุพื้นที่ • ไม่รวมยอดทำสะสมเดิม
+                  </span>
+                )}
                 {carryJobs.length > 0 && (
-                  <span className="mt-2 text-xs sm:text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-300">
-                    ⏳ งานก่อนหน้า {carryJobs.length} คิว • {formatRaiNgan(oldJobsArea)}
+                  <span className="mt-1 text-[10px] sm:text-xs font-bold text-slate-600">
+                    งานก่อนหน้า {carryJobs.length} คิว • พื้นที่ทราบยอด {formatRaiNgan(oldJobsArea)}
                   </span>
                 )}
               </div>
@@ -4067,7 +4106,7 @@ function App() {
                   <span className="text-2xl font-black text-blue-600">
                     {Math.round(todayIncome).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
                   </span>
-                  <span className="text-xs text-slate-600 mt-1">ประมาณจากพื้นที่ × ราคา/ไร่</span>
+                  <span className="text-xs text-slate-600 mt-1">เฉพาะพื้นที่วันนี้ที่ทราบยอด × ราคา/ไร่{todayUnknownAreaCount > 0 ? ` • ยังไม่รวม ${todayUnknownAreaCount} คิว` : ''}</span>
                 </div>
               )}
 
@@ -4162,6 +4201,7 @@ function App() {
                     const dateText = Number.isNaN(jobDate.getTime()) ? '-' : `${jobDate.getDate()}/${jobDate.getMonth() + 1}`;
                     const timeText = Number.isNaN(jobDate.getTime()) ? '--:--' : jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
                     const ws = getJobWorkSummary(job);
+                    const dayArea = getQueueDayAreaInfo(job, todayStart, tomorrowStart);
 
                     return (
                       <div
@@ -4191,9 +4231,16 @@ function App() {
                           <p className="text-xs text-slate-600 font-semibold mt-1">
                             {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'}{' '}
                             {Number(job.gps_summary?.area_rai || 0) > 0
-                              ? `🛰️ พื้นที่แปลง GPS ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
-                              : job.area_size ? `🗣️ ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่'}
+                              ? `🛰️ GPS รวมทั้งคิว ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
+                              : job.area_size ? `🗣️ ลูกค้าประมาณทั้งคิว ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่รวม'}
                           </p>
+                          {dayArea.knownToday > 0.0125 ? (
+                            <p className="text-xs text-blue-800 font-black mt-0.5">
+                              🌾 พื้นที่วันนี้ที่ทราบยอด {formatRaiNgan(dayArea.knownToday)}{dayArea.source === 'ESTIMATE' ? ' • ประมาณ' : ''}
+                            </p>
+                          ) : dayArea.needsArea ? (
+                            <p className="text-xs text-orange-800 font-black mt-0.5">⏳ เกี่ยวต่อ • ยังไม่ระบุพื้นที่รอบนี้ (ไม่รวมยอดเดิม)</p>
+                          ) : null}
                           {ws.roundCount > 0 && (
                             <p className="text-xs text-emerald-700 font-black mt-0.5">
                               ✅ ทำสะสมทุกรอบ {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ
