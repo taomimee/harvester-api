@@ -133,6 +133,13 @@ const plotThaiArea = (sqMeters) => {
 
 const formatRaiNgan = (raiValue) => plotThaiArea(Math.max(0, Number(raiValue) || 0) * 1600).text;
 
+// วันทำงานต้องยึดวันที่ของรอบจริง ไม่ยึดสถานะคิวหรือวันที่ชำระเงิน
+const isInHomeDay = (value, dayStart, nextDayStart) => {
+  if (!value) return false;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && time >= dayStart.getTime() && time < nextDayStart.getTime();
+};
+
 // 🏠 KPI พื้นที่วันนี้ — ต้องแยกยอดสะสม Job ID ออกจากพื้นที่ที่ยังไม่ลงรอบ
 // GPS summary เป็นพื้นที่สะสมทุกแปลง; ห้ามเอาไปนับเป็นพื้นที่ของวันนี้ทั้งก้อน
 const getQueueDayAreaInfo = (job, todayStart, tomorrowStart) => {
@@ -153,15 +160,16 @@ const getQueueDayAreaInfo = (job, todayStart, tomorrowStart) => {
   const gps = job?.gps_summary_error ? 0 : positive(job?.gps_summary?.area_rai);
   const estimate = positive(job?.area_size);
   const awaiting = job?.status !== 'DONE' && job?.awaiting_area_confirmation === true;
+  const scheduledToday = job?.status !== 'DONE' && isInHomeDay(job?.job_date, todayStart, tomorrowStart);
 
-  // ปิดรอบเก่าแล้ว 15 ไร่ + Auto แปลงใหม่ 8 ไร่ = นับใหม่เฉพาะ 8 ไร่
-  // ถ้ายังไม่มี GPS และเคยลงรอบแล้ว ห้ามเดายอดใหม่จากยอดประมาณของลูกค้า
+  // GPS เป็นยอดสะสม: หักพื้นที่ที่ลงรอบแล้ว และนับยอดรอทำเฉพาะคิวที่นัดวันนี้
+  // เมื่อ DONE ต้องเหลือแค่รอบที่ทำจริงวันนี้ ห้ามนำ GPS ค้างหรือไร่คิดเงินทั้งงานมาทบ
   const unrecordedGps = gps > 0 ? Math.max(0, gps - measuredAll) : 0;
   const unrecordedEstimate = gps <= 0 && measuredAll <= 0 ? estimate : 0;
-  const notRecordedYet = awaiting ? 0 : (gps > 0 ? unrecordedGps : unrecordedEstimate);
+  const notRecordedYet = !scheduledToday || awaiting ? 0 : (gps > 0 ? unrecordedGps : unrecordedEstimate);
   const knownToday = measuredToday + notRecordedYet;
   const source = gps > 0 ? 'GPS' : estimate > 0 && measuredAll <= 0 ? 'ESTIMATE' : 'NONE';
-  const needsArea = !awaiting && knownToday < 0.0125;
+  const needsArea = scheduledToday && !awaiting && knownToday < 0.0125;
   return { knownToday, measuredAll, measuredToday, notRecordedYet, needsArea, source, gps, awaiting };
 };
 
@@ -3186,13 +3194,20 @@ function App() {
   const openJobs = jobs.filter(j => j.status !== 'DONE');
   const awaitingAreaJobs = openJobs.filter(isAwaitingArea);
   const fieldJobs = openJobs.filter(j => !isAwaitingArea(j));
-  // Daily summary includes jobs awaiting area confirmation; field follow-up excludes them.
-  const todaySummaryJobs = openJobs.filter(j => {
-    const t = new Date(j.job_date);
-    return !Number.isNaN(t.getTime()) && t >= todayStart && t < tomorrowStart;
-  });
-  const scheduledTodayJobs = todaySummaryJobs.filter(j => !isAwaitingArea(j));
-  const todayAwaitingCount = todaySummaryJobs.filter(isAwaitingArea).length;
+  // KPI: รวมงานนัดวันนี้ + งานที่มีรอบเกี่ยววันนี้ + งานปิดวันนี้ (รวม PAID)
+  // รายการติดตามหน้างานด้านล่างยังแสดงเฉพาะงานไม่ DONE เหมือนเดิม
+  const bookedTodayJobs = openJobs.filter(j => isInHomeDay(j.job_date, todayStart, tomorrowStart));
+  const workedTodayJobs = jobs.filter(j => Array.isArray(j.work_rounds) &&
+    j.work_rounds.some(r => isInHomeDay(r.work_date, todayStart, tomorrowStart)));
+  const completedTodayJobs = jobs.filter(j => j.status === 'DONE' &&
+    isInHomeDay(j.closed_at || j.job_date, todayStart, tomorrowStart));
+  const todaySummaryJobs = [...new Map(
+    [...bookedTodayJobs, ...workedTodayJobs, ...completedTodayJobs].map(j => [String(j.id), j])
+  ).values()];
+  const scheduledTodayJobs = bookedTodayJobs.filter(j => !isAwaitingArea(j));
+  const todayAwaitingCount = bookedTodayJobs.filter(isAwaitingArea).length;
+  const todayCompletedCount = completedTodayJobs.length;
+  const todayClosedPaidCount = completedTodayJobs.filter(j => j.payment_status === 'PAID').length;
 
   // งานที่ต้องตามต่อบนหน้าแรก: งานค้างจากก่อนวันนี้ + งานที่กำลังทำ
   // งาน PAUSED ที่นัดอนาคตจะรอไปโผล่ในวันนัด ไม่ยึดหน้าแรกตลอดเวลา
@@ -3216,17 +3231,22 @@ function App() {
     return new Date(a.job_date || 0) - new Date(b.job_date || 0);
   });
 
-  // KPI กับมูลค่าใช้พื้นที่ "วันนี้ที่ทราบยอด" ชุดเดียวกัน
-  // ไม่นำ GPS สะสมทั้งคิวมาบวกใหม่ทุกครั้งที่กด Auto เพิ่ม
+  // แยกตัวเลข 3 ความหมาย: เกี่ยวจริงวันนี้ / พื้นที่รอทำ / ปิดยอดขายวันนี้
+  // ห้ามใช้ยอดไร่ที่ลูกค้าตกลงแทนพื้นที่เกี่ยววันนี้ หรือรวมคิวที่ DONE ซ้ำสองครั้ง
   const todayAreaInfo = todaySummaryJobs.map(job => ({
     job, area: getQueueDayAreaInfo(job, todayStart, tomorrowStart)
   }));
-  const todayOnlyArea = todayAreaInfo.reduce((sum, item) => sum + item.area.knownToday, 0);
+  const todayMeasuredArea = todayAreaInfo.reduce((sum, item) => sum + item.area.measuredToday, 0);
+  const todayPendingArea = todayAreaInfo.reduce((sum, item) => sum + item.area.notRecordedYet, 0);
+  const todayOnlyArea = todayMeasuredArea + todayPendingArea;
   const todayUnknownAreaCount = todayAreaInfo.filter(item => item.area.needsArea).length;
-  const oldJobsArea = carryJobs.reduce((sum, job) =>
-    sum + getQueueDayAreaInfo(job, todayStart, tomorrowStart).knownToday, 0);
-  const todayIncome = todayAreaInfo.reduce((sum, item) =>
-    sum + item.area.knownToday * Math.max(0, Number(item.job.price_per_rai) || 0), 0);
+  // ยอดงานที่ปิดวันนี้เป็นยอดบิลก่อนส่วนลด/มัดจำ ไม่ใช่เงินสดรับวันนี้
+  const todayBilledValue = completedTodayJobs.reduce((sum, job) =>
+    sum + Math.max(0, Number(job.billing_area ?? job.area_size) || 0) *
+      Math.max(0, Number(job.price_per_rai) || 0), 0);
+  const todayUnclosedEstimate = todayAreaInfo.reduce((sum, item) =>
+    sum + (item.job.status === 'DONE' ? 0 : item.area.knownToday *
+      Math.max(0, Number(item.job.price_per_rai) || 0)), 0);
 
   const overdueJobs = fieldJobs.filter(j => {
     if (j.status !== 'PENDING') return false;
@@ -4098,35 +4118,46 @@ function App() {
             {/* 1. ภาพรวมวันนี้ */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🚜 นัดเกี่ยววันนี้</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🚜 รายการงานวันนี้</span>
                 <span className="text-2xl font-black text-gray-900">
                   {todaySummaryJobs.length} <span className="text-sm font-normal">งาน</span>
                 </span>
-                {todayAwaitingCount > 0 && <span className="mt-1 text-xs font-bold text-violet-800">รวมรอยืนยันไร่ {todayAwaitingCount} งาน</span>}
+                <span className="text-[11px] font-bold text-slate-600 mt-1 text-center">
+                  ✅ ปิดแล้ว {todayCompletedCount} • 🚜 นัด {scheduledTodayJobs.length}{todayAwaitingCount > 0 ? ` • 📐 รอไร่ ${todayAwaitingCount}` : ''}
+                </span>
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่คิววันนี้ที่ทราบยอด</span>
+                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่งานวันนี้</span>
                 <span className="text-2xl font-black text-emerald-600 leading-none">{formatRaiNgan(todayOnlyArea)}</span>
-                {todayUnknownAreaCount > 0 && (
-                  <span className="mt-2 text-[10px] sm:text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-300 text-center">
-                    ⏳ อีก {todayUnknownAreaCount} คิวรอระบุพื้นที่ • ไม่รวมยอดสะสมเดิม
-                  </span>
+                <span className="mt-2 text-[11px] font-black text-emerald-800 text-center">
+                  ✅ เกี่ยวจริง {formatRaiNgan(todayMeasuredArea)}
+                </span>
+                {todayPendingArea > 0.0125 && (
+                  <span className="text-[11px] font-bold text-blue-800 text-center">🆕 คิวที่ยังไม่ลงรอบ {formatRaiNgan(todayPendingArea)}</span>
                 )}
-                {carryJobs.length > 0 && (
-                  <span className="mt-1 text-[10px] sm:text-xs font-bold text-slate-600">
-                    งานก่อนหน้า {carryJobs.length} คิว • พื้นที่ทราบยอด {formatRaiNgan(oldJobsArea)}
+                {todayUnknownAreaCount > 0 && (
+                  <span className="mt-1 text-[10px] sm:text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-300 text-center">
+                    ⏳ อีก {todayUnknownAreaCount} คิวรอระบุพื้นที่
                   </span>
                 )}
               </div>
 
               {userRole === 'BOSS' && (
                 <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                  <span className="text-slate-600 text-xs font-bold mb-1">💰 มูลค่าคิววันนี้</span>
+                  <span className="text-slate-600 text-xs font-bold mb-1">💰 ยอดงานที่ปิดวันนี้</span>
                   <span className="text-2xl font-black text-blue-600">
-                    {Math.round(todayIncome).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
+                    {Math.round(todayBilledValue).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
                   </span>
-                  <span className="text-xs text-slate-600 mt-1">เฉพาะพื้นที่วันนี้ที่ทราบยอด × ราคา/ไร่{todayUnknownAreaCount > 0 ? ` • ยังไม่รวม ${todayUnknownAreaCount} คิว` : ''}</span>
+                  <span className="text-[11px] text-slate-600 mt-1 text-center">
+                    ปิดแล้ว {todayCompletedCount} งาน • ตามไร่ที่ตกลง (ก่อนส่วนลด)
+                  </span>
+                  {todayUnclosedEstimate > 0 && (
+                    <span className="text-[11px] text-blue-800 font-bold text-center">คิวที่ยังไม่ปิด ~{Math.round(todayUnclosedEstimate).toLocaleString('th-TH')} ฿</span>
+                  )}
+                  {todayClosedPaidCount > 0 && (
+                    <span className="text-[11px] text-emerald-700 font-bold text-center">✅ ในงานที่ปิดวันนี้ ชำระครบ {todayClosedPaidCount} งาน</span>
+                  )}
                 </div>
               )}
 
