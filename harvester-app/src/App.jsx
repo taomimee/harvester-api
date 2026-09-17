@@ -3207,7 +3207,6 @@ function App() {
   const scheduledTodayJobs = bookedTodayJobs.filter(j => !isAwaitingArea(j));
   const todayAwaitingCount = bookedTodayJobs.filter(isAwaitingArea).length;
   const todayCompletedCount = completedTodayJobs.length;
-  const todayClosedPaidCount = completedTodayJobs.filter(j => j.payment_status === 'PAID').length;
 
   // งานที่ต้องตามต่อบนหน้าแรก: งานค้างจากก่อนวันนี้ + งานที่กำลังทำ
   // งาน PAUSED ที่นัดอนาคตจะรอไปโผล่ในวันนัด ไม่ยึดหน้าแรกตลอดเวลา
@@ -3238,15 +3237,11 @@ function App() {
   }));
   const todayMeasuredArea = todayAreaInfo.reduce((sum, item) => sum + item.area.measuredToday, 0);
   const todayPendingArea = todayAreaInfo.reduce((sum, item) => sum + item.area.notRecordedYet, 0);
-  const todayOnlyArea = todayMeasuredArea + todayPendingArea;
   const todayUnknownAreaCount = todayAreaInfo.filter(item => item.area.needsArea).length;
   // ยอดงานที่ปิดวันนี้เป็นยอดบิลก่อนส่วนลด/มัดจำ ไม่ใช่เงินสดรับวันนี้
   const todayBilledValue = completedTodayJobs.reduce((sum, job) =>
     sum + Math.max(0, Number(job.billing_area ?? job.area_size) || 0) *
       Math.max(0, Number(job.price_per_rai) || 0), 0);
-  const todayUnclosedEstimate = todayAreaInfo.reduce((sum, item) =>
-    sum + (item.job.status === 'DONE' ? 0 : item.area.knownToday *
-      Math.max(0, Number(item.job.price_per_rai) || 0)), 0);
 
   const overdueJobs = fieldJobs.filter(j => {
     if (j.status !== 'PENDING') return false;
@@ -3264,7 +3259,8 @@ function App() {
   const activeJobNow = openJobs
     .filter(j => j.status === 'IN_PROGRESS')
     .sort((a, b) => new Date(b.job_date || 0) - new Date(a.job_date || 0))[0];
-  const mainVehicle = vehicles.length > 0 ? vehicles[0] : null;
+  // รถที่ขึ้นหน้าแรกต้องตรงกับคิวที่กำลังทำ ไม่ใช่รถคันแรกในฐานข้อมูลเสมอ
+  const mainVehicle = (activeJobNow && vehicles.find(v => String(v.id) === String(activeJobNow.vehicle_id))) || vehicles[0] || null;
 
   let radarLocationName = "(รอพิกัด...)";
   if (radarOverride) {
@@ -4004,15 +4000,15 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4 font-sans pb-24">
-      <div className="max-w-md mx-auto">
+    <div className="min-h-screen bg-slate-50 p-3 sm:p-4 font-sans pb-24">
+      <div className="mx-auto max-w-md">
 
-        {/* 🐘 Header ช้างขาวเจริญทรัพย์ (พร้อมทางลับเถ้าแก่) */}
-        <div className="bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 py-2.5 px-4 rounded-2xl shadow-lg mb-3 text-center relative overflow-hidden">
-          
-          {/* 👇 ทางลับเถ้าแก่ (ปุ่มกุญแจมุมขวาบน - อัปเกรดจำสถานะ) 👇 */}
-          <div 
-            className="absolute top-3 right-3 z-50 bg-black/20 hover:bg-black/40 backdrop-blur-sm p-1.5 rounded-full cursor-pointer transition text-xs border border-white/10"
+        {/* 🐘 แบรนด์ — คงเอกลักษณ์ช้างขาว แต่ลดเอฟเฟกต์ที่แย่งความสนใจจากข้อมูลงาน */}
+        <header className="relative mb-3 overflow-hidden rounded-2xl border border-emerald-900/20 bg-gradient-to-r from-emerald-900 via-emerald-800 to-teal-900 px-4 py-3 text-center shadow-sm">
+          <button
+            type="button"
+            aria-label={userRole === 'BOSS' ? 'สลับเป็นโหมดคนขับ' : 'เข้าสู่โหมดเถ้าแก่'}
+            className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-xl border border-white/15 bg-white/10 text-base text-white hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-300"
             onClick={async () => {
               if (userRole === 'DRIVER') {
                 try {
@@ -4025,29 +4021,13 @@ function App() {
                 if (token) fetch(`${WAGE_API}/boss/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
               }
             }}
-          >
-            {userRole === 'BOSS' ? '🔓' : '🔒'}
+          >{userRole === 'BOSS' ? '🔓' : '🔒'}</button>
+          <div className="mx-auto mb-1.5 flex h-12 w-12 items-center justify-center rounded-xl border border-amber-300/35 bg-white/10 shadow-sm">
+            <img src="/elephant.png" alt="ตราช้างขาวเจริญทรัพย์" className="h-11 w-11 object-contain" />
           </div>
-
-          <div className="relative z-10 flex flex-col items-center">
-            <div className="relative mb-1">
-              <div className="absolute inset-0 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 rounded-xl blur-lg opacity-80 animate-pulse"></div>
-              <div className="absolute -top-2 -left-2 text-yellow-100 text-xs font-bold animate-pulse">✦</div>
-              <div className="absolute -top-2 -right-2 text-yellow-300 text-xs font-bold animate-pulse">✦</div>
-              <div className="absolute -bottom-1 -left-2 text-amber-200 text-xs font-bold animate-pulse">✦</div>
-              <div className="absolute -bottom-1 -right-2 text-amber-300 text-xs font-bold animate-pulse">✦</div>
-              <div className="relative inline-flex items-center justify-center w-14 h-14 bg-black/20 backdrop-blur-md rounded-xl shadow-inner border border-amber-300/40">
-                <img src="/elephant.png" alt="ช้างขาว" className="w-full h-full object-contain scale-[1.25] drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
-              </div>
-            </div>
-            <h1 className="text-xl font-black tracking-wide bg-gradient-to-r from-amber-200 via-yellow-300 to-amber-400 bg-clip-text text-transparent drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)] leading-tight">
-              ช้างขาวเจริญทรัพย์
-            </h1>
-            <div className="mt-1.5 inline-flex items-center gap-1.5 bg-black/30 backdrop-blur-md py-0.5 px-3 rounded-full border border-amber-300/30 text-sm font-semibold text-amber-200">
-              <span className="text-base">🌾</span><span>ระบบจัดการคิวรถเกี่ยว</span>
-            </div>
-          </div>
-        </div>
+          <h1 className="text-lg font-black tracking-wide text-amber-200">ช้างขาวเจริญทรัพย์</h1>
+          <p className="mt-0.5 text-xs font-semibold text-emerald-100">ระบบจัดการคิวรถเกี่ยว</p>
+        </header>
 
         {/* 🔘 ปุ่มสลับแท็บหลัก (Main Tab Bar - จำกัด 5 เมนู) */}
         <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
@@ -4115,241 +4095,184 @@ function App() {
         {activeTab === 'home' && (
           <div className="space-y-4">
 
-            {/* 1. ภาพรวมวันนี้ */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🚜 รายการงานวันนี้</span>
-                <span className="text-2xl font-black text-gray-900">
-                  {todaySummaryJobs.length} <span className="text-sm font-normal">งาน</span>
-                </span>
-                <span className="text-[11px] font-bold text-slate-600 mt-1 text-center">
-                  ✅ ปิดแล้ว {todayCompletedCount} • 🚜 นัด {scheduledTodayJobs.length}{todayAwaitingCount > 0 ? ` • 📐 รอไร่ ${todayAwaitingCount}` : ''}
-                </span>
+            {/* 1. ภาพรวมวันนี้ — บอกตัวเลขหนึ่งความหมายต่อการ์ด ไม่รวมยอดคิวกับยอดทำจริงเป็นเลขเดียว */}
+            <section aria-label="ภาพรวมงานวันนี้" className="grid grid-cols-2 gap-3">
+              <div className="flex min-h-[122px] flex-col rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+                <p className="text-xs font-bold text-slate-600">🚜 งานวันนี้</p>
+                <p className="mt-2 text-3xl font-black leading-none tabular-nums text-slate-900">
+                  {todaySummaryJobs.length}<span className="ml-1 text-sm font-semibold text-slate-500">งาน</span>
+                </p>
+                <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">ปิดแล้ว {todayCompletedCount} · ยังไม่ปิด {todaySummaryJobs.length - todayCompletedCount}</p>
               </div>
 
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                <span className="text-slate-600 text-xs font-bold mb-1">🌾 พื้นที่งานวันนี้</span>
-                <span className="text-2xl font-black text-emerald-600 leading-none">{formatRaiNgan(todayOnlyArea)}</span>
-                <span className="mt-2 text-[11px] font-black text-emerald-800 text-center">
-                  ✅ เกี่ยวจริง {formatRaiNgan(todayMeasuredArea)}
-                </span>
-                {todayPendingArea > 0.0125 && (
-                  <span className="text-[11px] font-bold text-blue-800 text-center">🆕 คิวที่ยังไม่ลงรอบ {formatRaiNgan(todayPendingArea)}</span>
-                )}
-                {todayUnknownAreaCount > 0 && (
-                  <span className="mt-1 text-[10px] sm:text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-300 text-center">
-                    ⏳ อีก {todayUnknownAreaCount} คิวรอระบุพื้นที่
-                  </span>
-                )}
+              <div className="flex min-h-[122px] flex-col rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3.5 shadow-sm">
+                <p className="text-xs font-bold text-emerald-900">🌾 เกี่ยวจริงวันนี้</p>
+                <p className="mt-2 text-xl font-black leading-tight text-emerald-800 sm:text-2xl">{formatRaiNgan(todayMeasuredArea)}</p>
+                <div className="mt-auto pt-2 text-[11px] font-semibold text-emerald-900">
+                  {todayPendingArea > 0.0125 && <span className="block">รอลงรอบ {formatRaiNgan(todayPendingArea)}</span>}
+                  {todayUnknownAreaCount > 0 && <span className="block">รอระบุพื้นที่ {todayUnknownAreaCount} คิว</span>}
+                  {todayPendingArea <= 0.0125 && todayUnknownAreaCount === 0 && <span>ตามรอบงานที่บันทึกแล้ว</span>}
+                </div>
               </div>
 
               {userRole === 'BOSS' && (
-                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center justify-center text-center">
-                  <span className="text-slate-600 text-xs font-bold mb-1">💰 ยอดงานที่ปิดวันนี้</span>
-                  <span className="text-2xl font-black text-blue-600">
-                    {Math.round(todayBilledValue).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
-                  </span>
-                  <span className="text-[11px] text-slate-600 mt-1 text-center">
-                    ปิดแล้ว {todayCompletedCount} งาน • ตามไร่ที่ตกลง (ก่อนส่วนลด)
-                  </span>
-                  {todayUnclosedEstimate > 0 && (
-                    <span className="text-[11px] text-blue-800 font-bold text-center">คิวที่ยังไม่ปิด ~{Math.round(todayUnclosedEstimate).toLocaleString('th-TH')} ฿</span>
-                  )}
-                  {todayClosedPaidCount > 0 && (
-                    <span className="text-[11px] text-emerald-700 font-bold text-center">✅ ในงานที่ปิดวันนี้ ชำระครบ {todayClosedPaidCount} งาน</span>
-                  )}
+                <div className="flex min-h-[118px] flex-col rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+                  <p className="text-xs font-bold text-slate-600">💰 ยอดงานที่ปิดวันนี้</p>
+                  <p className="mt-2 text-2xl font-black leading-none tabular-nums text-blue-700">
+                    {Math.round(todayBilledValue).toLocaleString('th-TH')}<span className="ml-1 text-sm font-semibold">฿</span>
+                  </p>
+                  <p className="mt-auto pt-2 text-[11px] text-slate-600">ยอดบิลก่อนส่วนลด · {todayCompletedCount} งาน</p>
                 </div>
               )}
 
               {userRole === 'BOSS' && (
-              <div
-                onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                className={`bg-red-100 p-4 rounded-xl shadow-sm border border-orange-300 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-red-100 transition ${userRole === 'BOSS' ? '' : 'col-span-2'}`}
-              >
-                <span className="text-red-800 text-xs font-bold mb-1">💸 ลูกหนี้ค้าง</span>
-                <span className="text-2xl font-black text-red-600">
-                  {Math.round(totalDebtValue).toLocaleString('th-TH')} <span className="text-sm font-normal">฿</span>
-                </span>
-                <span className="text-xs text-red-500 mt-1">{debtorCustomerCount} ราย • แตะเพื่อดู</span>
-              </div>
+                <button
+                  type="button"
+                  onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
+                  aria-label={`เปิดบัญชีลูกหนี้ค้าง ${debtorCustomerCount} ราย`}
+                  className={`flex min-h-[118px] flex-col rounded-2xl border p-3.5 text-left shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 ${totalDebtValue > 0 ? 'border-rose-200 bg-rose-50/70' : 'border-emerald-200 bg-emerald-50/70'}`}
+                >
+                  <p className={`text-xs font-bold ${totalDebtValue > 0 ? 'text-rose-900' : 'text-emerald-900'}`}>💸 ลูกหนี้ค้าง</p>
+                  <p className={`mt-2 text-2xl font-black leading-none tabular-nums ${totalDebtValue > 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                    {Math.round(totalDebtValue).toLocaleString('th-TH')}<span className="ml-1 text-sm font-semibold">฿</span>
+                  </p>
+                  <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">{debtorCustomerCount > 0 ? `${debtorCustomerCount} ราย · เปิดบัญชี →` : 'ไม่มีลูกหนี้ค้าง'}</p>
+                </button>
               )}
-            </div>
+            </section>
 
-            {/* 2. รถเกี่ยว */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="bg-gray-800 px-4 py-2.5 flex justify-between items-center">
-                <h3 className="font-bold text-white text-sm">🚜 รถเกี่ยว</h3>
-                <span className="text-xs font-bold text-sky-300">🛰️ GPS</span>
+            {/* 2. รถเกี่ยว — จับคู่รถกับงานที่กำลังทำจริง */}
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <h2 className="text-sm font-black text-slate-900">🚜 สถานะรถเกี่ยว</h2>
+                {vehicles.length > 1 && <span className="text-xs font-semibold text-slate-500">{vehicles.length} คัน</span>}
               </div>
-
               <div className="p-4">
-                <div className="flex justify-between items-start gap-3">
+                <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <h4 className="font-black text-lg text-gray-900">{mainVehicle?.name || 'รถเกี่ยว 1'}</h4>
-                    <p className="text-xs text-slate-600 font-semibold mt-0.5">
-                      👨‍🌾 คนขับ: {mainVehicle?.driver_name || 'ยังไม่ระบุ'}
-                    </p>
+                    <p className="truncate text-base font-black text-slate-900">{mainVehicle?.name || 'ยังไม่มีรถเกี่ยว'}</p>
+                    <p className="mt-0.5 text-xs font-medium text-slate-600">คนขับ: {mainVehicle?.driver_name || 'ยังไม่ระบุ'}</p>
                   </div>
-                  <button
+                  {mainVehicle && <button
+                    type="button"
                     onClick={() => {
                       setActiveTab('gps');
                       setTrackingMode('realtime');
-                      if (mainVehicle) setTrackingVehicleId(String(mainVehicle.id));
+                      setTrackingVehicleId(String(mainVehicle.id));
                     }}
-                    className="bg-white text-blue-800 hover:bg-blue-50 px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm whitespace-nowrap"
-                  >
-                    📍 ดู GPS
-                  </button>
+                    className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-800 transition hover:bg-blue-100"
+                  >🛰️ เปิด GPS →</button>}
                 </div>
-
-                <div className={`mt-3 p-3 rounded-xl border flex items-center gap-3 ${activeJobNow ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
-                  <div className="text-3xl">
-                    {activeJobNow
-                      ? (activeJobNow.crop_type === 'ข้าวโพด' ? '🌽' : activeJobNow.crop_type === 'ถั่ว' ? '🥜' : '🌾')
-                      : '☕'}
-                  </div>
+                <div className={`mt-3 flex items-center gap-3 rounded-xl border p-3 ${activeJobNow ? 'border-blue-200 bg-blue-50/70' : 'border-slate-200 bg-slate-50'}`}>
+                  <span className="text-2xl" aria-hidden="true">{activeJobNow ? (activeJobNow.crop_type === 'ข้าวโพด' ? '🌽' : activeJobNow.crop_type === 'ถั่ว' ? '🥜' : '🌾') : '☕'}</span>
                   <div className="min-w-0">
-                    <span className={`block text-xs font-bold ${activeJobNow ? 'text-blue-800' : 'text-slate-600'}`}>
-                      {activeJobNow ? `กำลังเกี่ยว • ${activeJobNow.crop_type || 'ข้าว'}` : 'สแตนด์บาย'}
-                    </span>
-                    <span className="block font-black text-gray-900 text-sm truncate mt-0.5">
-                      {activeJobNow ? activeJobNow.customers?.name || 'ไม่ระบุลูกค้า' : 'รอรับคิวงานถัดไป'}
-                    </span>
-                    {activeJobNow && (
-                      <span className="block text-xs text-slate-600 font-semibold mt-0.5">
-                        {Number(activeJobNow.gps_summary?.area_rai || 0) > 0 ? '🛰️ GPS ' : '🗣️ ประมาณ '}
-                        {formatRaiNgan(queueAreaRai(activeJobNow))}
-                      </span>
-                    )}
+                    <p className={`text-xs font-bold ${activeJobNow ? 'text-blue-800' : 'text-slate-600'}`}>{activeJobNow ? 'กำลังเกี่ยว' : 'ยังไม่มีงานที่กำลังเกี่ยว'}</p>
+                    <p className="mt-0.5 truncate text-sm font-black text-slate-900">{activeJobNow?.customers?.name || 'รอคิวงานถัดไป'}</p>
+                    {activeJobNow && <p className="mt-0.5 text-xs font-medium text-slate-600">{activeJobNow.crop_type || 'ข้าว'} · {Number(activeJobNow.gps_summary?.area_rai || 0) > 0 ? 'พื้นที่ GPS' : 'พื้นที่ประมาณ'} {formatRaiNgan(queueAreaRai(activeJobNow))}</p>}
                   </div>
                 </div>
               </div>
-            </div>
+            </section>
 
-            {/* 3. งานที่ต้องจัดการ */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-              <div className="flex justify-between items-center mb-3">
-                <div>
-                  <h3 className="font-bold text-gray-800 text-sm">🚜 งานเกี่ยวที่ต้องติดตาม</h3>
-                  <p className="text-xs text-slate-600 mt-0.5">นัดวันนี้ {scheduledTodayJobs.length} · งานก่อนหน้า {carryJobs.length} · ยังไม่รวมงานรอยืนยันไร่</p>
-                </div>
-                <button onClick={() => setActiveTab('active')} className="text-xs text-orange-600 font-bold hover:underline">
-                  ทั้งหมด {todayJobs.length} ▶
-                </button>
+            {/* 3. งานติดตาม — ชื่อ / สถานะ / พื้นที่วันนี้ / ยอดสะสม ไม่โชว์ GPS ซ้ำกับยอดสะสม */}
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-black text-slate-900">🚜 งานเกี่ยวที่ต้องติดตาม <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{todayJobs.length}</span></h2>
+                <button type="button" onClick={() => setActiveTab('active')} className="shrink-0 text-xs font-bold text-blue-700 hover:underline">ดูคิวทั้งหมด →</button>
               </div>
-
               {todayJobs.length === 0 ? (
-                <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                  <p className="text-slate-600 font-bold text-sm">ไม่มีงานที่ต้องจัดการตอนนี้ 🍃</p>
-                </div>
+                <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-5 text-center text-sm font-semibold text-slate-600">ไม่มีงานที่ต้องติดตามขณะนี้</p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {todayJobs.map(job => {
                     const jobDate = new Date(job.job_date);
-                    const isToday = !Number.isNaN(jobDate.getTime()) && jobDate >= todayStart && jobDate < tomorrowStart;
-                    const dateText = Number.isNaN(jobDate.getTime()) ? '-' : `${jobDate.getDate()}/${jobDate.getMonth() + 1}`;
-                    const timeText = Number.isNaN(jobDate.getTime()) ? '--:--' : jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+                    const hasJobDate = !Number.isNaN(jobDate.getTime());
+                    const isToday = hasJobDate && jobDate >= todayStart && jobDate < tomorrowStart;
+                    const timeLabel = hasJobDate
+                      ? `${isToday ? '' : `${jobDate.getDate()}/${jobDate.getMonth() + 1} · `}${jobDate.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}`
+                      : 'ยังไม่ระบุเวลานัด';
                     const ws = getJobWorkSummary(job);
                     const dayArea = getQueueDayAreaInfo(job, todayStart, tomorrowStart);
-
-                    return (
-                      <div
-                        key={job.id}
-                        onClick={() => {
-                          setActiveTab('active');
-                          setExpandedId(job.id);
-                          setTimeout(() => {
-                            const targetCard = document.getElementById(`job-card-${job.id}`);
-                            if (targetCard) targetCard.scrollIntoView({ behavior:'smooth', block:'center' });
-                          }, 120);
-                        }}
-                        className="flex flex-wrap items-center gap-y-2 p-3 rounded-xl border border-slate-200 bg-white hover:bg-gray-50 shadow-sm cursor-pointer transition"
-                      >
-                        <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3">
-                          {!isToday && <span className="block text-xs font-black text-gray-800">{dateText}</span>}
-                          <span className="block text-xs font-black text-gray-800">{timeText}</span>
-                          {!isToday && (
-                            <span className={`text-xs font-bold block mt-1 ${job.status === 'PAUSED' ? 'text-orange-800' : 'text-red-500'}`}>
-                              {job.status === 'PAUSED' ? 'รอนัด' : job.status === 'IN_PROGRESS' ? 'กำลังทำ' : 'ค้าง'}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex-1 text-center min-w-0 px-1">
-                          <p className="text-sm font-black text-gray-900 truncate">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
-                          <p className="text-xs text-slate-600 font-semibold mt-1">
-                            {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'}{' '}
-                            {Number(job.gps_summary?.area_rai || 0) > 0
-                              ? `🛰️ GPS สะสมทั้งคิว ${Number(job.gps_summary?.plot_count || 0)} แปลง • ${formatRaiNgan(job.gps_summary.area_rai)}`
-                              : job.area_size ? `🗣️ ประมาณทั้งคิว ~${formatRaiNgan(job.area_size)}` : 'ยังไม่มีพื้นที่รวม'}
-                          </p>
-                          {dayArea.notRecordedYet > 0.0125 && (
-                            <p className="text-xs text-blue-800 font-black mt-0.5">
-                              🆕 พื้นที่เพิ่มที่ยังไม่ลงรอบ {formatRaiNgan(dayArea.notRecordedYet)}{dayArea.source === 'ESTIMATE' ? ' • ยอดประมาณ' : ''}
-                            </p>
-                          )}
-                          {dayArea.measuredToday > 0.0125 && (
-                            <p className="text-xs text-emerald-700 font-black mt-0.5">
-                              ✅ ปิดรอบวันนี้แล้ว {formatRaiNgan(dayArea.measuredToday)}
-                            </p>
-                          )}
-                          {dayArea.needsArea && (
-                            <p className="text-xs text-orange-800 font-black mt-0.5">⏳ รอระบุพื้นที่รอบนี้ • ไม่รวมยอดเก่า</p>
-                          )}
-                          {ws.roundCount > 0 && (
-                            <p className="text-xs text-emerald-700 font-black mt-0.5">
-                              ✅ ทำสะสมทุกรอบ {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="w-full text-right">
-                          {job.status === 'IN_PROGRESS' ? (
-                            <span className="bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-lg text-xs font-bold">กำลังเกี่ยว</span>
-                          ) : job.status === 'PAUSED' ? (
-                            <span className="bg-orange-100 text-orange-950 border border-orange-300 px-2.5 py-1.5 rounded-lg text-xs font-bold">
-                              {jobDate > new Date() ? '📅 นัดเกี่ยวต่อ' : '⏸ รอลูกค้านัด'}
-                            </span>
-                          ) : (
-                            <span className="bg-gray-100 text-gray-600 px-2.5 py-1.5 rounded-lg text-xs font-bold">รอคิว</span>
-                          )}
-                        </div>
+                    const gpsCount = job.gps_summary_error ? 0 : Number(job.gps_summary?.plot_count || 0);
+                    const hasMeasuredToday = dayArea.measuredToday > 0.0125;
+                    const hasPendingArea = dayArea.notRecordedYet > 0.0125;
+                    const showCumulative = ws.measuredArea > 0.0125 && (!hasMeasuredToday || Math.abs(ws.measuredArea - dayArea.measuredToday) > 0.0125);
+                    const statusText = job.status === 'IN_PROGRESS' ? 'กำลังเกี่ยว'
+                      : job.status === 'PAUSED' ? (hasJobDate && jobDate > new Date() ? 'นัดเกี่ยวต่อ' : 'รอลูกค้านัด') : 'รอคิว';
+                    const statusClass = job.status === 'IN_PROGRESS' ? 'border-blue-200 bg-blue-50 text-blue-800'
+                      : job.status === 'PAUSED' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-700';
+                    return <button
+                      type="button"
+                      key={job.id}
+                      onClick={() => {
+                        setActiveTab('active');
+                        setExpandedId(job.id);
+                        setTimeout(() => {
+                          const card = document.getElementById(`job-card-${job.id}`);
+                          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 120);
+                      }}
+                      aria-label={`เปิดคิว ${job.customers?.name || 'ไม่ระบุลูกค้า'} สถานะ${statusText}`}
+                      className="block w-full rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-blue-300 hover:bg-blue-50/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="min-w-0 flex-1 truncate text-sm font-black text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
+                        <span className={`shrink-0 rounded-lg border px-2 py-1 text-[11px] font-bold ${statusClass}`}>{statusText}</span>
                       </div>
-                    );
+                      <p className="mt-1 truncate text-xs font-medium text-slate-600">
+                        {timeLabel} · {job.crop_type === 'ข้าวโพด' ? '🌽' : job.crop_type === 'ถั่ว' ? '🥜' : '🌾'} {job.crop_type || 'ข้าว'}{gpsCount > 0 ? ` · GPS ${gpsCount} แปลง` : ''}{ws.roundCount > 0 ? ` · ${ws.roundCount} รอบ` : ''}
+                      </p>
+                      {(hasMeasuredToday || hasPendingArea || showCumulative) ? (
+                        <div className="mt-2.5 flex flex-wrap gap-x-5 gap-y-2 border-t border-slate-100 pt-2.5">
+                          {hasMeasuredToday && <div>
+                            <span className="block text-[11px] font-semibold text-emerald-700">เกี่ยววันนี้</span>
+                            <span className="block text-base font-black text-emerald-800">{formatRaiNgan(dayArea.measuredToday)}</span>
+                          </div>}
+                          {showCumulative && <div>
+                            <span className="block text-[11px] font-semibold text-slate-500">ทำสะสม</span>
+                            <span className="block text-base font-black text-slate-900">{formatRaiNgan(ws.measuredArea)}</span>
+                          </div>}
+                          {hasPendingArea && <div>
+                            <span className="block text-[11px] font-semibold text-blue-700">พื้นที่รอลงรอบ{dayArea.source === 'ESTIMATE' ? ' (ประมาณ)' : ''}</span>
+                            <span className="block text-base font-black text-blue-800">{formatRaiNgan(dayArea.notRecordedYet)}</span>
+                          </div>}
+                        </div>
+                      ) : <p className="mt-2 text-xs font-semibold text-amber-800">{dayArea.needsArea ? 'รอระบุพื้นที่รอบนี้' : 'ยังไม่มีพื้นที่ที่บันทึก'}</p>}
+                    </button>;
                   })}
                 </div>
               )}
-            </div>
+            </section>
 
-            {awaitingAreaJobs.length > 0 && <section className="bg-white rounded-xl border border-violet-300 p-4 space-y-3">
-              <h3 className="font-black text-violet-950 text-base">📐 เกี่ยวเสร็จ · รอยืนยันไร่ {awaitingAreaJobs.length} งาน</h3>
-              <p className="text-sm text-slate-700">ไม่ต้องไปเกี่ยวต่อ • ค่าแรงรอบที่ยังไม่ปิดจะลงเมื่อเถ้าแก่ยืนยันไร่</p>
-              {awaitingAreaJobs.map(job => {
-                const ws = getJobWorkSummary(job);
-                const gpsCount = Number(job.gps_summary?.plot_count || 0);
-                const crew = [...new Set(ws.rounds.flatMap(r => wageNames(r.workers)))];
-                const lastRound = ws.rounds[ws.rounds.length - 1];
-                const date = lastRound?.work_date ? new Date(lastRound.work_date) : null;
-                const validDate = date && !Number.isNaN(date.getTime());
-                return <button key={job.id} onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 150); }} className="w-full flex flex-wrap items-center gap-y-2 p-3 rounded-xl border border-violet-200 bg-white hover:bg-violet-50 shadow-sm text-left">
-                  <div className="w-16 shrink-0 text-center border-r border-gray-200 pr-3 mr-3">
-                    <span className="block text-xs font-black text-gray-800">{validDate ? `${date.getDate()}/${date.getMonth() + 1}` : '—'}</span>
-                    <span className="block text-xs text-violet-800 font-bold mt-1">เกี่ยวเสร็จ</span>
-                  </div>
-                  <div className="flex-1 text-center min-w-0 px-1">
-                    <p className="text-sm font-black text-gray-900 truncate">{job.customers?.name || 'ไม่ระบุลูกค้า'}</p>
-                    <p className="text-xs text-slate-600 font-semibold mt-1">{job.gps_summary_error ? '🛰️ โหลด GPS ไม่สำเร็จ' : gpsCount > 0 ? `🛰️ GPS ${gpsCount} แปลง • ${formatRaiNgan(job.gps_summary?.area_rai)}` : '🛰️ ยังไม่มีแปลง GPS'}</p>
-                    <p className="text-xs text-emerald-700 font-black mt-0.5">✅ ทำสะสม {formatRaiNgan(ws.measuredArea)} • {ws.roundCount} รอบ</p>
-                    <p className="text-xs text-slate-700 mt-1 truncate" title={crew.join(', ')}>👷 {crew.join(', ') || 'ยังไม่ระบุคนทำงาน'}</p>
-                  </div>
-                  <div className="w-full text-right"><span className="inline-block bg-violet-100 text-violet-950 border border-violet-300 px-2.5 py-1.5 rounded-lg text-xs font-bold">รอยืนยันไร่ →</span></div>
-                </button>;
-              })}
+            {awaitingAreaJobs.length > 0 && <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-sm font-black text-violet-950">📐 เกี่ยวเสร็จ · รอยืนยันไร่</h2>
+                <span className="shrink-0 rounded-lg bg-violet-100 px-2 py-1 text-xs font-black text-violet-900">{awaitingAreaJobs.length} งาน</span>
+              </div>
+              <div className="space-y-2.5">
+                {awaitingAreaJobs.map(job => {
+                  const ws = getJobWorkSummary(job);
+                  const gpsCount = job.gps_summary_error ? 0 : Number(job.gps_summary?.plot_count || 0);
+                  return <button
+                    type="button"
+                    key={job.id}
+                    onClick={() => { setActiveTab('active'); setExpandedId(job.id); setTimeout(() => document.getElementById(`job-card-${job.id}`)?.scrollIntoView({ behavior:'smooth', block:'center' }), 150); }}
+                    className="block w-full rounded-xl border border-violet-200 bg-violet-50/30 p-3 text-left transition hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-sm font-black text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</span>
+                      <span className="shrink-0 text-xs font-bold text-violet-800">เปิดคิว →</span>
+                    </div>
+                    <p className="mt-1 text-xs font-medium text-slate-600">{gpsCount > 0 ? `🛰️ GPS ${gpsCount} แปลง · ` : ''}{ws.roundCount} รอบ</p>
+                    <p className="mt-2 text-base font-black text-emerald-800">ทำสะสม {formatRaiNgan(ws.measuredArea)}</p>
+                  </button>;
+                })}
+              </div>
             </section>}
 
-            {/* 4. แจ้งเตือน — สิ่งที่ต้องจัดการมาก่อนอากาศ */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-              <h3 className="font-bold text-gray-800 text-sm mb-3">🔔 แจ้งเตือน</h3>
+            {/* 4. แจ้งเตือนแบบย่อและพยากรณ์อากาศ — ไม่ขยายการ์ดเมื่อไม่มีเรื่องด่วน */}
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-3 text-sm font-black text-slate-900">🔔 สภาพอากาศและแจ้งเตือน</h2>
               <div className="space-y-2">
 
                 {overdueJobs.length > 0 && (
@@ -4365,14 +4288,9 @@ function App() {
                   </div>
                 )}
 
-                {overdueJobs.length === 0 && (
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
-                    <p className="text-xs font-black text-emerald-800">✅ ไม่มีรายการเร่งด่วน</p>
-                  </div>
-                )}
 
                 {/* 🌤️ อากาศแบบย่อ — พยากรณ์ 24 ชม. เปิดดูเมื่ออยากดู */}
-                <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-200">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                   <div className="flex justify-between items-start gap-2 border-b border-blue-100 pb-2">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-blue-900">🌤️ สภาพอากาศ</p>
@@ -4451,7 +4369,7 @@ function App() {
                   )}
                 </div>
               </div>
-            </div>
+            </section>
           </div>
         )}
 
