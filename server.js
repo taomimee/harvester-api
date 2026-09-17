@@ -1120,6 +1120,8 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
 
     let roundId = null;
     let jobSnapshot = null;
+    let finalizeStage = 'load_job';
+    let fallbackStatusChanged = false;
     try {
         const { data: job, error: jobError } = await supabase
             .from('jobs')
@@ -1132,6 +1134,7 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         if (job.status === 'DONE') return res.status(400).json({ error: 'งานนี้ปิดจบไปแล้ว' });
         jobSnapshot = { ...job };
 
+        finalizeStage = 'load_rounds';
         const { data: priorRounds, error: roundsError } = await supabase
             .from('job_work_rounds')
             .select('*')
@@ -1144,6 +1147,10 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         // เพื่อให้: เพิ่มรอบสุดท้าย + แบ่งค่าแรง + สร้างสมุด + ปิด job เป็น transaction เดียวจริง ๆ
         const hasLegacyPostedWage = (priorRounds || []).some(r => r.wage_transaction_id);
         if (!hasLegacyPostedWage) {
+            // New jobs MUST remain atomic: Supabase rolls back the *entire* RPC if it fails.
+            // In particular, PG 42883 is a database type mismatch, NOT permission to use the
+            // non-transactional fallback (which can corrupt the awaiting-area status).
+            finalizeStage = 'finalize_job_atomic';
             const { data: atomicResult, error: atomicError } = await supabase.rpc('finalize_job_atomic', {
                 p_job_id: jobId,
                 p_today_measured: todayMeasured,
@@ -1153,15 +1160,26 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
                 p_note: String(note || '').trim(),
                 p_measured_source: String(measured_source || 'MANUAL')
             });
-
-            if (!atomicError && atomicResult?.success) {
-                return res.json(atomicResult);
+            if (atomicError) {
+                const dbFailure = new Error(atomicError.code === '42883'
+                    ? 'Supabase ปิดงานไม่สำเร็จ: ชนิดข้อมูล integer กับ text ในฟังก์ชัน/Trigger ฐานข้อมูลไม่ตรงกัน (42883) — หยุดก่อนเปลี่ยนสถานะและลงค่าแรง กรุณาตรวจ SQL ฐานข้อมูล'
+                    : `Supabase ปิดงานแบบ Atomic ไม่สำเร็จ: ${atomicError.message}`);
+                dbFailure.code = atomicError.code || 'ATOMIC_FINALIZE_FAILED';
+                dbFailure.dbMessage = atomicError.message;
+                dbFailure.dbDetails = atomicError.details;
+                dbFailure.dbHint = atomicError.hint;
+                throw dbFailure;
             }
-
-            // ยังไม่ได้รัน SQL setup / ไม่มีสิทธิ์ execute => ใช้ fallback เดิมที่มี rollback ชดเชย
-            const canFallback = atomicError && ['PGRST202', '42883', '42501'].includes(atomicError.code);
-            if (atomicError && !canFallback) throw atomicError;
+            if (!atomicResult?.success) {
+                const dbFailure = new Error('ฟังก์ชัน finalize_job_atomic ไม่ยืนยันว่าปิดงานสำเร็จ ระบบจึงหยุดโดยไม่ใช้วิธีสำรอง');
+                dbFailure.code = 'ATOMIC_RESULT_UNCONFIRMED';
+                throw dbFailure;
+            }
+            return res.json(atomicResult);
         }
+        // Existing, already-posted legacy wage rounds retain the separate reconciliation
+        // path; never route a failed new-job atomic request into this branch.
+        finalizeStage = 'legacy_preflight';
 
         const priorMeasuredArea = (priorRounds || []).reduce((sum, r) => sum + (Number(r.measured_area) || 0), 0);
         const priorWageArea = (priorRounds || []).reduce((sum, r) => sum + (Number(r.wage_area) || 0), 0);
@@ -1177,6 +1195,7 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         // เพิ่มรอบสุดท้ายเฉพาะเมื่อวันนี้มีทำงานเพิ่ม
         // หรือเป็นงานที่ไม่มีรอบเดิมเลยแต่ต้องลงค่าแรงจากยอดลูกค้า
         if (todayMeasured > 0 || ((!priorRounds || priorRounds.length === 0) && billingArea > 0)) {
+            finalizeStage = 'legacy_insert_round';
             const { data: round, error: roundError } = await supabase
                 .from('job_work_rounds')
                 .insert([{
@@ -1200,11 +1219,13 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         const pricePerRai = Math.max(0, Number(job.price_per_rai) || 0);
         const totalPrice = billingArea * pricePerRai;
 
-        // ปิดการ์ดก่อน แล้วค่อยลงสมุดค่าแรง เพื่อให้ helper รู้ว่านี่คือการปิดจริง
+        // Legacy only: remember the whole pre-close status, including awaiting_area_confirmation.
+        finalizeStage = 'legacy_update_job';
         const { data: updatedJob, error: updateError } = await supabase
             .from('jobs')
             .update({
                 status: 'DONE',
+                awaiting_area_confirmation: false,
                 billing_area: billingArea,
                 total_price: totalPrice,
                 job_date: nowIso,
@@ -1215,24 +1236,13 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
             .single();
 
         if (updateError) throw updateError;
+        fallbackStatusChanged = true;
 
-        let wageReconciliation;
-        try {
-            // ✅ จุดเดียวที่สร้างบิลค่าแรงที่ยังขาด: ตอน 🏁 จบงานทั้งหมด
-            wageReconciliation = await reconcileJobWageArea(jobId, billingArea, { postMissingTransactions: true });
-        } catch (wageErr) {
-            // ถ้าลงสมุดค่าแรงไม่สำเร็จ ให้ย้อนสถานะการ์ดกลับ
-            try {
-                await supabase.from('jobs').update({
-                    status: jobSnapshot.status,
-                    billing_area: jobSnapshot.billing_area,
-                    total_price: jobSnapshot.total_price,
-                    job_date: jobSnapshot.job_date,
-                    closed_at: jobSnapshot.closed_at
-                }).eq('id', jobId);
-            } catch (_) {}
-            throw wageErr;
-        }
+        // Legacy reconciliation may require multiple requests. If any step fails,
+        // the outer handler restores the full job snapshot and reports rollback failures.
+        finalizeStage = 'legacy_reconcile_wage';
+        const wageReconciliation = await reconcileJobWageArea(jobId, billingArea, { postMissingTransactions: true });
+        finalizeStage = 'legacy_audit';
 
         await writeJobAudit(jobId, 'FINALIZED', `จบงาน • ทำจริง ${measuredAreaTotal.toFixed(2)} ไร่ • ลูกค้ารับ ${billingArea.toFixed(2)} ไร่ • ค่าแรง ${wageReconciliation.after_area.toFixed(2)} ไร่`, jobSnapshot, updatedJob);
 
@@ -1254,11 +1264,46 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
             }
         });
     } catch (err) {
-        if (roundId) {
-            try { await supabase.from('job_work_rounds').delete().eq('id', roundId); } catch (_) {}
+        // Never try compensating writes after a failed atomic RPC: PostgreSQL has
+        // rolled back that entire call. The old bug continued into the fallback.
+        const failedStage = finalizeStage;
+        let restoreError = null;
+        if (fallbackStatusChanged && jobSnapshot) {
+            try {
+                const { data: restored, error: rollbackError } = await supabase.from('jobs').update({
+                    status: jobSnapshot.status,
+                    awaiting_area_confirmation: jobSnapshot.awaiting_area_confirmation === true,
+                    billing_area: jobSnapshot.billing_area,
+                    total_price: jobSnapshot.total_price,
+                    job_date: jobSnapshot.job_date,
+                    closed_at: jobSnapshot.closed_at
+                }).eq('id', jobId).select('status,awaiting_area_confirmation').maybeSingle();
+                if (rollbackError || !restored || restored.status !== jobSnapshot.status ||
+                    restored.awaiting_area_confirmation !== (jobSnapshot.awaiting_area_confirmation === true)) {
+                    restoreError = rollbackError?.message || 'คืนสถานะ/ธงรอยืนยันไร่ไม่ครบ กรุณาตรวจคิวก่อนทำรายการอื่น';
+                }
+            } catch (rollbackException) {
+                restoreError = rollbackException.message || 'ย้อนสถานะงานล้มเหลว';
+            }
         }
-        console.error('Finalize Job Error:', err.message);
-        res.status(500).json({ error: err.message, code: err.code || 'FINALIZE_FAILED' });
+        if (roundId && !restoreError) {
+            try {
+                const { error: deleteError } = await supabase.from('job_work_rounds').delete().eq('id', roundId);
+                if (deleteError) restoreError = `ลบรอบชั่วคราวไม่สำเร็จ: ${deleteError.message}`;
+            } catch (deleteException) { restoreError = `ลบรอบชั่วคราวไม่สำเร็จ: ${deleteException.message}`; }
+        }
+        console.error('Finalize Job Error:', {
+            jobId, stage: failedStage, code: err.code, message: err.message,
+            dbMessage: err.dbMessage, details: err.dbDetails, hint: err.dbHint, restoreError
+        });
+        const error = restoreError
+            ? `ระบบปิดงานผิดพลาดและย้อนข้อมูลไม่ครบ: ${restoreError} — หยุดกดซ้ำและตรวจสอบรายการก่อน`
+            : err.message;
+        res.status(500).json({
+            error, code: restoreError ? 'FINALIZE_ROLLBACK_UNCONFIRMED' : err.code || 'FINALIZE_FAILED',
+            stage: restoreError ? 'legacy_restore_failed' : failedStage,
+            job_unchanged_by_atomic_failure: failedStage === 'finalize_job_atomic'
+        });
     }
 });
 
