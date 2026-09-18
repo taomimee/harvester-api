@@ -75,14 +75,22 @@ const plotPreviewPaths = geometry => {
   const x0 = (104 - width * scale) / 2, y0 = (68 - height * scale) / 2;
   return polygons.map(rings => rings.map(ring => ring.map((p, i) => `${i ? 'L' : 'M'}${(x0 + (p[0] - minX) * correction * scale).toFixed(2)},${(y0 + (maxY - p[1]) * scale).toFixed(2)}`).join(' ') + ' Z').join(' '));
 };
-function JobPlotPreviews({ plots, onOpen, onAll }) {
+function JobPlotPreviews({ plots, receipts = [], fullyPaid = false, onOpen, onAll }) {
+  const paidPlotKeys = new Set((Array.isArray(receipts) ? receipts : [])
+    .filter(receipt => receipt.mode === 'PLOTS')
+    .flatMap(receipt => Array.isArray(receipt.items) ? receipt.items : [])
+    .map(item => item.key).filter(Boolean));
   if (!Array.isArray(plots) || !plots.length) return null;
   return <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50/50 p-2.5" onClick={e => e.stopPropagation()}>
     <div className="flex items-center justify-between gap-2 mb-2"><span className="text-xs font-bold text-sky-950">🛰️ ขอบแปลง GPS</span><button type="button" onClick={onAll} className="text-xs font-bold text-blue-800 underline">ดูทั้งหมด {plots.length} แปลง</button></div>
     <div className="grid grid-cols-3 gap-2">{plots.slice(0,3).map((plot, i) => {
       const paths = plotPreviewPaths(plot.preview_geometry);
-      return <button type="button" key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} onClick={() => onOpen(plot)} className="min-w-0 overflow-hidden rounded-lg border border-sky-200 bg-white text-left" aria-label={`เปิดแผนที่ ${plot.name || `แปลง ${i+1}`}`}>
+      const isPaid = fullyPaid || paidPlotKeys.has(plotPaymentKey(plot));
+      return <button type="button" key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} onClick={() => onOpen(plot)} className="min-w-0 overflow-hidden rounded-lg border border-sky-200 bg-white text-left" aria-label={`เปิดแผนที่ ${plot.name || `แปลง ${i+1}`}${isPaid ? ' · จ่ายแล้ว' : ''}`}>
+        <div className="relative h-16">
         {paths.length ? <svg viewBox="0 0 104 68" className="w-full h-16 bg-slate-50" role="img" aria-label="รูปขอบแปลงจริงจาก GPS"><path d="M0 17H104 M0 34H104 M0 51H104 M26 0V68 M52 0V68 M78 0V68" stroke="#e2e8f0" strokeWidth="0.5" />{paths.map((d, n) => <path key={n} d={d} fill="#bbf7d0" fillRule="evenodd" stroke="#15803d" strokeWidth="1.5" />)}</svg> : <div className="h-16 flex items-center justify-center text-xs text-slate-600">📍 เปิดแผนที่</div>}
+          {isPaid && <span className="pointer-events-none absolute right-1.5 top-2 -rotate-12 rounded-md border-[3px] border-double border-red-600 bg-white/95 px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-tight font-black whitespace-nowrap text-red-600 shadow-sm">✓ จ่ายแล้ว</span>}
+        </div>
         <span className="block truncate px-1.5 pt-1 text-xs font-bold text-slate-800">{plot.name || `แปลง ${i+1}`}</span>
         <span className="block px-1.5 pb-1 text-xs text-slate-600">{formatRaiNgan(plot.area_rai)}</span>
       </button>;
@@ -213,6 +221,28 @@ const meaningfulNote = value => {
 };
 const plotPaymentKey = p => `${p.vehicle_id}/${p.work_date}/${p.id}`;
 const receivedForJob = j => Number(j.plot_paid_total) > 0 ? Number(j.plot_paid_total) : j.payment_status === 'PAID' ? Number(j.total_price || 0) : j.payment_status === 'DEPOSIT' ? Math.max(0, Number(j.billing_area ?? j.area_size ?? 0) * Number(j.price_per_rai || 0) - Number(j.total_price || 0)) : 0;
+const roundBaht = value => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const getJobSettlement = (job, measuredArea) => {
+  const receipts = Array.isArray(job?.plot_receipts) ? job.plot_receipts : [];
+  const paidItems = receipts.filter(r => r.mode === 'PLOTS').flatMap(r => Array.isArray(r.items) ? r.items : []);
+  const received = Math.max(0, Number(job?.plot_paid_total) || 0);
+  const managed = received > 0 && paidItems.length > 0;
+  const currentPlots = new Map((job?.gps_summary?.plots || []).map(p => [plotPaymentKey(p), p]));
+  let paidGpsArea = 0, paidBillingArea = 0, hasPaidGps = true;
+  for (const item of paidItems) {
+    // Snapshot is authoritative: later GPS edits must not undo an agreed reduction.
+    const gps = item.gps_area ?? currentPlots.get(item.key)?.area_rai;
+    if (gps == null || !Number.isFinite(Number(gps))) hasPaidGps = false;
+    else paidGpsArea += normalizeRaiNganValue(gps);
+    paidBillingArea += Math.max(0, Number(item.area) || 0);
+  }
+  paidBillingArea = Number(paidBillingArea.toFixed(6));
+  paidGpsArea = Number(paidGpsArea.toFixed(6));
+  const measured = normalizeRaiNganValue(measuredArea);
+  const remainingArea = hasPaidGps ? normalizeRaiNganValue(Math.max(0, measured - paidGpsArea)) : null;
+  return { managed, received, paidItems, paidBillingArea, paidGpsArea, hasPaidGps, remainingArea,
+    totalBillingArea: remainingArea == null ? null : Number((paidBillingArea + remainingArea).toFixed(6)) };
+};
 const cleanPhoneForUi = (phone) => {
   const value = String(phone || '').trim();
   return !value || value.startsWith('ไม่มี-') ? '' : value;
@@ -3730,12 +3760,13 @@ function App() {
     const summary = getJobWorkSummary(job);
     const gpsTotal = getJobGpsArea(job);
     const pendingGps = Math.max(0, gpsTotal - summary.measuredArea);
+    const settlement = getJobSettlement(job, Math.max(gpsTotal, summary.measuredArea));
     const useGps = !(mode === 'FINAL' && isAwaitingArea(job)) && Number(job?.gps_summary?.plot_count || 0) > 0 && !job?.gps_summary_error && pendingGps > 0.000001;
     setWorkRoundData({
       measuredArea: useGps ? String(Number(pendingGps.toFixed(6))) : '',
       measuredMode: useGps ? 'GPS' : (mode === 'FINAL' ? 'NONE' : 'MANUAL'),
       // ช่องคิดเงินเก็บเป็น "ไร่" ตาม API เดิม แต่ UI ไม่โชว์เลข GPS ยาว ๆ
-      billingArea: mode === 'FINAL' && gpsTotal > 0 ? String(normalizeRaiNganValue(gpsTotal)) : '',
+      billingArea: mode === 'FINAL' ? (settlement.managed ? (settlement.remainingArea == null ? '' : String(settlement.remainingArea)) : gpsTotal > 0 ? String(normalizeRaiNganValue(gpsTotal)) : '') : '',
       wagePerRai: 60,
       workers: '',
       nextWorkDate: '',
@@ -3817,7 +3848,9 @@ function App() {
     const currentSummary = getJobWorkSummary(job);
     const measuredToday = Math.max(0, Number(workRoundData.measuredArea) || 0);
     const billingRaw = String(workRoundData.billingArea ?? '').trim();
-    const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
+    const enteredBillingArea = billingRaw === '' ? NaN : Number(billingRaw);
+    const settlement = getJobSettlement(job, currentSummary.measuredArea + measuredToday);
+    const billingArea = settlement.managed ? Number((settlement.paidBillingArea + enteredBillingArea).toFixed(6)) : enteredBillingArea;
     const selectedNames = wageNames(workRoundData.workers);
     const workers = selectedNames.map(name => wageProfiles.find(p => p.name === name)?.sourceName || name).join(', ');
     const wagePerRai = 60;
@@ -3830,7 +3863,7 @@ function App() {
       if (measuredToday <= 0) return alert('กรุณาระบุพื้นที่ที่ทำจริงวันนี้ครับ');
       if (!workers) return alert('กรุณาระบุคนที่ลงแปลงวันนี้ครับ');
     } else {
-      if (!Number.isFinite(billingArea) || billingArea < 0) return alert('กรุณาระบุพื้นที่ที่ตกลงคิดเงินกับลูกค้าครับ');
+      if (!Number.isFinite(enteredBillingArea) || enteredBillingArea < 0) return alert(settlement.managed ? 'กรุณาระบุไร่คิดเงินเฉพาะแปลงที่ยังไม่รับเงินครับ' : 'กรุณาระบุพื้นที่ที่ตกลงคิดเงินกับลูกค้าครับ');
       if (measuredToday > 0 && !workers) return alert('วันนี้มีพื้นที่เกี่ยวเพิ่ม กรุณาระบุคนที่รับค่าแรงรอบสุดท้ายครับ');
       if (currentSummary.roundCount === 0 && measuredToday <= 0 && billingArea > 0 && !workers) {
         return alert('ยังไม่มีรอบงานเดิม กรุณาระบุคนที่จะรับค่าแรงก่อนปิดงานครับ');
@@ -3858,6 +3891,7 @@ function App() {
             measured_area: measuredToday,
             measured_source: workRoundData.measuredMode,
             billing_area: billingArea,
+            ...(settlement.managed ? { remaining_billing_area: enteredBillingArea, expected_plot_paid_total: settlement.received, expected_plot_receipt_count: (job.plot_receipts || []).length } : {}),
             workers,
             wage_per_rai: wagePerRai,
             note: workRoundData.note
@@ -3899,7 +3933,8 @@ function App() {
           `👷 แบ่งเข้าค่าแรงรวม: ${formatRaiNgan(s.wage_area_total || 0)}\n` +
           `💰 ลงสมุดค่าแรง: ${Number(s.wage_amount_total || 0).toLocaleString()} บาท\n` +
           `📚 จำนวนรอบค่าแรง: ${Number(s.wage_rounds_posted || 0)} รอบ\n` +
-          `💵 ยอดลูกค้า: ${Number(s.total_price || 0).toLocaleString()} บาท`
+          `💵 ยอดทั้งงาน: ${roundBaht(billingArea * Number(job.price_per_rai || 0)).toLocaleString()} บาท` +
+          (settlement.managed ? `\n✅ รับแล้ว: ${settlement.received.toLocaleString()} บาท\n💳 ค้างเก็บ: ${Math.max(0, roundBaht(billingArea * Number(job.price_per_rai || 0) - settlement.received)).toLocaleString()} บาท` : '')
         );
       }
 
@@ -4767,16 +4802,22 @@ function App() {
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
-                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={openGpsPlot} />
+                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} receipts={job.plot_receipts} fullyPaid={job.status === 'DONE' && job.payment_status === 'PAID'} onAll={() => setGpsJobDetail(job.id)} onOpen={openGpsPlot} />
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
-                            {job.status === 'DONE' ? (job.payment_status === 'PAID' ? 'รับครบแล้ว' : 'ยอดค้าง') : 'ยอดประมาณ'} ({job.price_per_rai || 0} บ./ไร่)
+                            {job.status === 'DONE' ? (job.payment_status === 'PAID' ? 'รับครบแล้ว' : 'ยอดค้าง') : Number(job.plot_paid_total) > 0 ? 'ค้างเก็บประมาณ' : 'ยอดประมาณ'} ({job.price_per_rai || 0} บ./ไร่)
                           </span>
                           <span className="font-bold text-green-800 text-lg">
-                            {Number(job.status === 'DONE' ? job.total_price : (job.gps_summary?.area_rai || job.area_size || 0) * Number(job.price_per_rai || 0)).toLocaleString('th-TH', { maximumFractionDigits: 2 })} บาท
+                            {(() => {
+                              if (job.status === 'DONE') return Number(job.total_price || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 }) + ' บาท';
+                              const basis = Math.max(getJobGpsArea(job), getJobWorkSummary(job).measuredArea) || Number(job.area_size || 0);
+                              const settlement = getJobSettlement(job, basis);
+                              if (settlement.managed && settlement.remainingArea == null) return 'รอยืนยันไร่';
+                              return roundBaht((settlement.managed ? settlement.remainingArea : normalizeRaiNganValue(basis)) * Number(job.price_per_rai || 0)).toLocaleString('th-TH', { maximumFractionDigits: 2 }) + ' บาท';
+                            })()}
                           </span>
                         </div>
                         <div>
@@ -6455,9 +6496,11 @@ function App() {
           const todayMeasured = Math.max(0, Number(workRoundData.measuredArea) || 0);
           const measuredTotal = ws.measuredArea + todayMeasured;
           const billingRaw = String(workRoundData.billingArea ?? '').trim();
-          const billingArea = billingRaw === '' ? NaN : Number(billingRaw);
-          const validBilling = Number.isFinite(billingArea) && billingArea >= 0;
-          const customerDifference = isFinal && validBilling ? measuredTotal - billingArea : 0;
+          const enteredBillingArea = billingRaw === '' ? NaN : Number(billingRaw);
+          const settlement = getJobSettlement(job, measuredTotal);
+          const billingArea = settlement.managed ? Number((settlement.paidBillingArea + enteredBillingArea).toFixed(6)) : enteredBillingArea;
+          const validBilling = Number.isFinite(enteredBillingArea) && enteredBillingArea >= 0;
+          const customerDifference = isFinal && validBilling ? normalizeRaiNganValue(measuredTotal) - billingArea : 0;
           const workersSelected = String(workRoundData.workers || '').split(',').map(v => v.trim()).filter(Boolean);
 
           // 🧮 Preview การแบ่ง "ไร่ที่ลูกค้ารับ" กลับเข้าค่าแรงแต่ละรอบตามพื้นที่วัดจริง
@@ -6495,14 +6538,15 @@ function App() {
             wagePreview[wagePreview.length - 1].wageArea += billingArea - allocated;
           }
           const previewWageAmount = wagePreview.reduce((sum, r) => sum + (r.wageArea * r.rate), 0);
-          const customerPreviewAmount = validBilling ? billingArea * (Number(job.price_per_rai) || 0) : 0;
+          const customerPreviewAmount = validBilling ? roundBaht(billingArea * (Number(job.price_per_rai) || 0)) : 0;
+          const remainingPreviewAmount = Math.max(0, roundBaht(customerPreviewAmount - settlement.received));
           const money2 = (value) => Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
           const showFinalExtraRound = isFinal && (todayMeasured > 0 || workRoundData.measuredMode !== 'NONE');
           const showFinalWorkerInputs = !isFinal || todayMeasured > 0 || ws.roundCount === 0;
           const showWageBreakdown = wagePreview.length > 0;
 
           return (
-            <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-3 z-[300]">
+            <div role="dialog" aria-modal="true" aria-label={isFinal ? 'จบงานทั้งหมด' : 'บันทึกรอบงาน'} className="fixed inset-0 bg-black/60 flex items-center justify-center p-3 z-[300]">
               <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[94vh] overflow-y-auto">
                 <div className={`sticky top-0 z-10 px-5 py-4 border-b ${isFinal ? 'bg-green-50 border-green-200' : 'bg-rose-50 border-rose-200'} rounded-t-2xl`}>
                   <div className="flex items-start justify-between gap-3">
@@ -6595,7 +6639,8 @@ function App() {
 
                   {isFinal && (
                     <div className="bg-green-50 border-2 border-green-300 rounded-2xl p-3">
-                      <label className="block text-green-900 font-black mb-2 text-sm">🤝 สุดท้ายตกลงคิดเงินลูกค้าเท่าไร?</label>
+                      <label className="block text-green-900 font-black mb-2 text-sm">{settlement.managed ? '🤝 คิดเงินเฉพาะแปลงที่ยังไม่รับเงินกี่ไร่?' : '🤝 สุดท้ายตกลงคิดเงินลูกค้าเท่าไร?'}</label>
+                      {settlement.managed && <div className="mb-3 rounded-xl border border-emerald-200 bg-white p-3 text-sm"><p className="font-bold text-emerald-800">✅ รับเงินแล้ว {settlement.received.toLocaleString()} บาท · คิดแล้ว {formatRaiNgan(settlement.paidBillingArea)}</p>{settlement.paidItems.map(item => <p key={item.key} className="mt-1 text-xs text-slate-600">{item.name} · GPS {item.gps_area == null ? 'ไม่ระบุ' : formatRaiNgan(item.gps_area)} → คิดจริง {formatRaiNgan(item.area)}</p>)}<p className="mt-2 text-xs text-emerald-800">แปลงเหล่านี้ไม่คิดเงินซ้ำ แต่รวมในค่าแรงตอนปิดงาน</p></div>}
                       <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
                         <RaiNganInput
                           value={workRoundData.billingArea}
@@ -6603,25 +6648,25 @@ function App() {
                         />
                         <button
                           type="button"
-                          onClick={() => setWorkRoundData(prev => ({ ...prev, billingArea: measuredTotal ? String(normalizeRaiNganValue(measuredTotal)) : '' }))}
+                          onClick={() => setWorkRoundData(prev => ({ ...prev, billingArea: settlement.managed ? (settlement.remainingArea == null ? '' : String(settlement.remainingArea)) : measuredTotal ? String(normalizeRaiNganValue(measuredTotal)) : '' }))}
                           className="h-[50px] px-3 rounded-xl bg-green-600 text-white text-[10px] font-black"
                         >
-                          ใช้วัดจริง
+                          {settlement.managed ? 'ใช้ไร่ที่เหลือ' : 'ใช้วัดจริง'}
                         </button>
                       </div>
 
                       {validBilling && (
                         <div className="mt-3 space-y-2 text-xs">
                           <div className="flex justify-between"><span className="text-gray-600">📐 วัดจริงทั้งหมด</span><b>{formatRaiNgan(measuredTotal)}</b></div>
-                          <div className="flex justify-between"><span className="text-gray-600">🤝 คิดเงินลูกค้า</span><b className="text-green-800">{formatRaiNgan(billingArea)}</b></div>
+                          <div className="flex justify-between"><span className="text-gray-600">🤝 ไร่คิดเงินรวมทุกแปลง</span><b className="text-green-800">{formatRaiNgan(billingArea)}</b></div>
                           <div className="flex justify-between border-t border-green-200 pt-2"><span className="font-black text-green-900">👷 ไร่ค่าแรงรวมที่จะลงสมุด</span><b className="text-lg text-orange-700">{formatRaiNgan(billingArea)}</b></div>
                           <p className="bg-white border border-green-200 rounded-lg p-2 font-bold text-green-900">
-                            ✅ ค่าแรงรวมจะยึดพื้นที่ที่ตกลงกับลูกค้า และแบ่งตามสัดส่วนรอบทำงานอัตโนมัติ
+                            ✅ ลงค่าแรงเมื่อยืนยันจบงานทั้งหมดเท่านั้น รวมทุกแปลงทั้งที่รับเงินแล้วและยังไม่รับ
                           </p>
 
                           {showWageBreakdown && (
                             <div className="bg-white border border-orange-200 rounded-xl p-2.5 space-y-2">
-                              <p className="font-black text-orange-900">👷 ตัวอย่างแบ่งเข้าค่าแรง</p>
+                              <p className="font-black text-orange-900">👷 ค่าแรงที่จะลงเมื่อปิดงาน</p>
                               {wagePreview.map((r) => (
                                 <div key={r.key} className="flex items-start justify-between gap-3 border-b last:border-b-0 border-orange-100 pb-1.5 last:pb-0">
                                   <div className="min-w-0">
@@ -6646,9 +6691,13 @@ function App() {
                             </div>
                           )}
 
-                          {customerDifference > 0.001 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ลูกค้ารับน้อยกว่าวัดจริง {formatRaiNgan(customerDifference)} → ส่วนต่างถูกเฉลี่ยลดจากค่าแรงทุก round ตามสัดส่วน</p>}
-                          {customerDifference < -0.001 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {formatRaiNgan(Math.abs(customerDifference))} กรุณาตรวจอีกครั้ง</p>}
-                          <div className="flex justify-between bg-white rounded-lg p-2 border border-green-200"><span className="text-gray-600">ยอดลูกค้าประมาณ</span><b className="text-green-800">{Math.round(customerPreviewAmount).toLocaleString('th-TH')} บาท</b></div>
+                          {customerDifference >= 0.0125 && <p className="bg-amber-100 text-amber-900 rounded-lg p-2 font-bold">🤝 ลูกค้ารับน้อยกว่าวัดจริง {formatRaiNgan(customerDifference)} → ส่วนต่างถูกเฉลี่ยลดจากค่าแรงทุก round ตามสัดส่วน</p>}
+                          {customerDifference <= -0.0125 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {formatRaiNgan(Math.abs(customerDifference))} กรุณาตรวจอีกครั้ง</p>}
+                          <div className="rounded-xl border border-green-200 bg-white p-3 space-y-2 text-sm">
+                            <div className="flex justify-between gap-2"><span className="text-slate-600">ยอดทั้งงาน</span><b>{money2(customerPreviewAmount)} บาท</b></div>
+                            {settlement.managed && <div className="flex justify-between gap-2"><span className="text-emerald-700">รับแล้ว · ไม่รับซ้ำ</span><b className="text-emerald-700">−{money2(settlement.received)} บาท</b></div>}
+                            <div className="flex justify-between gap-2 border-t pt-2"><b className="text-slate-900">ยอดค้างเก็บหลังปิดงาน</b><b className="text-orange-700">{money2(remainingPreviewAmount)} บาท</b></div>
+                          </div>
                         </div>
                       )}
                     </div>

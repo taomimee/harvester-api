@@ -1147,6 +1147,16 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
         if (jobError) throw jobError;
         if (!job) return res.status(404).json({ error: 'ไม่พบคิวงาน' });
         if (job.status === 'DONE') return res.status(400).json({ error: 'งานนี้ปิดจบไปแล้ว' });
+        if (Number(job.plot_paid_total) > 0) {
+            const receipts = Array.isArray(job.plot_receipts) ? job.plot_receipts : [];
+            const paidArea = receipts.filter(r => r.mode === 'PLOTS').flatMap(r => r.items || []).reduce((sum,i) => sum + Math.max(0,Number(i.area)||0),0);
+            const remaining = req.body.remaining_billing_area;
+            if (!Number.isFinite(remaining) || remaining < 0 ||
+                req.body.expected_plot_paid_total !== Number(job.plot_paid_total) || req.body.expected_plot_receipt_count !== receipts.length ||
+                Math.abs(billingArea - (paidArea + remaining)) > 0.000001) {
+                return res.status(409).json({error:'ยอดรับเงินหรือไร่คิดเงินเปลี่ยน กรุณาโหลดคิวล่าสุดแล้วเปิดจบงานใหม่ ระบบต้องรวมไร่ที่จ่ายแล้วกับไร่ที่เหลือ'});
+            }
+        }
         jobSnapshot = { ...job };
 
         finalizeStage = 'load_rounds';
