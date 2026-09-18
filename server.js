@@ -1152,7 +1152,8 @@ app.post('/api/jobs/:id/finalize', async (req, res) => {
             const paidArea = receipts.filter(r => r.mode === 'PLOTS').flatMap(r => r.items || []).reduce((sum,i) => sum + Math.max(0,Number(i.area)||0),0);
             const remaining = req.body.remaining_billing_area;
             if (!Number.isFinite(remaining) || remaining < 0 ||
-                req.body.expected_plot_paid_total !== Number(job.plot_paid_total) || req.body.expected_plot_receipt_count !== receipts.length ||
+                req.body.expected_plot_paid_total !== Number(job.plot_paid_total) ||
+                Number(req.body.expected_plot_discount_total || 0) !== Number(job.plot_discount_total || 0) || req.body.expected_plot_receipt_count !== receipts.length ||
                 Math.abs(billingArea - (paidArea + remaining)) > 0.000001) {
                 return res.status(409).json({error:'ยอดรับเงินหรือไร่คิดเงินเปลี่ยน กรุณาโหลดคิวล่าสุดแล้วเปิดจบงานใหม่ ระบบต้องรวมไร่ที่จ่ายแล้วกับไร่ที่เหลือ'});
             }
@@ -1603,6 +1604,8 @@ app.put('/api/jobs/:id', async (req, res) => {
 const plotPaymentKey = p => `${p.vehicle_id}/${p.work_date}/${p.id}`;
 const plotPaymentSummary = job => ({
     available: Array.isArray(job.plot_receipts),
+    discounts_available: job.plot_discount_total != null,
+    discount: Number(job.plot_discount_total || 0),
     receipts: Array.isArray(job.plot_receipts) ? job.plot_receipts : [],
     received: Number(job.plot_paid_total || 0),
     rate: Number(job.price_per_rai || 0),
@@ -1613,9 +1616,10 @@ const plotPaymentSummary = job => ({
 app.post('/api/jobs/:id/plot-payments', async (req, res) => {
     if (!bossSessionValid(req)) return res.status(403).json({error:'ให้เถ้าแก่ยืนยันรหัสก่อนรับเงิน'});
     const jobId = Number(req.params.id);
-    const {request_id, mode, items, expected_amount, expected_rate} = req.body || {};
+    const {request_id, mode, items, expected_amount, expected_rate, discount = 0, discount_note = ""} = req.body || {};
     if (!Number.isSafeInteger(jobId) || jobId <= 0 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(request_id)) || !['PLOTS','BALANCE'].includes(mode)) return res.status(400).json({error:'ข้อมูลรับเงินไม่ถูกต้อง'});
     if (!Number.isFinite(expected_amount) || expected_amount <= 0 || !Number.isFinite(expected_rate) || expected_rate <= 0) return res.status(400).json({error:'ยอดเงินหรือราคาไม่ถูกต้อง'});
+    if (!Number.isFinite(discount) || discount < 0 || Math.abs(discount * 100 - Math.round(discount * 100)) > 0.000001 || typeof discount_note !== 'string' || discount_note.length > 500) return res.status(400).json({error:'ส่วนลดไม่ถูกต้อง'});
     try {
         const {data: job,error: jobError} = await supabase.from('jobs').select('*').eq('id',jobId).single();
         if (jobError) throw jobError;
@@ -1634,11 +1638,29 @@ app.post('/api/jobs/:id/plot-payments', async (req, res) => {
                 snapshots.push({key:item.key,id:plot.id,name:plot.name,work_date:plot.work_date,vehicle_id:plot.vehicle_id,gps_area:plot.area_rai,area:item.area});
             }
         }
-        const {data,error} = await supabase.rpc('receive_plot_payment',{p_job_id:jobId,p_request_id:request_id,p_mode:mode,p_items:snapshots,p_expected_amount:expected_amount,p_expected_rate:expected_rate});
+        const {data,error} = await supabase.rpc('receive_plot_payment_v2',{p_job_id:jobId,p_request_id:request_id,p_mode:mode,p_items:snapshots,p_expected_amount:expected_amount,p_expected_rate:expected_rate,p_discount:discount,p_discount_note:discount_note});
         if (error) return res.status(409).json({error: error.code === 'PGRST202' ? 'กรุณารัน plot_payments.sql ก่อนรับเงิน' : error.message});
         if (!data?.success) throw new Error('ยังยืนยันผลรับเงินไม่ได้ กรุณาตรวจรายการเดิม');
         res.json(data);
     } catch (error) { res.status(500).json({error:error.message}); }
+});
+
+app.patch('/api/jobs/:id/plot-payments/:receiptId', async (req,res) => {
+    if (!bossSessionValid(req)) return res.status(403).json({error:'กรุณายืนยันสิทธิ์เถ้าแก่'});
+    const jobId=Number(req.params.id);
+    const {request_id,discount,expected_revision,reason}=req.body || {};
+    const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!Number.isSafeInteger(jobId) || jobId<=0 || !uuid.test(String(request_id)) || !uuid.test(req.params.receiptId) ||
+        !Number.isFinite(discount) || discount<0 || Math.abs(discount*100-Math.round(discount*100))>0.000001 ||
+        !Number.isSafeInteger(expected_revision) || expected_revision<0 || typeof reason!=='string' || !reason.trim() || reason.length>500)
+        return res.status(400).json({error:'ตรวจสอบส่วนลดและระบุเหตุผลแก้ไข'});
+    try {
+        const {data,error}=await supabase.rpc('adjust_plot_payment_discount',{p_job_id:jobId,p_receipt_id:req.params.receiptId,
+            p_request_id:request_id,p_discount:discount,p_expected_revision:expected_revision,p_reason:reason.trim()});
+        if(error) return res.status(409).json({error:error.code==='PGRST202'?'กรุณารัน plot_payments.sql รุ่นล่าสุดก่อนแก้ส่วนลด':error.message});
+        if(!data?.success) throw new Error('ยังยืนยันผลแก้ไขไม่ได้ กรุณาตรวจรายการเดิม');
+        res.json(data);
+    } catch(error) {res.status(500).json({error:error.message});}
 });
 
 // 🔍 ตรวจความสัมพันธ์ของ Job ID เดียวกัน — ไม่แก้ข้อมูล แค่รายงาน

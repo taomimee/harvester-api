@@ -240,7 +240,7 @@ const getJobSettlement = (job, measuredArea) => {
   paidGpsArea = Number(paidGpsArea.toFixed(6));
   const measured = normalizeRaiNganValue(measuredArea);
   const remainingArea = hasPaidGps ? normalizeRaiNganValue(Math.max(0, measured - paidGpsArea)) : null;
-  return { managed, received, paidItems, paidBillingArea, paidGpsArea, hasPaidGps, remainingArea,
+  return { managed, received, discount: Number(job?.plot_discount_total || 0), paidItems, paidBillingArea, paidGpsArea, hasPaidGps, remainingArea,
     totalBillingArea: remainingArea == null ? null : Number((paidBillingArea + remainingArea).toFixed(6)) };
 };
 const cleanPhoneForUi = (phone) => {
@@ -2691,6 +2691,10 @@ function App() {
   const [jobIntegrityModal, setJobIntegrityModal] = useState(null);
   const [jobIntegrityLoading, setJobIntegrityLoading] = useState(false);
   const [plotSelection, setPlotSelection] = useState({});
+  const [plotDiscount, setPlotDiscount] = useState('0');
+  const [plotDiscountNote, setPlotDiscountNote] = useState('');
+  const [receiptEdit, setReceiptEdit] = useState(null);
+  const correctionRequest = useRef(null);
   const [integrityTab, setIntegrityTab] = useState('plots');
   const [savingPlotPayment, setSavingPlotPayment] = useState(false);
   const paymentRequest = useRef(null);
@@ -3791,6 +3795,7 @@ function App() {
   };
   const inspectJobIntegrity = async (job) => {
     setPlotSelection({});
+    setPlotDiscount("0"); setPlotDiscountNote(""); setReceiptEdit(null); correctionRequest.current = null;
     setIntegrityTab(userRole === 'BOSS' ? 'plots' : 'rounds');
     paymentRequest.current = null;
     setJobIntegrityLoading(true);
@@ -3812,7 +3817,10 @@ function App() {
     if (!job || !data) return;
     const items = Object.entries(plotSelection).map(([key, area]) => ({ key, area: Number(area) }));
     if (mode === 'PLOTS' && (!items.length || items.some(p => !Number.isFinite(p.area) || p.area <= 0))) return alert('เลือกแปลงและระบุไร่คิดเงินให้ถูกต้อง');
-    const amount = mode === 'BALANCE' ? Number(data.payment?.outstanding || 0) : items.reduce((sum, p) => sum + Math.round(p.area * Number(data.payment?.rate || 0) * 100) / 100, 0);
+    const gross = mode === 'BALANCE' ? Number(data.payment?.outstanding || 0) : items.reduce((sum, p) => sum + Math.round(p.area * Number(data.payment?.rate || 0) * 100) / 100, 0);
+    const discount = Number(plotDiscount);
+    if (!Number.isFinite(discount) || discount < 0 || roundBaht(discount) !== discount || discount >= gross) return alert('ส่วนลดต้องตั้งแต่ 0 และน้อยกว่ายอดก่อนลด (ทศนิยมไม่เกิน 2 ตำแหน่ง)');
+    const amount = roundBaht(gross - discount);
     if (!(amount > 0)) return alert('กรุณาระบุราคาต่อไร่ก่อนรับเงิน');
     const retrying = !!paymentRequest.current;
     if (!window.confirm(retrying ? 'ตรวจสอบและบันทึกรายการเดิมอีกครั้ง? ระบบจะไม่รับเงินซ้ำ' : `รับเงิน ${amount.toLocaleString()} บาท${mode === 'PLOTS' ? ` จาก ${items.length} แปลงที่เลือก` : ' เพื่อปิดยอดค้าง'} ใช่ไหม?`)) return;
@@ -3820,7 +3828,7 @@ function App() {
     try {
       const token = requireBossToken();
       if (!token) throw new Error('กรุณายืนยันสิทธิ์เถ้าแก่');
-      if (!paymentRequest.current) paymentRequest.current = { request_id: crypto.randomUUID(), mode, items, expected_amount: amount, expected_rate: Number(data.payment?.rate || 0) };
+      if (!paymentRequest.current) paymentRequest.current = { request_id: crypto.randomUUID(), mode, items, expected_amount: amount, expected_rate: Number(data.payment?.rate || 0), discount, discount_note: plotDiscountNote.trim() };
       const res = await fetch(`${WAGE_API}/jobs/${job.id}/plot-payments`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(paymentRequest.current) });
       const result = await res.json();
       if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
@@ -3831,6 +3839,31 @@ function App() {
       alert(result.replayed ? 'รายการนี้บันทึกไว้แล้ว ไม่รับเงินซ้ำ' : 'บันทึกรับเงินแล้ว');
     } catch (error) { alert(error.message + (paymentRequest.current ? '\nผลการบันทึกยังไม่แน่ชัด กดรับเงินอีกครั้งเพื่อตรวจรายการเดิม' : '')); }
     finally { paymentBusy.current = false; setSavingPlotPayment(false); }
+  };
+
+  const saveReceiptDiscount = async () => {
+    if (paymentBusy.current || userRole !== 'BOSS' || !receiptEdit) return;
+    const job = jobIntegrityModal?.job;
+    const r = receiptEdit.receipt;
+    const gross = Number(r.gross_amount ?? (Number(r.amount) + Number(r.discount || 0)));
+    const discount = Number(receiptEdit.discount);
+    if (!Number.isFinite(discount) || discount < 0 || discount >= gross || roundBaht(discount) !== discount || !receiptEdit.reason.trim()) return alert('ตรวจสอบส่วนลด (น้อยกว่ายอดก่อนลด) และระบุเหตุผลแก้ไข');
+    if (!window.confirm(correctionRequest.current ? 'ตรวจผลแก้ไขรายการเดิมอีกครั้ง?' : `แก้รายการเดิม: ส่วนลด ${discount.toLocaleString()} บาท · รับจริง ${roundBaht(gross-discount).toLocaleString()} บาท ใช่ไหม?`)) return;
+    paymentBusy.current = true; setSavingPlotPayment(true);
+    try {
+      const token = requireBossToken();
+      if (!token) throw new Error('กรุณายืนยันสิทธิ์เถ้าแก่');
+      if (!correctionRequest.current) correctionRequest.current = {request_id:crypto.randomUUID(),discount,expected_revision:Number(r.revision || 0),reason:receiptEdit.reason.trim()};
+      const res = await fetch(`${WAGE_API}/jobs/${job.id}/plot-payments/${r.request_id}`, {method:'PATCH',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(correctionRequest.current)});
+      const result = await res.json();
+      if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role','DRIVER'); }
+      if (!res.ok) { if (res.status < 500) correctionRequest.current = null; throw new Error(result.error || 'แก้ไขไม่สำเร็จ'); }
+      correctionRequest.current = null;
+      await fetchJobs(); await fetchDashboard();
+      await inspectJobIntegrity({...job,...result.job});
+      alert('แก้รายการรับเงินเดิมแล้ว ไร่คิดเงินและค่าแรงคงเดิม');
+    } catch(error) {alert(error.message + (correctionRequest.current ? '\nกดบันทึกอีกครั้งเพื่อตรวจผลรายการเดิม' : ''));}
+    finally {paymentBusy.current=false;setSavingPlotPayment(false);}
   };
 
   const toggleRoundWorker = (name) => {
@@ -3891,7 +3924,7 @@ function App() {
             measured_area: measuredToday,
             measured_source: workRoundData.measuredMode,
             billing_area: billingArea,
-            ...(settlement.managed ? { remaining_billing_area: enteredBillingArea, expected_plot_paid_total: settlement.received, expected_plot_receipt_count: (job.plot_receipts || []).length } : {}),
+            ...(settlement.managed ? { remaining_billing_area: enteredBillingArea, expected_plot_paid_total: settlement.received, expected_plot_discount_total: settlement.discount, expected_plot_receipt_count: (job.plot_receipts || []).length } : {}),
             workers,
             wage_per_rai: wagePerRai,
             note: workRoundData.note
@@ -3934,7 +3967,7 @@ function App() {
           `💰 ลงสมุดค่าแรง: ${Number(s.wage_amount_total || 0).toLocaleString()} บาท\n` +
           `📚 จำนวนรอบค่าแรง: ${Number(s.wage_rounds_posted || 0)} รอบ\n` +
           `💵 ยอดทั้งงาน: ${roundBaht(billingArea * Number(job.price_per_rai || 0)).toLocaleString()} บาท` +
-          (settlement.managed ? `\n✅ รับแล้ว: ${settlement.received.toLocaleString()} บาท\n💳 ค้างเก็บ: ${Math.max(0, roundBaht(billingArea * Number(job.price_per_rai || 0) - settlement.received)).toLocaleString()} บาท` : '')
+          (settlement.managed ? `\nส่วนลด: ${settlement.discount.toLocaleString()} บาท\n✅ รับแล้ว: ${settlement.received.toLocaleString()} บาท\n💳 ค้างเก็บ: ${Math.max(0, roundBaht(billingArea * Number(job.price_per_rai || 0) - settlement.received - settlement.discount)).toLocaleString()} บาท` : '')
         );
       }
 
@@ -6397,7 +6430,7 @@ function App() {
                       const paidKeys = new Set(receipts.flatMap(r => (r.items || []).map(i => i.key)));
                       const plots = d?.plots || [];
                       const selectionTotal = Object.values(plotSelection).reduce((sum, area) => sum + Math.round(Number(area || 0) * Number(payment.rate || 0) * 100) / 100, 0);
-                      const blocked = !payment.available || payment.legacy || payment.status === 'PAID' || d?.gps_error || savingPlotPayment;
+                      const blocked = !payment.available || !payment.discounts_available || !!receiptEdit || payment.legacy || payment.status === 'PAID' || d?.gps_error || savingPlotPayment;
                       return <section className="rounded-2xl border border-slate-200 bg-white p-3 text-left">
                         <h3 className="font-black text-slate-900">💳 รับเงินแยกตามแปลง</h3>
                         <p className="mt-1 text-xs text-slate-500">{plots.length} แปลง · {d?.summary?.round_count || 0} รอบทำงาน — หนึ่งรอบเกี่ยวได้หลายแปลง</p>
@@ -6405,6 +6438,7 @@ function App() {
                           <div className="rounded-xl bg-emerald-50 p-3"><span className="block text-xs text-emerald-800">รับแล้ว{payment.legacy ? ' (ระบบเดิม)' : ''}</span><b>{Number(payment.legacy ? receivedForJob(jobIntegrityModal.job) : payment.received || 0).toLocaleString()} ฿</b></div>
                           <div className="rounded-xl bg-slate-50 p-3"><span className="block text-xs text-slate-600">ยอดค้างทั้งงาน</span><b>{payment.outstanding == null ? 'รอยืนยันไร่' : `${Number(payment.outstanding).toLocaleString()} ฿`}</b></div>
                         </div>
+                        {Number(payment.discount) > 0 && <p className="mb-3 text-xs text-amber-800">ส่วนลดที่ให้แล้วรวม {Number(payment.discount).toLocaleString()} บาท · หักจากยอดปิดงานแล้ว</p>}
                         {!payment.available && <p className="text-sm text-amber-800 mb-3">ต้องติดตั้ง plot_payments.sql ก่อนรับเงินรายแปลง</p>}
                         {payment.legacy && <p className="text-sm text-amber-800 mb-3">งานนี้มีเงินรับแบบเดิม ให้รับยอดที่เหลือผ่านหน้าลูกหนี้</p>}
                         {d?.gps_error && <p className="text-sm text-red-700">โหลดแปลงไม่สำเร็จ กรุณาปิดแล้วเปิดตรวจยอดใหม่</p>}
@@ -6419,15 +6453,34 @@ function App() {
                               <label className="flex items-start gap-3 cursor-pointer">
                                 <input type="checkbox" className="mt-1 h-4 w-4" checked={selected} disabled={blocked || paid || !!paymentRequest.current} onChange={e => { const checked = e.target.checked; setPlotSelection(prev => { const next = {...prev}; if (checked) next[key] = normalizeRaiNganValue(plot.area_rai); else delete next[key]; return next; }); }} />
                                 <span className="min-w-0 flex-1"><b className="block text-sm text-slate-900">{plot.name}</b><span className="block text-xs text-slate-500 mt-1">{plot.work_date} · GPS {formatRaiNgan(plot.area_rai)}</span></span>
-                                {paid && <b className="text-xs text-emerald-700 shrink-0">รับแล้ว<br/>{Number(paidItem.amount).toLocaleString()} ฿</b>}
+                                {paid && <b className="text-xs text-emerald-700 shrink-0">จ่ายแล้ว<br/>คิด {formatRaiNgan(paidItem.area)}</b>}
                               </label>
                               {selected && <div className="mt-3 border-t border-indigo-100 pt-2"><span className="block text-xs font-bold mb-2">ไร่ที่ตกลงคิดเงินแปลงนี้ · {Number(payment.rate).toLocaleString()} บาท/ไร่</span><RaiNganInput value={plotSelection[key]} disabled={savingPlotPayment || !!paymentRequest.current} onChange={value => setPlotSelection(prev => ({...prev, [key]:value}))} /><p className="mt-2 text-right font-black text-indigo-800">{(Math.round(Number(plotSelection[key] || 0) * Number(payment.rate || 0) * 100) / 100).toLocaleString()} บาท</p></div>}
                             </div>;
                           })}
                         </div>
-                        {Object.keys(plotSelection).length > 0 && <button disabled={blocked} onClick={() => receivePlotPayment('PLOTS')} className="mt-3 w-full rounded-xl bg-emerald-700 p-3 text-sm font-bold text-white disabled:opacity-50">{savingPlotPayment ? 'กำลังบันทึก…' : `รับเงิน ${Object.keys(plotSelection).length} แปลง · ${selectionTotal.toLocaleString()} บาท`}</button>}
-                        {payment.done && payment.received > 0 && payment.outstanding > 0 && <button disabled={savingPlotPayment} onClick={() => receivePlotPayment('BALANCE')} className="mt-2 w-full rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm font-bold text-emerald-900">รับยอดค้างทั้งหมด {Number(payment.outstanding).toLocaleString()} บาท</button>}
-                        {receipts.length > 0 && <details className="mt-3 border-t pt-3" open><summary className="cursor-pointer text-sm font-bold">ประวัติรับเงิน {receipts.length} ครั้ง</summary><div className="mt-2 space-y-2 max-h-52 overflow-y-auto">{receipts.slice().reverse().map(r => <div key={r.request_id} className="rounded-lg bg-slate-50 p-2 text-xs"><div className="flex justify-between gap-2"><span>{new Date(r.paid_at).toLocaleString('th-TH')}</span><b className="text-emerald-800">{Number(r.amount).toLocaleString()} ฿</b></div><p className="mt-1 text-slate-600">{r.mode === 'BALANCE' ? 'รับยอดค้างทั้งหมด' : r.items.map(i => `${i.name} · ${formatRaiNgan(i.area)}`).join(' / ')}</p></div>)}</div></details>}
+                        {!payment.discounts_available && payment.available && <p className="mt-2 text-sm text-amber-800">กรุณารัน plot_payments.sql รุ่นล่าสุดเพื่อใช้ส่วนลด</p>}
+                        {payment.discounts_available && !payment.legacy && payment.status !== 'PAID' && (Object.keys(plotSelection).length > 0 || (payment.done && payment.outstanding > 0)) && <div className="mt-3 rounded-xl border border-slate-200 p-3">
+                          <label className="block text-sm font-bold">ส่วนลดเพิ่ม (บาท)<input type="number" min="0" step="0.01" value={plotDiscount} disabled={savingPlotPayment || !!paymentRequest.current || !!receiptEdit} onChange={e => setPlotDiscount(e.target.value)} className="mt-1 w-full rounded-lg border p-2" /></label>
+                          <input aria-label="หมายเหตุส่วนลด" placeholder="หมายเหตุส่วนลด (ถ้ามี)" maxLength={500} value={plotDiscountNote} disabled={savingPlotPayment || !!paymentRequest.current || !!receiptEdit} onChange={e => setPlotDiscountNote(e.target.value)} className="mt-2 w-full rounded-lg border p-2 text-sm" />
+                          <p className="mt-2 text-xs text-slate-500">ลดเฉพาะเงินรับ · ไร่คิดเงินและค่าแรงคงเดิม</p>
+                        </div>}
+                        {Object.keys(plotSelection).length > 0 && <button disabled={blocked || (!!paymentRequest.current && paymentRequest.current.mode !== 'PLOTS')} onClick={() => receivePlotPayment('PLOTS')} className="mt-3 w-full rounded-xl bg-emerald-700 p-3 text-sm font-bold text-white disabled:opacity-50">{savingPlotPayment ? 'กำลังบันทึก…' : `รับเงินจริง ${roundBaht(selectionTotal - Number(plotDiscount || 0)).toLocaleString()} บาท · ${Object.keys(plotSelection).length} แปลง`}</button>}
+                        {payment.done && payment.received > 0 && payment.outstanding > 0 && <button disabled={savingPlotPayment || !payment.discounts_available || !!receiptEdit || (!!paymentRequest.current && paymentRequest.current.mode !== 'BALANCE')} onClick={() => receivePlotPayment('BALANCE')} className="mt-2 w-full rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-sm font-bold text-emerald-900 disabled:opacity-50">รับปิดยอดค้าง · สุทธิ {roundBaht(Number(payment.outstanding) - Number(plotDiscount || 0)).toLocaleString()} บาท</button>}
+                        {receipts.length > 0 && <details className="mt-3 border-t pt-3" open><summary className="cursor-pointer text-sm font-bold">ประวัติรับเงิน {receipts.length} ครั้ง</summary><div className="mt-2 space-y-2">{receipts.slice().reverse().map(r => <div key={r.request_id} className="rounded-lg bg-slate-50 p-3 text-xs">
+                          <div className="flex justify-between gap-2"><span>{new Date(r.paid_at).toLocaleString('th-TH')}</span><b className="text-emerald-800">รับจริง {Number(r.amount).toLocaleString()} ฿</b></div>
+                          <p className="mt-1 text-slate-600">{r.mode === 'BALANCE' ? 'รับยอดค้างทั้งหมด' : r.items.map(i => `${i.name} · ${formatRaiNgan(i.area)}`).join(' / ')}</p>
+                          {Number(r.discount) > 0 && <p className="mt-1 text-amber-800">ก่อนลด {Number(r.gross_amount).toLocaleString()} · ส่วนลด {Number(r.discount).toLocaleString()} บาท{r.discount_note ? ` · ${r.discount_note}` : ''}</p>}
+                          <button disabled={!payment.discounts_available || savingPlotPayment || !!paymentRequest.current || !!correctionRequest.current} onClick={() => setReceiptEdit({receipt:r,discount:String(r.discount || 0),reason:''})} className="mt-2 rounded-lg border border-indigo-200 px-3 py-2 font-bold text-indigo-800 disabled:opacity-50">แก้ยอดรับ / ส่วนลด</button>
+                          {receiptEdit?.receipt.request_id === r.request_id && <div className="mt-3 space-y-2 rounded-xl border border-indigo-200 bg-white p-3">
+                            <p>ยอดก่อนลด {Number(r.gross_amount ?? (Number(r.amount) + Number(r.discount || 0))).toLocaleString()} บาท</p>
+                            <label className="block font-bold">ส่วนลดรวมของรายการนี้ (บาท)<input type="number" min="0" step="0.01" value={receiptEdit.discount} disabled={savingPlotPayment || !!correctionRequest.current} onChange={e => setReceiptEdit(prev => ({...prev,discount:e.target.value}))} className="mt-1 w-full rounded-lg border p-2" /></label>
+                            <p className="font-bold text-emerald-800">รับเงินจริง {roundBaht(Number(r.gross_amount ?? (Number(r.amount) + Number(r.discount || 0))) - Number(receiptEdit.discount || 0)).toLocaleString()} บาท</p>
+                            <input aria-label="เหตุผลแก้ไขยอดรับ" placeholder="เหตุผลแก้ไข (จำเป็น)" maxLength={500} value={receiptEdit.reason} disabled={savingPlotPayment || !!correctionRequest.current} onChange={e => setReceiptEdit(prev => ({...prev,reason:e.target.value}))} className="w-full rounded-lg border p-2" />
+                            <div className="flex gap-2"><button disabled={savingPlotPayment} onClick={saveReceiptDiscount} className="rounded-lg bg-indigo-700 px-3 py-2 font-bold text-white">{savingPlotPayment ? 'กำลังบันทึก…' : 'บันทึกแก้ไขรายการเดิม'}</button><button disabled={savingPlotPayment || !!correctionRequest.current} onClick={() => setReceiptEdit(null)} className="rounded-lg border px-3 py-2">ยกเลิก</button></div>
+                          </div>}
+                          {(r.adjustments || []).length > 0 && <details className="mt-2 text-slate-500"><summary className="cursor-pointer">ประวัติแก้ไข {(r.adjustments || []).length} ครั้ง</summary>{r.adjustments.map(a => <p key={a.request_id} className="mt-1">{new Date(a.changed_at).toLocaleString('th-TH')} · รับ {Number(a.before_amount).toLocaleString()} → {Number(a.after_amount).toLocaleString()} บาท · {a.reason}</p>)}</details>}
+                        </div>)}</div></details>}
                       </section>;
                     })()}
                       {integrityTab === 'rounds' && (() => {
@@ -6539,7 +6592,7 @@ function App() {
           }
           const previewWageAmount = wagePreview.reduce((sum, r) => sum + (r.wageArea * r.rate), 0);
           const customerPreviewAmount = validBilling ? roundBaht(billingArea * (Number(job.price_per_rai) || 0)) : 0;
-          const remainingPreviewAmount = Math.max(0, roundBaht(customerPreviewAmount - settlement.received));
+          const remainingPreviewAmount = Math.max(0, roundBaht(customerPreviewAmount - settlement.received - settlement.discount));
           const money2 = (value) => Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
           const showFinalExtraRound = isFinal && (todayMeasured > 0 || workRoundData.measuredMode !== 'NONE');
           const showFinalWorkerInputs = !isFinal || todayMeasured > 0 || ws.roundCount === 0;
@@ -6695,6 +6748,7 @@ function App() {
                           {customerDifference <= -0.0125 && <p className="bg-blue-100 text-blue-900 rounded-lg p-2 font-bold">➕ ยอดคิดเงินมากกว่าวัดจริง {formatRaiNgan(Math.abs(customerDifference))} กรุณาตรวจอีกครั้ง</p>}
                           <div className="rounded-xl border border-green-200 bg-white p-3 space-y-2 text-sm">
                             <div className="flex justify-between gap-2"><span className="text-slate-600">ยอดทั้งงาน</span><b>{money2(customerPreviewAmount)} บาท</b></div>
+                            {settlement.discount > 0 && <div className="flex justify-between gap-2"><span className="text-amber-800">ส่วนลดที่ให้แล้ว</span><b className="text-amber-800">−{money2(settlement.discount)} บาท</b></div>}
                             {settlement.managed && <div className="flex justify-between gap-2"><span className="text-emerald-700">รับแล้ว · ไม่รับซ้ำ</span><b className="text-emerald-700">−{money2(settlement.received)} บาท</b></div>}
                             <div className="flex justify-between gap-2 border-t pt-2"><b className="text-slate-900">ยอดค้างเก็บหลังปิดงาน</b><b className="text-orange-700">{money2(remainingPreviewAmount)} บาท</b></div>
                           </div>
