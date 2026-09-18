@@ -61,6 +61,44 @@ const workerRateLabel = (tx, name, count) => {
   const part = tx.wage_split?.find(p => cleanWageName(p.name) === cleanWageName(name));
   return part ? `${part.rate} บาท/ไร่` : count > 1 ? `ส่วนแบ่งเดิมหาร ${count}` : 'งานเดี่ยว';
 };
+// Display allocation only: withdrawals cover oldest outstanding wage shares first.
+// Explicit legacy paid markers are already settled and never consume withdrawals twice.
+const wageSettlementMap = (transactions, expenses, parseNote) => {
+  const available = new Map();
+  for (const tx of expenses) {
+    if (tx.category !== 'เบิกค่าแรง') continue;
+    const name = cleanWageName(tx.spender_name);
+    const cents = Math.round(Number(tx.total_amount || 0) * 100);
+    if (name && Number.isFinite(cents)) available.set(name, (available.get(name) || 0) + cents);
+  }
+  const result = new Map();
+  const dateValue = tx => { const time = Date.parse(tx.created_at || ''); return Number.isFinite(time) ? time : 0; };
+  const ordered = [...transactions].sort((a,b) => dateValue(a)-dateValue(b) || String(a.id).localeCompare(String(b.id), undefined, {numeric:true}));
+  for (const tx of ordered) {
+    const {jobWorkers,paidWorkers} = parseNote(tx.note);
+    const workers = new Map();
+    for (const name of new Set(jobWorkers.map(cleanWageName))) {
+      const amount = Math.max(0, Math.round(workerWage(tx,name,jobWorkers) * 100));
+      const legacy = tx.status === 'PAID' || paidWorkers.map(cleanWageName).includes(name);
+      const paid = legacy ? amount : Math.min(amount, Math.max(0,available.get(name) || 0));
+      if (!legacy) available.set(name, (available.get(name) || 0)-paid);
+      workers.set(name,{amount:amount/100,paid:paid/100,remaining:(amount-paid)/100});
+    }
+    result.set(tx.id,workers);
+  }
+  return result;
+};
+const wageSettlementStatus = (workers, workerName) => {
+  const shares = workerName ? [workers?.get(cleanWageName(workerName))].filter(Boolean) : [...(workers?.values() || [])];
+  const amount = shares.reduce((sum,w)=>sum+w.amount,0);
+  const paid = shares.reduce((sum,w)=>sum+w.paid,0);
+  const remaining = Math.max(0, Math.round((amount-paid)*100)/100);
+  const state = amount > 0 && remaining === 0 ? 'PAID' : paid > 0 ? 'PARTIAL' : 'UNPAID';
+  return {amount,paid,remaining,state,
+    label:state==='PAID'?'✓ ตัดยอดแล้ว':state==='PARTIAL'?'◐ ตัดบางส่วน':'รอตัดยอด',
+    badge:state==='PAID'?'bg-green-100 text-green-800 border-green-300':state==='PARTIAL'?'bg-orange-100 text-orange-800 border-orange-300':'bg-blue-50 text-blue-800 border-blue-200',
+    stripe:state==='PAID'?'bg-green-500':state==='PARTIAL'?'bg-orange-400':'bg-blue-400'};
+};
 // Small outline preview from actual linked GPS geometry; interior rings remain holes.
 const plotPreviewPaths = geometry => {
   const polygons = geometry?.type === 'Polygon' ? [geometry.coordinates] : geometry?.type === 'MultiPolygon' ? geometry.coordinates : [];
@@ -6956,6 +6994,8 @@ function App() {
              } catch(e) { console.error(e); alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ'); }
           };
 
+          const wageSettlements = wageSettlementMap(wageTransactions, expenseTransactions, parseWageNote);
+
           // กรองบิลที่ทำงาน (สำหรับแท็บ "ประวัติลงแปลง")
           const displayJobs = wageTransactions.filter(tx => {
               if (!activeWorker) return true;
@@ -7056,6 +7096,7 @@ function App() {
                     {/* 🚜 แสดงประวัติการลงแปลง (รายงานการทำงาน) */}
                     {wageTab === 'UNPAID' && (
                       <div className="space-y-3">
+                        <p className="text-[11px] text-slate-500">ยอดเบิกเงินแสดงการตัดจากงานเก่าไปใหม่ แยกตามคนงาน</p>
                         {displayJobs.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการลงแปลง</p> : null}
                         {displayJobs.map(tx => {
                           const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
@@ -7074,14 +7115,11 @@ function App() {
                           // ถ้าระบุตัวคน ให้โชว์แค่ส่วนแบ่งของเขา ถ้าไม่ได้ระบุ (ดูภาพรวม) ให้โชว์ยอดเต็มบิล
                           const displayAmount = activeWorker ? workerWage(tx, activeWorker, jobWorkers) : totalAmount;
                           
-                          // ดักว่าในบิลเก่าเคยตัดยอดไปหรือยัง (ถ้าดูภาพรวม เช็คว่ามีใครสักคนในบิลนี้รับไปแล้วหรือยัง)
-                          const isPaidInOldSystem = activeWorker 
-                            ? (paidWorkers.includes(activeWorker) || tx.status === 'PAID')
-                            : (paidWorkers.length > 0 || tx.status === 'PAID');
+                          const settlement = wageSettlementStatus(wageSettlements.get(tx.id), activeWorker);
 
                           return (
                             <div key={tx.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
-                               <div className={`absolute top-0 left-0 w-1.5 h-full ${isPaidInOldSystem ? 'bg-orange-400' : 'bg-blue-400'}`}></div>
+                               <div className={`absolute top-0 left-0 w-1.5 h-full ${settlement.stripe}`}></div>
                                <div className="flex justify-between items-start pl-2">
                                  <div className="flex-1 pr-2">
                                    <div className="mb-2">
@@ -7093,10 +7131,11 @@ function App() {
                                      {jobWorkers.map((w, idx) => {
                                        const isMe = w === activeWorker;
                                        // โชว์ติ๊กถูกหน้าชื่อ ถ้าคนนั้นรับเงินไปแล้ว
-                                       const hasPaid = paidWorkers.includes(w) || tx.status === 'PAID';
+                                       const workerSettlement = wageSettlementStatus(wageSettlements.get(tx.id), w);
+                                       const hasPaid = workerSettlement.state === 'PAID';
                                        return (
-                                         <span key={idx} className={`text-[10px] font-bold px-2 py-1 rounded-md border shadow-sm ${hasPaid ? 'bg-green-100 text-green-700 border-green-300' : (isMe ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-50 text-gray-500 border-gray-200')}`}>
-                                           {hasPaid ? '✅' : '🧑‍🌾'} {w}
+                                         <span key={idx} className={`text-[10px] font-bold px-2 py-1 rounded-md border shadow-sm ${workerSettlement.badge}`}>
+                                           {hasPaid ? '✅' : workerSettlement.state === 'PARTIAL' ? '◐' : '🧑‍🌾'} {w}
                                          </span>
                                        )
                                      })}
@@ -7112,7 +7151,8 @@ function App() {
                                    <span className="inline-block text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-gray-100 text-gray-600 border-gray-200 border">
                                      {activeWorker ? workerRateLabel(tx, activeWorker, divisor) : `ยอดเต็มบิล`}
                                    </span>
-                                   {isPaidInOldSystem && <span className="block text-[9px] text-orange-600 font-bold mt-1 bg-orange-50 px-1 py-0.5 rounded">* มีการตัดยอดแล้ว</span>}
+                                   <span className={`block text-[11px] font-bold mt-2 border px-2 py-1 rounded-lg ${settlement.badge}`}>{settlement.label}</span>
+                                   {settlement.state === 'PARTIAL' && <span className="block text-[10px] text-orange-800 font-bold mt-1">ค้าง {settlement.remaining.toLocaleString()} ฿</span>}
                                  </div>
                                </div>
                             </div>
