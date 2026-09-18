@@ -197,6 +197,16 @@ const formatSignedRaiNgan = (raiValue) => {
   return `${n > 0 ? '+' : '-'}${formatRaiNgan(Math.abs(n))}`;
 };
 
+// Keep the existing server-issued session across tabs; never infer authorization from a role label.
+const getBossToken = () => {
+  const token = localStorage.getItem('harvester_boss_token') || sessionStorage.getItem('harvester_boss_token');
+  if (token) localStorage.setItem('harvester_boss_token', token);
+  return token;
+};
+const clearBossToken = () => {
+  localStorage.removeItem('harvester_boss_token');
+  sessionStorage.removeItem('harvester_boss_token');
+};
 const meaningfulNote = value => {
   const text = String(value || '').trim();
   return ['', '-', 'ไม่มีข้อมูล', 'ไม่มี', 'null', 'undefined'].includes(text) ? '' : text;
@@ -1856,6 +1866,7 @@ function TrackingMap({
   // 🎯 เมื่อผู้ใช้กด "ค้นหาเส้นทาง" ให้พาไปหารถล่าสุด 1 ครั้ง
   // Auto-refresh หลังจากนั้นจะอัปเดตข้อมูลอย่างเดียว ไม่แย่งกล้อง
   useEffect(() => {
+    if (trackingMode === 'history' && focusPlot && String(focusPlot.vehicle_id) === String(vehicleId) && focusPlot.work_date === workDate) return;
     if (!focusRequest || pathData.length === 0 || !mapInstance.current) return;
 
     const lastPoint = pathData[pathData.length - 1];
@@ -2026,9 +2037,9 @@ function TrackingMap({
 
   useEffect(()=>{
     if(!focusPlot || String(focusPlot.vehicle_id)!==String(vehicleId) || focusPlot.work_date!==workDate) return;
-    const plot=plots.find(p=>p.id===focusPlot.id);
+    const plot=plots.find(p=>String(p.id)===String(focusPlot.id));
     if(plot){fitPlotForReview(plot.points);setMobileToolsOpen(true);}
-  },[focusPlot,plots]);
+  },[focusPlot,plots,vehicleId,workDate]);
   const panelPlot = exclusionPanelIndex === null ? null : plots[exclusionPanelIndex];
   const panelPendingHoles = (panelPlot?.holeSuggestions || []).filter(h => h.status === 'pending');
 
@@ -2587,6 +2598,7 @@ function TrackingMap({
 
 function App() {
   const [gpsFocusPlot, setGpsFocusPlot] = useState(null);
+  const gpsPlotEntryRef = useRef(false);
   const [gpsJobDetail, setGpsJobDetail] = useState(null);
   const [jobs, setJobs] = useState([])
   const [expandedId, setExpandedId] = useState(null)
@@ -2623,13 +2635,13 @@ function App() {
   useEffect(() => { loadWageProfiles(); }, []);
   const saveWageProfile = async (name, role) => {
     if (userRole !== 'BOSS') throw new Error('เฉพาะเถ้าแก่เท่านั้นที่แก้ไขระดับค่าแรงได้');
-    let bossToken = sessionStorage.getItem('harvester_boss_token');
-    if (!bossToken) bossToken = await authorizeBoss();
+    let bossToken = getBossToken();
+    if (!bossToken) bossToken = requireBossToken();
     if (!bossToken) throw new Error('ยังไม่ได้ยืนยันสิทธิ์เถ้าแก่');
     name = cleanWageName(name);
     const res = await fetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bossToken}` }, body: JSON.stringify({ name, role }) });
     const data = await res.json();
-    if (res.status === 403) sessionStorage.removeItem('harvester_boss_token');
+    if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
     if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
     setWageProfiles(prev => [...prev.filter(p => p.name !== cleanWageName(data.name)), ...normalizeWageProfiles([data]).filter(p => p.name === cleanWageName(data.name))].sort((a,b) => a.name.localeCompare(b.name, 'th')));
     setWageProfileError('');
@@ -2653,7 +2665,7 @@ function App() {
   const [savingPlotPayment, setSavingPlotPayment] = useState(false);
   const paymentRequest = useRef(null);
   const paymentBusy = useRef(false);
-  const [homeQueueTab, setHomeQueueTab] = useState('follow');
+  const [homeQueueTab, setHomeQueueTab] = useState('today');
   const [homeQueuePage, setHomeQueuePage] = useState(1);
 
 
@@ -2678,14 +2690,24 @@ function App() {
   
   // 🔐 State สำหรับระบบ 2 ร่าง (ดึงค่าความจำจากเครื่องก่อน ถ้าไม่มีค่อยเป็น DRIVER)
   const [userRole, setUserRole] = useState(() => {
+    getBossToken(); // Migrate an already verified session before the tab is closed.
     return localStorage.getItem('harvester_role') || 'DRIVER';
   });
+  const requireBossToken = () => {
+    const token = getBossToken();
+    if (token) return token;
+    setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER');
+    throw new Error('สิทธิ์เถ้าแก่เดิมไม่อยู่ในเครื่องนี้ กรุณากดเข้าโหมดเถ้าแก่หนึ่งครั้ง ระบบจะจำสิทธิ์ไว้');
+  };
   const authorizeBoss = async () => {
+    const existing = getBossToken();
+    if (existing) return existing;
     const pin = window.prompt('กรุณาใส่ PIN เถ้าแก่');
     if (!pin) return null;
     const res = await fetch(`${WAGE_API}/boss/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'ยืนยันสิทธิ์ไม่สำเร็จ');
+    localStorage.setItem('harvester_boss_token', data.token);
     sessionStorage.setItem('harvester_boss_token', data.token);
     return data.token;
   };
@@ -2861,9 +2883,24 @@ function App() {
     }
   };
 
+  const openGpsPlot = (plot) => {
+    if (!plot?.vehicle_id || !/^\d{4}-\d{2}-\d{2}$/.test(String(plot.work_date || ''))) return alert('แปลงนี้ยังไม่มีรถหรือวันที่ที่ถูกต้อง');
+    gpsPlotEntryRef.current = true;
+    ++gpsFleetRequestSeq.current; ++gpsRequestSeq.current;
+    setIsFetchingFleetGps(false);
+    setGpsJobDetail(null);
+    setTrackingMode('history');
+    setTrackingVehicleId(String(plot.vehicle_id));
+    setTrackingDate(plot.work_date);
+    setGpsFocusPlot({ ...plot, request: Date.now() });
+    setActiveTab('gps');
+    setIsMapFullScreen(true);
+  };
+
   const selectGpsVehicle = async (id) => {
     const vehicleId = String(id || '');
     if (!vehicleId) return;
+    setGpsFocusPlot(null); gpsPlotEntryRef.current = false;
     setTrackingVehicleId(vehicleId);
 
     if (trackingMode === 'realtime') {
@@ -2884,6 +2921,7 @@ function App() {
 
   const changeGpsMode = (mode) => {
     if (mode === trackingMode) return;
+    setGpsFocusPlot(null); gpsPlotEntryRef.current = false;
     setTrackingMode(mode);
     if (mode === 'realtime') {
       setTrackingDate(getLocalDateString());
@@ -2912,6 +2950,8 @@ function App() {
     }
     if (gpsTabOpenedRef.current || !vehicles.length) return;
     gpsTabOpenedRef.current = true;
+    if (gpsPlotEntryRef.current) { gpsPlotEntryRef.current = false; return; }
+    setGpsFocusPlot(null);
     setTrackingMode('realtime');
     setTrackingDate(getLocalDateString());
     loadFleetGps({ chooseBest:true, focusBest:true });
@@ -2920,7 +2960,7 @@ function App() {
   // ประวัติ: เปลี่ยนรถหรือวันที่แล้วโหลดทันที ไม่ต้องกด "ค้นหา"
   useEffect(() => {
     if (activeTab !== 'gps' || trackingMode !== 'history' || !trackingVehicleId || !trackingDate) return;
-    loadSelectedGps(trackingVehicleId, trackingDate, { focus:true, silent:true });
+    loadSelectedGps(trackingVehicleId, trackingDate, { focus:!(gpsFocusPlot && String(gpsFocusPlot.vehicle_id) === String(trackingVehicleId) && gpsFocusPlot.work_date === trackingDate), silent:true });
   }, [activeTab, trackingMode, trackingVehicleId, trackingDate]);
 
   // คงชื่อเดิมไว้เผื่อ code ส่วนอื่นเรียก แต่ไม่ต้องใช้ปุ่มค้นหาแล้ว
@@ -3747,12 +3787,12 @@ function App() {
     if (!window.confirm(retrying ? 'ตรวจสอบและบันทึกรายการเดิมอีกครั้ง? ระบบจะไม่รับเงินซ้ำ' : `รับเงิน ${amount.toLocaleString()} บาท${mode === 'PLOTS' ? ` จาก ${items.length} แปลงที่เลือก` : ' เพื่อปิดยอดค้าง'} ใช่ไหม?`)) return;
     paymentBusy.current = true; setSavingPlotPayment(true);
     try {
-      const token = sessionStorage.getItem('harvester_boss_token') || await authorizeBoss();
+      const token = requireBossToken();
       if (!token) throw new Error('กรุณายืนยันสิทธิ์เถ้าแก่');
       if (!paymentRequest.current) paymentRequest.current = { request_id: crypto.randomUUID(), mode, items, expected_amount: amount, expected_rate: Number(data.payment?.rate || 0) };
       const res = await fetch(`${WAGE_API}/jobs/${job.id}/plot-payments`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(paymentRequest.current) });
       const result = await res.json();
-      if (res.status === 403) sessionStorage.removeItem('harvester_boss_token');
+      if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
       if (!res.ok) { if (res.status < 500) paymentRequest.current = null; throw new Error(result.error || 'รับเงินไม่สำเร็จ'); }
       paymentRequest.current = null;
       await fetchJobs(); await fetchDashboard();
@@ -3825,7 +3865,7 @@ function App() {
 
       let bossToken = '';
       if (!isPartial) {
-        bossToken = sessionStorage.getItem('harvester_boss_token') || await authorizeBoss();
+        bossToken = requireBossToken();
         if (!bossToken) throw new Error('ยังไม่ได้ยืนยันสิทธิ์เถ้าแก่');
       }
       const res = await fetch(url, {
@@ -3836,7 +3876,7 @@ function App() {
 
       let result = {};
       try { result = await res.json(); } catch (_) {}
-      if (res.status === 403) sessionStorage.removeItem('harvester_boss_token');
+      if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
       if (!res.ok) throw new Error(`${result.error || `HTTP ${res.status}`}${result.code ? ` [${result.code}]` : ''}${result.stage ? ` (ขั้น: ${result.stage})` : ''}`);
 
       if (isPartial) {
@@ -4094,8 +4134,8 @@ function App() {
                   if (await authorizeBoss()) { setUserRole('BOSS'); localStorage.setItem('harvester_role', 'BOSS'); }
                 } catch(e) { alert(e.message); }
               } else if (window.confirm('กลับไปโหมดลูกน้องใช่ไหม?')) {
-                const token = sessionStorage.getItem('harvester_boss_token');
-                sessionStorage.removeItem('harvester_boss_token');
+                const token = getBossToken();
+                clearBossToken();
                 setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); setActiveTab('home'); setFullScreenIndex(null);
                 if (token) fetch(`${WAGE_API}/boss/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
               }
@@ -4257,8 +4297,8 @@ function App() {
 
             {(() => {
               const following = todayJobs.filter(j => !isAwaitingArea(j));
-              const tabs = [['follow', 'ต้องติดตาม', following.length], ['area', 'รอยืนยันไร่', awaitingAreaJobs.length], ['log', 'บันทึกวันนี้', todayWorkLogJobs.length]];
-              const entries = homeQueueTab === 'area' ? awaitingAreaJobs : homeQueueTab === 'log' ? todayWorkLogJobs.map(r => r.job) : following;
+              const tabs = [['today', 'งานวันนี้', todaySummaryJobs.length], ['follow', 'ต้องติดตาม', following.length], ['area', 'รอยืนยันไร่', awaitingAreaJobs.length]];
+              const entries = homeQueueTab === 'area' ? awaitingAreaJobs : homeQueueTab === 'today' ? todaySummaryJobs : following;
               const pages = Math.max(1, Math.ceil(entries.length / 5));
               const page = Math.min(homeQueuePage, pages);
               return <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -4270,7 +4310,7 @@ function App() {
                   {!entries.length && <p className="py-6 text-center text-sm text-slate-500">ไม่มีงานในรายการนี้</p>}
                   {entries.slice((page - 1) * 5, page * 5).map(job => {
                     const ws = getJobWorkSummary(job);
-                    const record = homeQueueTab === 'log' ? todayWorkLogJobs.find(r => r.job.id === job.id) : null;
+                    const record = homeQueueTab === 'today' ? todayWorkLogJobs.find(r => r.job.id === job.id) : null;
                     const status = getStatusDisplay(isAwaitingArea(job) ? 'WAITING_AREA' : job.status);
                     return <button key={job.id} onClick={() => openJobDetails(job)} className="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/30">
                       <div className="flex items-center justify-between gap-2"><b className="truncate text-sm text-slate-900">{job.customers?.name || 'ไม่ระบุลูกค้า'}</b><span className={`shrink-0 rounded-lg px-2 py-1 text-xs border ${status.color}`}>{status.text}</span></div>
@@ -4727,7 +4767,7 @@ function App() {
                         {ws.postedWageArea>0 && <p className="text-[10px] font-bold text-purple-700">💰 ค่าแรงเก่าที่เคยลงสมุดแล้ว {formatRaiNgan(ws.postedWageArea)} • ระบบจะปรับตอนจบงาน</p>}
                       </div>;
                     })()}
-                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={plot => { setTrackingMode('history'); setTrackingVehicleId(String(plot.vehicle_id)); setTrackingDate(plot.work_date); setGpsFocusPlot({ ...plot, request: Date.now() }); setActiveTab('gps'); setIsMapFullScreen(true); }} />
+                    <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} onAll={() => setGpsJobDetail(job.id)} onOpen={openGpsPlot} />
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
                       <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
@@ -6180,7 +6220,7 @@ function App() {
             ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {formatRaiNgan(job.billing_area ?? 0)}</p>
             : <p className="text-sm text-amber-700">🗣️ ลูกค้าแจ้งประมาณ: {job.area_size ? `~${formatRaiNgan(job.area_size)}` : 'ไม่ระบุ'}</p>}
           {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
-          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>{setGpsJobDetail(null);setTrackingMode('history');setTrackingVehicleId(String(plot.vehicle_id));setTrackingDate(plot.work_date);setGpsFocusPlot({...plot,request:Date.now()});setActiveTab('gps');setIsMapFullScreen(true);}}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
+          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=><button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className="block w-full text-left border rounded-xl p-3 bg-sky-50" onClick={()=>openGpsPlot(plot)}><strong>{plot.name}</strong><p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p></button>)}</div>
           {userRole==='BOSS' && job.status==='DONE' && <button disabled={!summary?.plot_count || !!summary?.invalid_count || job.payment_status==='PAID'} onClick={()=>{setGpsJobDetail(null);openBillingAreaAdjust(job);setBillingAdjustArea(String(normalizeRaiNganValue(summary.area_rai)));}} className="w-full bg-emerald-600 text-white font-black rounded-xl py-3 disabled:opacity-40">📐 ใช้ GPS เป็นตัวช่วยตรวจไร่คิดเงิน</button>}
           {job.status!=='DONE' && <p className="text-xs text-blue-700 mt-2 font-bold">GPS เป็นข้อมูลหน้างาน • ปิดรอบวันนี้จะดึงเฉพาะยอดที่ยังไม่ลงรอบให้อัตโนมัติ</p>}
           {job.status==='DONE' && <p className="text-xs text-gray-500 mt-2">GPS ไม่แก้ทับข้อเท็จจริงย้อนหลัง • ปรับเฉพาะ 🤝 ไร่คิดเงิน และค่าแรงตามไร่ลูกค้า</p>}
