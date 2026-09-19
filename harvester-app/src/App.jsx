@@ -2638,7 +2638,6 @@ function App() {
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
   const [weatherData, setWeatherData] = useState(null);
-  const [weatherRetry, setWeatherRetry] = useState(0);
   const [weatherLocationName, setWeatherLocationName] = useState('กำลังค้นหาพิกัด...');
   const [isMapFullScreen, setIsMapFullScreen] = useState(false);
 
@@ -3205,7 +3204,8 @@ function App() {
     return { text: "รอข้อมูล ☀️", desc: "กำลังประเมินสภาพอากาศ...", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
   };
 
-  const weatherCoordinateKey = (() => {
+  useEffect(() => {
+    if (activeTab !== 'home') return;
     
     let lat = 15.7012; let lon = 101.1012; 
     if (radarOverride) { 
@@ -3220,43 +3220,21 @@ function App() {
       lat = Number(autoUserLocation.lat); lon = Number(autoUserLocation.lon); 
     }
 
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    if (isNaN(lat) || isNaN(lon) || lat === 0) {
       lat = 15.7012; lon = 101.1012;
     }
 
-    return `${lat.toFixed(3)},${lon.toFixed(3)}`;
-  })();
-
-  useEffect(() => {
-    if (activeTab !== 'home') return;
-    const [lat, lon] = weatherCoordinateKey.split(',').map(Number);
-    let active = true;
-    const weatherController = new AbortController();
-    const addressController = new AbortController();
-    const weatherRefreshTimer = setInterval(() => setWeatherRetry(n => n + 1), 15 * 60 * 1000);
-    const weatherTimer = setTimeout(() => weatherController.abort(), 25000);
-    const addressTimer = setTimeout(() => addressController.abort(), 10000);
-    setWeatherData(null);
-    setWeatherLocationName(`พิกัด ${lat}, ${lon}`);
-    // Always leave loading on HTTP errors, malformed responses or timeouts.
-    fetch(`${WAGE_API}/weather?lat=${lat}&lon=${lon}`, {signal: weatherController.signal, cache: 'no-store'})
-      .then(async res => {
-        if (res.status === 404) throw new Error('กรุณาอัปเดต server.js เพื่อใช้งานสภาพอากาศ');
-        const data = await res.json();
-        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'บริการอากาศไม่พร้อมชั่วคราว กรุณาลองใหม่');
-        if (data.error || !Number.isFinite(data.current?.weather_code) || !data.current?.time ||
-            !Array.isArray(data.hourly?.time) || !data.hourly.time.length ||
-            !Array.isArray(data.hourly?.weather_code) || data.hourly.weather_code.length !== data.hourly.time.length) throw new Error('ข้อมูลอากาศไม่ครบ กรุณาลองใหม่');
-        if (active) setWeatherData(data);
-      })
-      .catch(err => { if (active) setWeatherData({error: true, message: err.name === 'AbortError' ? 'เซิร์ฟเวอร์ตอบช้า กรุณาลองใหม่' : err.message === 'Failed to fetch' ? 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่' : err.message}); })
-      .finally(() => clearTimeout(weatherTimer));
-
+    // 1. ดึงข้อมูลสภาพอากาศ
+    fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia/Bangkok&forecast_days=2`)
+      .then(res => res.json())
+      .then(data => setWeatherData(data))
+      .catch(err => console.error(err));
+      
     // 2. ดึงข้อมูล ตำบล/อำเภอ/จังหวัด (Reverse Geocoding) 
-    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`, {signal: addressController.signal})
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1`)
       .then(res => res.json())
       .then(data => {
-        if (active && data && data.address) {
+        if (data && data.address) {
           // ดึงข้อมูลแต่ละระดับชั้นมาเตรียมไว้
           const subdistrict = data.address.suburb || data.address.village || data.address.quarter || data.address.hamlet || '';
           const district = data.address.county || data.address.city_district || data.address.city || data.address.town || '';
@@ -3284,16 +3262,9 @@ function App() {
           setWeatherLocationName(locStr.trim() || 'ไม่พบพิกัดที่อยู่');
         }
       })
-      .catch(() => { /* Keep coordinates when the place-name service fails. */ })
-      .finally(() => clearTimeout(addressTimer));
+      .catch(err => setWeatherLocationName('ดึงข้อมูลที่อยู่ไม่สำเร็จ'));
 
-    return () => {
-      active = false;
-      clearInterval(weatherRefreshTimer);
-      clearTimeout(weatherTimer); clearTimeout(addressTimer);
-      weatherController.abort(); addressController.abort();
-    };
-  }, [activeTab, weatherCoordinateKey, weatherRetry]);
+  }, [activeTab, radarOverride, jobs, gpsPathData, autoUserLocation]);
 
   const queueAreaRai = (job) => {
     if (job?.status === 'DONE') return Math.max(0, Number(job?.billing_area ?? job?.area_size) || 0);
@@ -4467,10 +4438,6 @@ function App() {
                     )}
                   </div>
 
-                  {weatherData?.weather_meta && <p className={`mt-2 text-[10px] ${weatherData.weather_meta.stale ? 'text-amber-800 font-bold' : 'text-slate-500'}`}>
-                    {weatherData.weather_meta.stale ? 'ข้อมูลเดิม · บริการอากาศไม่พร้อมชั่วคราว' : 'ข้อมูลจาก Open-Meteo'} · {new Date(weatherData.weather_meta.fetched_at).toLocaleString('th-TH', {timeZone:'Asia/Bangkok', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})}
-                    {weatherData.weather_meta.stale && <button onClick={() => setWeatherRetry(n => n + 1)} className="ml-2 underline">ลองใหม่</button>}
-                  </p>}
                   {(weatherData && weatherData.current) ? (() => {
                     const current = getThaiWeatherText(weatherData.current.weather_code);
                     const currentHour = weatherData.current.time;
@@ -4516,7 +4483,7 @@ function App() {
                       </div>
                     );
                   })() : weatherData?.error ? (
-                    <div className="text-center py-4"><p role="alert" className="text-xs text-red-600 font-bold">{weatherData.message || 'ดึงข้อมูลอากาศไม่ได้'}</p><button onClick={() => setWeatherRetry(n => n + 1)} className="mt-3 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-800">↻ ลองใหม่</button></div>
+                    <p className="text-xs text-center text-red-500 font-bold py-4">❌ ดึงข้อมูลอากาศไม่ได้</p>
                   ) : (
                     <p className="text-xs text-center text-slate-600 font-bold py-4">⏳ กำลังโหลดสภาพอากาศ...</p>
                   )}

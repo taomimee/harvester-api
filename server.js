@@ -12,12 +12,6 @@ app.use('/api/plots', express.json({ limit: '2mb' }));
 app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
 app.use(express.json());
 
-// Public HTTP health probe; identifies the deployed backend without querying the DB.
-const BACKEND_RELEASE = 'weather-diagnostics-20260919';
-app.get('/api/health', (req, res) => {
-    res.set('Cache-Control', 'no-store').json({ok: true, release: BACKEND_RELEASE, weather_route: true});
-});
-
 // Weather is fetched server-side so browsers only contact the app's existing API.
 const weatherHttps = require('https');
 const weatherCache = new Map();
@@ -43,40 +37,25 @@ function requestWeatherForecast(lat, lon) {
             upstream.setEncoding('utf8');
             upstream.on('data', chunk => {
                 bytes += Buffer.byteLength(chunk);
-                if (bytes > 1024 * 1024) { done(Object.assign(new Error('Weather response too large'), {code:'UPSTREAM_TOO_LARGE'})); req.destroy(); return; }
+                if (bytes > 1024 * 1024) { done(new Error('Weather response too large')); req.destroy(); return; }
                 body += chunk;
             });
             upstream.on('error', error => done(error));
-            upstream.on('aborted', () => done(Object.assign(new Error('Weather response interrupted'), {code:'UPSTREAM_INTERRUPTED'})));
+            upstream.on('aborted', () => done(new Error('Weather response interrupted')));
             upstream.on('end', () => {
                 try {
                     const data = JSON.parse(body);
                     if (data.error || !Number.isFinite(data.current?.weather_code) || !data.current?.time ||
                         !Array.isArray(data.hourly?.time) || !data.hourly.time.length ||
                         !Array.isArray(data.hourly?.weather_code) || data.hourly.time.length !== data.hourly.weather_code.length)
-                        throw Object.assign(new Error('Invalid weather response'), {code:'UPSTREAM_INVALID_DATA'});
+                        throw new Error('Invalid weather response');
                     done(null, data);
-                } catch (error) { done(Object.assign(error, {code:error.code || 'UPSTREAM_INVALID_DATA'})); }
+                } catch (error) { done(error); }
             });
         });
         req.on('error', error => done(error));
-        timer = setTimeout(() => { done(Object.assign(new Error('Weather timeout'), {code:'UPSTREAM_TIMEOUT'})); req.destroy(); }, 8000);
+        timer = setTimeout(() => { done(new Error('Weather timeout')); req.destroy(); }, 8000);
     });
-}
-function weatherFailureInfo(error) {
-    const status = Number(error?.status);
-    const codes = new Set(['UPSTREAM_TIMEOUT','UPSTREAM_INVALID_DATA','UPSTREAM_TOO_LARGE','UPSTREAM_INTERRUPTED',
-        'ENOTFOUND','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','ECONNRESET','ECONNREFUSED','ETIMEDOUT',
-        'CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE','ERR_TLS_CERT_ALTNAME_INVALID']);
-    const code = Number.isInteger(status) && status >= 400 && status <= 599 ? `UPSTREAM_HTTP_${status}`
-        : codes.has(error?.code) ? error.code : 'UPSTREAM_CONNECTION_FAILED';
-    const message = status === 429 ? 'ผู้ให้บริการอากาศจำกัดจำนวนคำขอ กรุณาลองใหม่ภายหลัง'
-        : status === 401 || status === 403 ? 'ผู้ให้บริการอากาศปฏิเสธคำขอจากเซิร์ฟเวอร์'
-        : code === 'UPSTREAM_TIMEOUT' || code === 'ETIMEDOUT' ? 'เซิร์ฟเวอร์รอข้อมูลอากาศเกินเวลาที่กำหนด'
-        : code === 'UPSTREAM_INVALID_DATA' ? 'ผู้ให้บริการส่งข้อมูลอากาศไม่ครบหรือรูปแบบไม่ถูกต้อง'
-        : ['ENOTFOUND','EAI_AGAIN'].includes(code) ? 'เซิร์ฟเวอร์ค้นหาที่อยู่บริการอากาศไม่สำเร็จ'
-        : 'เซิร์ฟเวอร์เชื่อมต่อผู้ให้บริการอากาศไม่สำเร็จ';
-    return {code, message};
 }
 app.get('/api/weather', async (req, res) => {
     const rawLat = req.query.lat, rawLon = req.query.lon;
@@ -94,8 +73,7 @@ app.get('/api/weather', async (req, res) => {
     if (cached?.data && now - cached.at < WEATHER_TTL) return sendData(cached);
     const unavailable = () => {
         if (cached?.data && Date.now() - cached.at < WEATHER_STALE_LIMIT) return sendData(cached, true);
-        const failure = weatherCache.get(key)?.failure || {code:'WEATHER_BUSY', message:'เซิร์ฟเวอร์กำลังดึงอากาศหลายพื้นที่'};
-        return res.status(503).set('Retry-After', '30').json({error: `${failure.message} (${failure.code})`, error_code: failure.code, retry_after:30});
+        return res.status(503).set('Retry-After', '30').json({error: 'บริการอากาศไม่พร้อมชั่วคราว กรุณาลองใหม่ใน 30 วินาที'});
     };
     if (cached?.retryAfter > now) return unavailable();
     try {
@@ -109,9 +87,7 @@ app.get('/api/weather', async (req, res) => {
                     return entry;
                 })
                 .catch(error => {
-                    const failure = weatherFailureInfo(error);
-                    console.warn('[WEATHER_FETCH_FAILED]', JSON.stringify(failure));
-                    weatherCache.delete(key); weatherCache.set(key, {...cached, failure, retryAfter: Date.now() + 30000});
+                    weatherCache.delete(key); weatherCache.set(key, {...cached, retryAfter: Date.now() + 30000});
                     throw error;
                 })
                 .finally(() => {
@@ -2496,23 +2472,19 @@ app.post('/api/plots', async (req,res) => {
 
 // หมายเหตุ: แปลงที่วาดจะเก็บถาวร ไม่ถูกลบตามระบบล้าง GPS 7 วัน
 
-// Render must route public HTTP to PORT, not the GPS TCP listener.
-const HTTP_PORT = Number(process.env.PORT || (process.env.RENDER ? 10000 : 3000));
-const GPS_PORT = Number(process.env.GPS_PORT || 5000);
-// Render web service exposes HTTP only; retain local/Ngrok TCP use by default.
-const GPS_TCP_ENABLED = process.env.ENABLE_GPS_TCP == null ? !process.env.RENDER : process.env.ENABLE_GPS_TCP === 'true';
-const validListenPort = port => Number.isInteger(port) && port > 0 && port <= 65535;
-if (!validListenPort(HTTP_PORT) || (GPS_TCP_ENABLED && (!validListenPort(GPS_PORT) || HTTP_PORT === GPS_PORT))) {
-    throw new Error('PORT และ GPS_PORT ต้องเป็นเลขพอร์ตคนละค่า: บน Render ตั้ง PORT=10000 และ GPS_PORT=5000');
-}
-const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
-    console.log(`✅ HTTP API ${BACKEND_RELEASE} listening on 0.0.0.0:${HTTP_PORT}`);
-    console.log('✅ Health: /api/health | Weather: /api/weather');
+// ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
+const server = app.listen(3000, () => {
+    console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
+    console.log(`⏳ ระบบกำลังเปิดค้างไว้เพื่อรอรับแขก... (ห้ามปิดหน้าจอนี้นะครับ)`);
 });
-server.on('error', err => {
-    console.error('❌ HTTP API failed to start:', err.message);
-    process.exit(1);
+
+// ดักจับ Error เผื่อระบบรันไม่ได้หรือ Port โดนแย่งใช้งาน
+server.on('error', (err) => {
+    console.error('❌ เซิร์ฟเวอร์รันไม่ได้ เกิดข้อผิดพลาด:', err.message);
 });
+
+// ทริกยื้อชีวิตเซิร์ฟเวอร์ บังคับไม่ให้ปิดตัวเอง
+setInterval(() => {}, 1000 * 60 * 60);
 
 // ==========================================
 // 🛰️ TCP Server สำหรับรับข้อมูลจากกล่อง GPS ST-901
@@ -2534,6 +2506,7 @@ function convertToDecimal(raw, dir) {
     return decimal.toFixed(7);
 }
 
+const GPS_PORT = 5000;
 
 // 🧠 จำจุดล่าสุดของรถไว้ใน RAM เพื่อช่วยประเมินความเร็วจริงจากระยะทาง
 // มีประโยชน์กับ ST-901 ที่บางครั้งรายงาน speed=0 ตอนรถคลานช้าในแปลง
@@ -2640,14 +2613,7 @@ const gpsServer = net.createServer((socket) => {
     });
 });
 
-gpsServer.on('error', err => {
-    console.error(`❌ GPS TCP port ${GPS_PORT} unavailable: ${err.message}`);
+gpsServer.listen(GPS_PORT, () => {
+    console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
+    console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
 });
-if (GPS_TCP_ENABLED) {
-    gpsServer.listen(GPS_PORT, '0.0.0.0', () => {
-        console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
-        console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
-    });
-} else {
-    console.log('✅ GPS TCP listener disabled; this service exposes HTTP only.');
-}
