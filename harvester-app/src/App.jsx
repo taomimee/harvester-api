@@ -3207,29 +3207,39 @@ function App() {
     return { text: "รอข้อมูล ☀️", desc: "กำลังประเมินสภาพอากาศ...", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
   };
 
-  // เลือกพิกัดเหมือนระบบเดิม แต่ปัดเป็น ~100 เมตร เพื่อไม่ยิง API ใหม่ทุกจุด GPS
-  // Effect ด้านล่างจะทำงานอีกครั้งเฉพาะพิกัดเปลี่ยนจริง / เปลี่ยนหน้า / กดรีเฟรช
-  let weatherLat = 15.7012, weatherLon = 101.1012;
-  const weatherActiveJob = jobs.find(j => j.status === 'IN_PROGRESS' && j.latitude != null && j.longitude != null);
-  const weatherLastGps = gpsPathData[gpsPathData.length - 1];
-  if (radarOverride) {
-    weatherLat = Number(radarOverride.lat); weatherLon = Number(radarOverride.lon);
-  } else if (weatherActiveJob) {
-    weatherLat = Number(weatherActiveJob.latitude); weatherLon = Number(weatherActiveJob.longitude);
-  } else if (weatherLastGps) {
-    weatherLat = Number(weatherLastGps.latitude); weatherLon = Number(weatherLastGps.longitude);
-  } else if (autoUserLocation) {
-    weatherLat = Number(autoUserLocation.lat); weatherLon = Number(autoUserLocation.lon);
-  }
-  if (!Number.isFinite(weatherLat) || !Number.isFinite(weatherLon) ||
-      Math.abs(weatherLat) > 90 || Math.abs(weatherLon) > 180 || (weatherLat === 0 && weatherLon === 0)) {
-    weatherLat = 15.7012; weatherLon = 101.1012;
-  }
-  weatherLat = Number(weatherLat.toFixed(3));
-  weatherLon = Number(weatherLon.toFixed(3));
+  // 🌤️ ตำแหน่งอากาศ: ใช้เฉพาะคิวที่กำลังเกี่ยวล่าสุด แม้คิวนั้นจะไม่ได้กรอกพิกัดก็ตาม
+  // ถ้าไม่มีพิกัดคิวล่าสุด จะใช้ 🎯 ตำแหน่งฉันเท่านั้น ไม่ใช้ GPS รถ/คิวเก่า/พิกัดจังหวัดสมมติ
+  const weatherActiveJob = jobs
+    .filter(j => j.status === 'IN_PROGRESS')
+    .sort((a, b) => {
+      const newestDate = (new Date(b.job_date || 0).getTime() || 0) - (new Date(a.job_date || 0).getTime() || 0);
+      return newestDate || (Number(b.id) || 0) - (Number(a.id) || 0);
+    })[0] || null;
+  const validWeatherPoint = (lat, lon) =>
+    lat !== '' && lon !== '' && lat != null && lon != null &&
+    Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) &&
+    Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180 &&
+    Number(lat) !== 0 && Number(lon) !== 0;
+  const weatherHasQueueCoords = !!weatherActiveJob && validWeatherPoint(weatherActiveJob.latitude, weatherActiveJob.longitude);
+  const weatherHasMyCoords = !!autoUserLocation && validWeatherPoint(autoUserLocation.lat, autoUserLocation.lon);
+  const weatherCoords = weatherHasQueueCoords
+    ? { lat: weatherActiveJob.latitude, lon: weatherActiveJob.longitude }
+    : weatherHasMyCoords ? autoUserLocation : null;
+  // ปัดพิกัดเพื่อให้การรีเฟรชข้อมูลรถไม่สร้างคำขอสภาพอากาศใหม่
+  const weatherLat = weatherCoords ? Number(Number(weatherCoords.lat).toFixed(3)) : null;
+  const weatherLon = weatherCoords ? Number(Number(weatherCoords.lon).toFixed(3)) : null;
 
   useEffect(() => {
     if (activeTab !== 'home') return;
+    if (weatherLat === null || weatherLon === null) {
+      setWeatherData(null); // ห้ามโชว์อากาศจากพิกัดเก่า/พิกัดสมมติ
+      setWeatherLoading(false);
+      setWeatherLocationName('ยังไม่มีพิกัด');
+      setWeatherError(weatherActiveJob
+        ? 'คิวล่าสุดยังไม่ได้กรอกพิกัด กรุณากด 🎯 ตำแหน่งฉัน'
+        : 'ยังไม่มีคิวที่กำลังเกี่ยว กรุณากด 🎯 ตำแหน่งฉัน');
+      return;
+    }
 
     const controller = new AbortController();
     let active = true;
@@ -4511,22 +4521,31 @@ function App() {
                   <div className="flex justify-between items-start gap-2 border-b border-blue-100 pb-2">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-blue-900">🌤️ สภาพอากาศ</p>
-                      <p className="text-xs text-blue-700 truncate mt-0.5">📍 {weatherLocationName || radarLocationName}</p>
+                      <p className="text-xs text-blue-700 truncate mt-0.5">
+                        {weatherHasQueueCoords
+                          ? `📍 คิวกำลังเกี่ยวล่าสุด #${weatherActiveJob.id} • ${weatherLocationName}`
+                          : weatherHasMyCoords
+                            ? `🎯 ตำแหน่งฉัน • ${weatherLocationName}`
+                            : '🎯 ไม่มีพิกัดคิวงาน — ใช้ตำแหน่งฉันแทน'}
+                      </p>
                     </div>
 
-                    {radarOverride ? (
-                      <button onClick={() => setRadarOverride(null)} className="bg-red-100 text-red-600 border border-orange-300 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">
-                        กลับไปดูรถ
-                      </button>
-                    ) : (
+                    {!weatherHasQueueCoords && (
                       <button
+                        type="button"
                         onClick={() => {
-                          if (navigator.geolocation) {
-                            navigator.geolocation.getCurrentPosition(
-                              (pos) => setRadarOverride({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-                              (err) => alert('❌ ดึงพิกัดไม่ได้: ' + err.message)
-                            );
+                          if (!navigator.geolocation) {
+                            alert('❌ เบราว์เซอร์ไม่รองรับตำแหน่งฉัน');
+                            return;
                           }
+                          navigator.geolocation.getCurrentPosition(
+                            (pos) => {
+                              setAutoUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+                              setWeatherRetryKey(key => key + 1);
+                            },
+                            (err) => alert('❌ กรุณาอนุญาตตำแหน่งฉัน: ' + err.message),
+                            { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 }
+                          );
                         }}
                         className="bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded text-xs font-bold whitespace-nowrap"
                       >
