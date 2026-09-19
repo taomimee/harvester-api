@@ -13,7 +13,7 @@ app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
 app.use(express.json());
 
 // Public HTTP health probe; identifies the deployed backend without querying the DB.
-const BACKEND_RELEASE = 'weather-single-port-20260919';
+const BACKEND_RELEASE = 'weather-diagnostics-20260919';
 app.get('/api/health', (req, res) => {
     res.set('Cache-Control', 'no-store').json({ok: true, release: BACKEND_RELEASE, weather_route: true});
 });
@@ -43,25 +43,40 @@ function requestWeatherForecast(lat, lon) {
             upstream.setEncoding('utf8');
             upstream.on('data', chunk => {
                 bytes += Buffer.byteLength(chunk);
-                if (bytes > 1024 * 1024) { done(new Error('Weather response too large')); req.destroy(); return; }
+                if (bytes > 1024 * 1024) { done(Object.assign(new Error('Weather response too large'), {code:'UPSTREAM_TOO_LARGE'})); req.destroy(); return; }
                 body += chunk;
             });
             upstream.on('error', error => done(error));
-            upstream.on('aborted', () => done(new Error('Weather response interrupted')));
+            upstream.on('aborted', () => done(Object.assign(new Error('Weather response interrupted'), {code:'UPSTREAM_INTERRUPTED'})));
             upstream.on('end', () => {
                 try {
                     const data = JSON.parse(body);
                     if (data.error || !Number.isFinite(data.current?.weather_code) || !data.current?.time ||
                         !Array.isArray(data.hourly?.time) || !data.hourly.time.length ||
                         !Array.isArray(data.hourly?.weather_code) || data.hourly.time.length !== data.hourly.weather_code.length)
-                        throw new Error('Invalid weather response');
+                        throw Object.assign(new Error('Invalid weather response'), {code:'UPSTREAM_INVALID_DATA'});
                     done(null, data);
-                } catch (error) { done(error); }
+                } catch (error) { done(Object.assign(error, {code:error.code || 'UPSTREAM_INVALID_DATA'})); }
             });
         });
         req.on('error', error => done(error));
-        timer = setTimeout(() => { done(new Error('Weather timeout')); req.destroy(); }, 8000);
+        timer = setTimeout(() => { done(Object.assign(new Error('Weather timeout'), {code:'UPSTREAM_TIMEOUT'})); req.destroy(); }, 8000);
     });
+}
+function weatherFailureInfo(error) {
+    const status = Number(error?.status);
+    const codes = new Set(['UPSTREAM_TIMEOUT','UPSTREAM_INVALID_DATA','UPSTREAM_TOO_LARGE','UPSTREAM_INTERRUPTED',
+        'ENOTFOUND','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH','ECONNRESET','ECONNREFUSED','ETIMEDOUT',
+        'CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE','ERR_TLS_CERT_ALTNAME_INVALID']);
+    const code = Number.isInteger(status) && status >= 400 && status <= 599 ? `UPSTREAM_HTTP_${status}`
+        : codes.has(error?.code) ? error.code : 'UPSTREAM_CONNECTION_FAILED';
+    const message = status === 429 ? 'ผู้ให้บริการอากาศจำกัดจำนวนคำขอ กรุณาลองใหม่ภายหลัง'
+        : status === 401 || status === 403 ? 'ผู้ให้บริการอากาศปฏิเสธคำขอจากเซิร์ฟเวอร์'
+        : code === 'UPSTREAM_TIMEOUT' || code === 'ETIMEDOUT' ? 'เซิร์ฟเวอร์รอข้อมูลอากาศเกินเวลาที่กำหนด'
+        : code === 'UPSTREAM_INVALID_DATA' ? 'ผู้ให้บริการส่งข้อมูลอากาศไม่ครบหรือรูปแบบไม่ถูกต้อง'
+        : ['ENOTFOUND','EAI_AGAIN'].includes(code) ? 'เซิร์ฟเวอร์ค้นหาที่อยู่บริการอากาศไม่สำเร็จ'
+        : 'เซิร์ฟเวอร์เชื่อมต่อผู้ให้บริการอากาศไม่สำเร็จ';
+    return {code, message};
 }
 app.get('/api/weather', async (req, res) => {
     const rawLat = req.query.lat, rawLon = req.query.lon;
@@ -79,7 +94,8 @@ app.get('/api/weather', async (req, res) => {
     if (cached?.data && now - cached.at < WEATHER_TTL) return sendData(cached);
     const unavailable = () => {
         if (cached?.data && Date.now() - cached.at < WEATHER_STALE_LIMIT) return sendData(cached, true);
-        return res.status(503).set('Retry-After', '30').json({error: 'บริการอากาศไม่พร้อมชั่วคราว กรุณาลองใหม่ใน 30 วินาที'});
+        const failure = weatherCache.get(key)?.failure || {code:'WEATHER_BUSY', message:'เซิร์ฟเวอร์กำลังดึงอากาศหลายพื้นที่'};
+        return res.status(503).set('Retry-After', '30').json({error: `${failure.message} (${failure.code})`, error_code: failure.code, retry_after:30});
     };
     if (cached?.retryAfter > now) return unavailable();
     try {
@@ -93,7 +109,9 @@ app.get('/api/weather', async (req, res) => {
                     return entry;
                 })
                 .catch(error => {
-                    weatherCache.delete(key); weatherCache.set(key, {...cached, retryAfter: Date.now() + 30000});
+                    const failure = weatherFailureInfo(error);
+                    console.warn('[WEATHER_FETCH_FAILED]', JSON.stringify(failure));
+                    weatherCache.delete(key); weatherCache.set(key, {...cached, failure, retryAfter: Date.now() + 30000});
                     throw error;
                 })
                 .finally(() => {
