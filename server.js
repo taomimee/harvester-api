@@ -57,6 +57,11 @@ function requestWeatherForecast(lat, lon) {
         timer = setTimeout(() => { done(new Error('Weather timeout')); req.destroy(); }, 8000);
     });
 }
+// Render และผู้ดูแลใช้เช็กว่าคำขอ HTTP วิ่งถึง Express จริงหรือไม่
+app.get('/api/health', (req, res) => res.set('Cache-Control', 'no-store').json({
+    ok: true, service: 'harvester-api', http_port: HTTP_PORT, weather_route: '/api/weather'
+}));
+
 app.get('/api/weather', async (req, res) => {
     const rawLat = req.query.lat, rawLon = req.query.lon;
     if (typeof rawLat !== 'string' || typeof rawLon !== 'string' || !rawLat.trim() || !rawLon.trim())
@@ -2480,10 +2485,15 @@ app.post('/api/plots', async (req,res) => {
 
 // หมายเหตุ: แปลงที่วาดจะเก็บถาวร ไม่ถูกลบตามระบบล้าง GPS 7 วัน
 
-// ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
-const server = app.listen(3000, () => {
-    console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
-    console.log(`⏳ ระบบกำลังเปิดค้างไว้เพื่อรอรับแขก... (ห้ามปิดหน้าจอนี้นะครับ)`);
+// Render ต้องส่ง HTTP เข้า Express ไม่ใช่พอร์ต TCP ของกล่อง GPS
+// PORT ของ Render โดยปกติเป็น 10000; กำหนด fallback เพื่อให้ระบบรับ HTTP ได้แม้ไม่มี ENV
+const HTTP_PORT = Number(process.env.PORT) || 10000;
+if (HTTP_PORT === 5000) {
+    throw new Error('PORT=5000 ชนกับ GPS TCP; ตั้ง PORT=10000 ใน Render Environment');
+}
+const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
+    console.log(`✅ HTTP API listening on 0.0.0.0:${HTTP_PORT} (GPS TCP uses port 5000)`);
+    console.log(`✅ Health: /api/health | Weather: /api/weather`);
 });
 
 // ดักจับ Error เผื่อระบบรันไม่ได้หรือ Port โดนแย่งใช้งาน
