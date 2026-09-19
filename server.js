@@ -12,6 +12,94 @@ app.use('/api/plots', express.json({ limit: '2mb' }));
 app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
 app.use(express.json());
 
+// Weather is fetched server-side so browsers only contact the app's existing API.
+const weatherHttps = require('https');
+const weatherCache = new Map();
+const weatherPending = new Map();
+const WEATHER_TTL = 15 * 60 * 1000;
+const WEATHER_STALE_LIMIT = 2 * 60 * 60 * 1000;
+function requestWeatherForecast(lat, lon) {
+    return new Promise((resolve, reject) => {
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=weather_code&hourly=weather_code&timezone=Asia%2FBangkok&forecast_days=2`;
+        let finished = false;
+        let timer;
+        const done = (error, data) => {
+            if (finished) return;
+            finished = true; clearTimeout(timer);
+            error ? reject(error) : resolve(data);
+        };
+        const req = weatherHttps.get(url, {headers: {'Accept': 'application/json'}}, upstream => {
+            if (upstream.statusCode !== 200) {
+                upstream.resume();
+                return done(Object.assign(new Error('Weather provider unavailable'), {status: upstream.statusCode}));
+            }
+            let bytes = 0, body = '';
+            upstream.setEncoding('utf8');
+            upstream.on('data', chunk => {
+                bytes += Buffer.byteLength(chunk);
+                if (bytes > 1024 * 1024) { done(new Error('Weather response too large')); req.destroy(); return; }
+                body += chunk;
+            });
+            upstream.on('error', error => done(error));
+            upstream.on('aborted', () => done(new Error('Weather response interrupted')));
+            upstream.on('end', () => {
+                try {
+                    const data = JSON.parse(body);
+                    if (data.error || !Number.isFinite(data.current?.weather_code) || !data.current?.time ||
+                        !Array.isArray(data.hourly?.time) || !data.hourly.time.length ||
+                        !Array.isArray(data.hourly?.weather_code) || data.hourly.time.length !== data.hourly.weather_code.length)
+                        throw new Error('Invalid weather response');
+                    done(null, data);
+                } catch (error) { done(error); }
+            });
+        });
+        req.on('error', error => done(error));
+        timer = setTimeout(() => { done(new Error('Weather timeout')); req.destroy(); }, 8000);
+    });
+}
+app.get('/api/weather', async (req, res) => {
+    const rawLat = req.query.lat, rawLon = req.query.lon;
+    if (typeof rawLat !== 'string' || typeof rawLon !== 'string' || !rawLat.trim() || !rawLon.trim())
+        return res.status(400).json({error: 'กรุณาระบุพิกัดสภาพอากาศ'});
+    const lat = Number(rawLat), lon = Number(rawLon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180)
+        return res.status(400).json({error: 'พิกัดสภาพอากาศไม่ถูกต้อง'});
+    const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+    const now = Date.now();
+    const cached = weatherCache.get(key);
+    const sendData = (entry, stale = false) => res.set('Cache-Control', 'no-store').json({
+        ...entry.data, weather_meta: {source: 'Open-Meteo', fetched_at: new Date(entry.at).toISOString(), stale}
+    });
+    if (cached?.data && now - cached.at < WEATHER_TTL) return sendData(cached);
+    const unavailable = () => {
+        if (cached?.data && Date.now() - cached.at < WEATHER_STALE_LIMIT) return sendData(cached, true);
+        return res.status(503).set('Retry-After', '30').json({error: 'บริการอากาศไม่พร้อมชั่วคราว กรุณาลองใหม่ใน 30 วินาที'});
+    };
+    if (cached?.retryAfter > now) return unavailable();
+    try {
+        let pending = weatherPending.get(key);
+        if (!pending) {
+            if (weatherPending.size >= 20) return unavailable();
+            pending = requestWeatherForecast(...key.split(',').map(Number))
+                .then(data => {
+                    const entry = {data, at: Date.now()};
+                    weatherCache.delete(key); weatherCache.set(key, entry);
+                    return entry;
+                })
+                .catch(error => {
+                    weatherCache.delete(key); weatherCache.set(key, {...cached, retryAfter: Date.now() + 30000});
+                    throw error;
+                })
+                .finally(() => {
+                    weatherPending.delete(key);
+                    while (weatherCache.size > 200) weatherCache.delete(weatherCache.keys().next().value);
+                });
+            weatherPending.set(key, pending);
+        }
+        return sendData(await pending);
+    } catch { return unavailable(); }
+});
+
 // เชื่อมต่อฐานข้อมูล Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
 
