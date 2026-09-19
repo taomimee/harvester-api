@@ -12,6 +12,12 @@ app.use('/api/plots', express.json({ limit: '2mb' }));
 app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
 app.use(express.json());
 
+// Public HTTP health probe; identifies the deployed backend without querying the DB.
+const BACKEND_RELEASE = 'weather-port-fix-20260919';
+app.get('/api/health', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({ok: true, release: BACKEND_RELEASE, weather_route: true});
+});
+
 // Weather is fetched server-side so browsers only contact the app's existing API.
 const weatherHttps = require('https');
 const weatherCache = new Map();
@@ -2472,19 +2478,20 @@ app.post('/api/plots', async (req,res) => {
 
 // หมายเหตุ: แปลงที่วาดจะเก็บถาวร ไม่ถูกลบตามระบบล้าง GPS 7 วัน
 
-// ล็อก Port ที่ 3000 และเปิดเซิร์ฟเวอร์
-const server = app.listen(3000, () => {
-    console.log(`✅ เซิร์ฟเวอร์รันแล้วที่: http://localhost:3000`);
-    console.log(`⏳ ระบบกำลังเปิดค้างไว้เพื่อรอรับแขก... (ห้ามปิดหน้าจอนี้นะครับ)`);
+// Render must route public HTTP to PORT, not the GPS TCP listener.
+const HTTP_PORT = Number(process.env.PORT || (process.env.RENDER ? 10000 : 3000));
+const GPS_PORT = Number(process.env.GPS_PORT || 5000);
+if (![HTTP_PORT, GPS_PORT].every(port => Number.isInteger(port) && port > 0 && port <= 65535) || HTTP_PORT === GPS_PORT) {
+    throw new Error('PORT และ GPS_PORT ต้องเป็นเลขพอร์ตคนละค่า: บน Render ตั้ง PORT=10000 และ GPS_PORT=5000');
+}
+const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
+    console.log(`✅ HTTP API ${BACKEND_RELEASE} listening on 0.0.0.0:${HTTP_PORT}`);
+    console.log('✅ Health: /api/health | Weather: /api/weather');
 });
-
-// ดักจับ Error เผื่อระบบรันไม่ได้หรือ Port โดนแย่งใช้งาน
-server.on('error', (err) => {
-    console.error('❌ เซิร์ฟเวอร์รันไม่ได้ เกิดข้อผิดพลาด:', err.message);
+server.on('error', err => {
+    console.error('❌ HTTP API failed to start:', err.message);
+    process.exit(1);
 });
-
-// ทริกยื้อชีวิตเซิร์ฟเวอร์ บังคับไม่ให้ปิดตัวเอง
-setInterval(() => {}, 1000 * 60 * 60);
 
 // ==========================================
 // 🛰️ TCP Server สำหรับรับข้อมูลจากกล่อง GPS ST-901
@@ -2506,7 +2513,6 @@ function convertToDecimal(raw, dir) {
     return decimal.toFixed(7);
 }
 
-const GPS_PORT = 5000;
 
 // 🧠 จำจุดล่าสุดของรถไว้ใน RAM เพื่อช่วยประเมินความเร็วจริงจากระยะทาง
 // มีประโยชน์กับ ST-901 ที่บางครั้งรายงาน speed=0 ตอนรถคลานช้าในแปลง
@@ -2613,7 +2619,10 @@ const gpsServer = net.createServer((socket) => {
     });
 });
 
-gpsServer.listen(GPS_PORT, () => {
+gpsServer.on('error', err => {
+    console.error(`❌ GPS TCP port ${GPS_PORT} unavailable: ${err.message}`);
+});
+gpsServer.listen(GPS_PORT, '0.0.0.0', () => {
     console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
     console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
 });
