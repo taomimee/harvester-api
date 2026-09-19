@@ -2745,6 +2745,14 @@ function App() {
 
   // 👇 เพิ่ม State ดึงพิกัดอัตโนมัติตอนเปิดเว็บ 👇
   const [autoUserLocation, setAutoUserLocation] = useState(null);
+  // อากาศแบบเดิม: 1 แหล่งข้อมูล, 1 ตำแหน่ง, ไม่พึ่ง Render และไม่ดึงตาม GPS รถ
+  const [weatherData, setWeatherData] = useState(null);
+  const [weatherBusy, setWeatherBusy] = useState(false);
+  const [weatherMessage, setWeatherMessage] = useState('');
+  const [weatherRefresh, setWeatherRefresh] = useState(0);
+  const [weatherExpanded, setWeatherExpanded] = useState(true);
+  const weatherRetryAt = useRef(0);
+  const weatherForceRefresh = useRef(false);
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -3187,6 +3195,67 @@ function App() {
     fetchVehicles(); 
     fetchAllCustomers(); // ดึงลูกค้ามาเตรียมไว้
   }, []);
+
+  // 🌤️ จุดอ้างอิง: คิว IN_PROGRESS ล่าสุดเท่านั้น; ไม่มีพิกัดคิวจึงใช้ตำแหน่งฉัน
+  const weatherJob = jobs.filter(j => j.status === 'IN_PROGRESS')
+    .sort((a, b) => (new Date(b.job_date || 0).getTime() || 0) - (new Date(a.job_date || 0).getTime() || 0) || Number(b.id || 0) - Number(a.id || 0))[0] || null;
+  const weatherPointValid = (lat, lon) => lat !== '' && lon !== '' && lat != null && lon != null &&
+    Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) &&
+    Number(lat) !== 0 && Number(lon) !== 0 && Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180;
+  const weatherJobPoint = weatherJob && weatherPointValid(weatherJob.latitude, weatherJob.longitude);
+  const weatherMyPoint = autoUserLocation && weatherPointValid(autoUserLocation.lat, autoUserLocation.lon);
+  const weatherPoint = weatherJobPoint ? { lat: weatherJob.latitude, lon: weatherJob.longitude } : weatherMyPoint ? autoUserLocation : null;
+  const weatherLat = weatherPoint ? Number(Number(weatherPoint.lat).toFixed(3)) : null;
+  const weatherLon = weatherPoint ? Number(Number(weatherPoint.lon).toFixed(3)) : null;
+  const getThaiWeatherText = (code) => {
+    if (!Number.isFinite(Number(code))) return { text: 'รอข้อมูล ☁️', desc: 'ยังไม่มีข้อมูล', color: 'text-slate-700', bg: 'bg-slate-100', border: 'border-slate-200' };
+    if (code <= 3) return { text: 'ปลอดโปร่ง ☀️', desc: 'แดดดี ท้องฟ้าแจ่มใส', color: 'text-gray-700', bg: 'bg-gray-100', border: 'border-gray-200' };
+    if (code <= 48 || (code >= 51 && code <= 57)) return { text: 'มีเมฆมาก ☁️', desc: 'ฟ้าครึ้ม ให้ประเมินหน้างาน', color: 'text-blue-700', bg: 'bg-blue-100', border: 'border-blue-300' };
+    if (code === 61 || code === 80) return { text: 'ฝนปรอย 💧', desc: 'ตรวจสภาพดินก่อนเกี่ยว', color: 'text-emerald-700', bg: 'bg-emerald-100', border: 'border-emerald-300' };
+    if ((code >= 63 && code <= 79) || code === 81) return { text: 'ฝนตก 🌧️', desc: 'ประเมินความปลอดภัยหน้างาน', color: 'text-orange-700', bg: 'bg-orange-100', border: 'border-orange-300' };
+    if (code >= 82 && code <= 99) return { text: 'ฝนหนัก/ฟ้าคะนอง ⛈️', desc: 'เฝ้าระวังสภาพอากาศ', color: 'text-red-700', bg: 'bg-red-100', border: 'border-red-300' };
+    return { text: 'รอข้อมูล ☁️', desc: 'ตรวจสภาพอากาศหน้างานประกอบ', color: 'text-slate-700', bg: 'bg-slate-100', border: 'border-slate-200' };
+  };
+  useEffect(() => {
+    if (activeTab !== 'home') return;
+    if (weatherLat === null || weatherLon === null) {
+      setWeatherData(null); setWeatherBusy(false); setWeatherMessage('ยังไม่มีพิกัดคิวงาน กรุณาอนุญาต 🎯 ตำแหน่งฉัน');
+      return;
+    }
+    let cancelled = false;
+    const key = `weather-simple:${weatherLat.toFixed(2)},${weatherLon.toFixed(2)}`;
+    let previous = null;
+    try {
+      previous = JSON.parse(sessionStorage.getItem(key) || 'null');
+      if (!previous?.data?.current?.time || Date.now() - previous.at > 2 * 60 * 60 * 1000) previous = null;
+    } catch { previous = null; }
+    const forceRefresh = weatherForceRefresh.current;
+    weatherForceRefresh.current = false;
+    if (previous && Date.now() - previous.at < 30 * 60 * 1000 && !forceRefresh) {
+      setWeatherData(previous.data); setWeatherBusy(false); setWeatherMessage('');
+      return;
+    }
+    setWeatherData(previous?.data || null);
+    setWeatherBusy(true);
+    setWeatherMessage(previous ? 'กำลังอัปเดตข้อมูลล่าสุด…' : 'กำลังโหลดสภาพอากาศ…');
+    // ใช้ URL เดิมแบบเรียบง่ายใน browser; ไม่ส่งคำขอไป Render หรือกระทบ GPS
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${weatherLat}&longitude=${weatherLon}&current=weather_code&hourly=weather_code&timezone=Asia%2FBangkok&forecast_days=2`;
+    fetch(url).then(async res => {
+      if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
+      const data = await res.json();
+      if (data?.error || !data?.current?.time || !Array.isArray(data?.hourly?.time) || !Array.isArray(data?.hourly?.weather_code)) throw new Error('ข้อมูลอากาศไม่ครบ');
+      return data;
+    }).then(data => {
+      if (cancelled) return;
+      setWeatherData(data); setWeatherMessage('');
+      try { sessionStorage.setItem(key, JSON.stringify({data, at: Date.now()})); } catch { /* private mode */ }
+    }).catch(err => {
+      if (cancelled) return;
+      console.warn('Simple weather provider unavailable:', err.message);
+      setWeatherMessage(previous ? '⚠️ ข้อมูลล่าสุดที่เคยโหลดได้ (ไม่ใช่ข้อมูลสด)' : 'ขณะนี้ดึงอากาศไม่ได้ — ผู้ให้บริการอาจไม่พร้อม');
+    }).finally(() => { if (!cancelled) setWeatherBusy(false); });
+    return () => { cancelled = true; };
+  }, [activeTab, weatherLat, weatherLon, weatherRefresh]);
 
   const queueAreaRai = (job) => {
     if (job?.status === 'DONE') return Math.max(0, Number(job?.billing_area ?? job?.area_size) || 0);
@@ -4102,8 +4171,8 @@ function App() {
     <div className="min-h-screen bg-slate-50 p-3 sm:p-4 font-sans pb-24">
       <div className="mx-auto max-w-md">
 
-        {/* 🐘 แบรนด์ — คงเอกลักษณ์ช้างขาว แต่ลดเอฟเฟกต์ที่แย่งความสนใจจากข้อมูลงาน */}
-        <header className="relative mb-3 overflow-hidden rounded-2xl border border-emerald-900/20 bg-gradient-to-r from-emerald-900 via-emerald-800 to-teal-900 px-4 py-3 text-center shadow-sm">
+        {/* 🐘 คืนสีทองช้างขาวเจริญทรัพย์จากเวอร์ชันเดิม — คงระบบ PIN ที่ปลอดภัยไว้ */}
+        <header className="relative mb-3 overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-800 via-green-700 to-teal-900 px-4 py-3.5 text-center shadow-lg">
           <button
             type="button"
             aria-label={userRole === 'BOSS' ? 'สลับเป็นโหมดคนขับ' : 'เข้าสู่โหมดเถ้าแก่'}
@@ -4121,11 +4190,16 @@ function App() {
               }
             }}
           >{userRole === 'BOSS' ? '🔓' : '🔒'}</button>
-          <div className="mx-auto mb-1.5 flex h-12 w-12 items-center justify-center rounded-xl border border-amber-300/35 bg-white/10 shadow-sm">
-            <img src="/elephant.png" alt="ตราช้างขาวเจริญทรัพย์" className="h-11 w-11 object-contain" />
+          <div className="relative mx-auto mb-2 w-fit">
+            <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 blur-lg opacity-70" />
+            <span className="absolute -left-3 -top-2 text-xs text-amber-200">✦</span>
+            <span className="absolute -right-3 -top-2 text-xs text-yellow-300">✦</span>
+            <div className="relative flex h-14 w-14 items-center justify-center rounded-xl border border-amber-300/40 bg-black/20 shadow-inner">
+              <img src="/elephant.png" alt="ตราช้างขาวเจริญทรัพย์" className="h-full w-full scale-125 object-contain drop-shadow-[0_0_8px_rgba(251,191,36,0.9)]" />
+            </div>
           </div>
-          <h1 className="text-lg font-black tracking-wide text-amber-200">ช้างขาวเจริญทรัพย์</h1>
-          <p className="mt-0.5 text-xs font-semibold text-emerald-100">ระบบจัดการคิวรถเกี่ยว</p>
+          <h1 className="bg-gradient-to-r from-amber-200 via-yellow-300 to-amber-400 bg-clip-text text-xl font-black tracking-wide leading-tight text-transparent drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">ช้างขาวเจริญทรัพย์</h1>
+          <p className="mx-auto mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-amber-300/30 bg-black/30 px-3 py-0.5 text-sm font-semibold text-amber-200"><span>🌾</span> ระบบจัดการคิวรถเกี่ยว</p>
         </header>
 
         {/* 🔘 เมนูหลัก — ประวัติคิวงานใช้ร่วมกันทั้งสองโหมด (บัญชีแยกเฉพาะเถ้าแก่) */}
@@ -4302,22 +4376,61 @@ function App() {
               </section>;
             })()}
 
-            {/* แจ้งเตือนคิวเลยวันนัด */}
-            {overdueJobs.length > 0 && (
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 className="mb-3 text-sm font-black text-slate-900">🔔 แจ้งเตือน</h2>
-                <div
-                  onClick={() => setActiveTab('active')}
-                  className="flex items-center gap-3 bg-orange-50 p-3 rounded-lg border border-orange-200 cursor-pointer hover:bg-orange-100 transition"
-                >
-                  <div className="text-xl">⚠️</div>
+            {/* 🌤️ คืนการ์ดอากาศหน้าตาเดิม ไม่ผูกกับ GPS และไม่เรียก Render */}
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="mb-3 text-sm font-black text-slate-900">🔔 สภาพอากาศและแจ้งเตือน</h2>
+              <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3 shadow-inner">
+                <div className="mb-3 flex items-start justify-between gap-2 border-b border-blue-100 pb-2">
                   <div className="min-w-0">
-                    <p className="text-xs font-black text-orange-900">เลยวันนัดเริ่มงาน {overdueJobs.length} คิว</p>
-                    <p className="text-xs text-orange-700 font-semibold mt-0.5">แตะเพื่อจัดวันนัดหรือเริ่มงาน</p>
+                    <p className="text-xs font-black text-blue-900">🌤️ สภาพอากาศ</p>
+                    <p className="mt-1 text-[11px] font-semibold text-blue-700">
+                      {weatherJobPoint ? `📍 คิวกำลังเกี่ยวล่าสุด #${weatherJob.id} • ${weatherJob.address_note || weatherJob.customers?.name || 'พิกัดคิวงาน'}` : '🎯 ตำแหน่งฉัน'}
+                    </p>
                   </div>
+                  {!weatherJobPoint && <button type="button" onClick={() => {
+                    if (!navigator.geolocation) return alert('เบราว์เซอร์ไม่รองรับตำแหน่งฉัน');
+                    navigator.geolocation.getCurrentPosition(pos => setAutoUserLocation({lat:pos.coords.latitude,lon:pos.coords.longitude}), err => alert('ใช้ตำแหน่งฉันไม่ได้: '+err.message));
+                  }} className="shrink-0 rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-[10px] font-bold text-blue-800">🎯 ตำแหน่งฉัน</button>}
                 </div>
-              </section>
-            )}
+                {weatherData?.current && Array.isArray(weatherData.hourly?.time) ? (() => {
+                  const now = getThaiWeatherText(weatherData.current.weather_code);
+                  const currentHour = weatherData.current.time;
+                  const firstHour = weatherData.hourly.time.findIndex(t => t >= currentHour);
+                  return <>
+                    <div className={`mb-3 rounded-xl border p-3 shadow-sm ${now.bg} ${now.border} ${now.color}`}>
+                      <p className="mb-1 text-sm font-black">📍 ตอนนี้: {now.text}</p>
+                      <p className="text-xs font-semibold">{now.desc}</p>
+                    </div>
+                    <button type="button" onClick={() => setWeatherExpanded(v => !v)} className="mb-2 w-full text-left text-[11px] font-bold text-blue-800">
+                      🕒 พยากรณ์ล่วงหน้า 24 ชั่วโมง {weatherExpanded ? '▲ ซ่อน' : '▼ ดูเพิ่มเติม'}
+                    </button>
+                    {weatherExpanded && <div className="flex snap-x gap-2 overflow-x-auto pb-2">
+                      {Array.from({length:24}, (_,i) => i+1).map(offset => {
+                        const index = firstHour + offset;
+                        if (index < 0 || !weatherData.hourly.time[index]) return null;
+                        const hour = getThaiWeatherText(weatherData.hourly.weather_code[index]);
+                        const date = new Date(weatherData.hourly.time[index]);
+                        return <div key={offset} className={`w-[30%] shrink-0 snap-center rounded-lg border p-2 text-center shadow-sm ${hour.bg} ${hour.border} ${hour.color}`}>
+                          <p className="text-[10px] font-bold">{date.getDate() !== new Date().getDate() ? 'พรุ่งนี้ ' : ''}{date.getHours()}:00 น.</p>
+                          <p className="my-1 text-xl">{hour.text.split(' ').slice(-1)[0]}</p>
+                          <p className="text-[10px] font-bold">{hour.text.split(' ').slice(0,-1).join(' ')}</p>
+                        </div>;
+                      })}
+                    </div>}
+                  </>;
+                })() : <p className="py-4 text-center text-xs font-semibold text-slate-600">{weatherMessage || (weatherBusy ? '⏳ กำลังโหลดอากาศ…' : 'ยังไม่มีข้อมูลอากาศ')}</p>}
+                {weatherMessage && weatherData && <p className="mt-1 text-[10px] font-semibold text-amber-800">{weatherMessage}</p>}
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-blue-100 pt-2">
+                  <span className="text-[10px] text-slate-500">ข้อมูลจาก Open-Meteo • ใช้ประกอบการตัดสินใจหน้างาน</span>
+                  <button type="button" disabled={weatherBusy} onClick={() => {
+                    if (Date.now() - weatherRetryAt.current < 60_000) return;
+                    weatherRetryAt.current = Date.now(); weatherForceRefresh.current = true; setWeatherRefresh(v => v+1);
+                  }} className="shrink-0 rounded-lg border border-blue-200 bg-white px-2 py-1 text-[10px] font-bold text-blue-700 disabled:opacity-40">{weatherBusy ? 'กำลังโหลด…' : '↻ โหลดใหม่'}</button>
+                </div>
+              </div>
+              {overdueJobs.length > 0 && <button type="button" onClick={() => setActiveTab('active')} className="mt-3 w-full rounded-lg border border-orange-200 bg-orange-50 p-3 text-left text-xs font-bold text-orange-800">⚠️ เลยวันนัดเริ่มงาน {overdueJobs.length} คิว • แตะเพื่อจัดการ</button>}
+            </section>
+
           </div>
         )}
 
