@@ -3241,7 +3241,7 @@ function App() {
       try {
         const res = await fetch(url, { signal: requestController.signal, cache: 'no-store' });
         const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}${typeof data?.reason === 'string' ? ': ' + data.reason : typeof data?.error === 'string' ? ': ' + data.error : ''}`);
         if (!data?.current?.time || !Number.isFinite(Number(data.current.weather_code)) ||
             !Array.isArray(data.hourly?.time) || !data.hourly.time.length ||
             !Array.isArray(data.hourly?.weather_code) ||
@@ -3255,31 +3255,77 @@ function App() {
       }
     };
 
-    const loadWeather = async () => {
-      setWeatherLoading(true);
-      setWeatherError('');
-      setWeatherData(null); // ห้ามแสดงอากาศจากพิกัดเก่าระหว่างเปลี่ยนตำแหน่ง
-      const query = `lat=${weatherLat}&lon=${weatherLon}`;
-      let data;
-      try {
-        // ใช้ API ฝั่ง Server ก่อน (มี cache, timeout และ stale fallback อยู่แล้ว)
-        try {
-          data = await fetchWithTimeout(`${WAGE_API}/weather?${query}`, 11000);
-        } catch (serverError) {
-          if (controller.signal.aborted) return;
-          console.warn('Weather proxy unavailable; trying Open-Meteo directly:', serverError);
-          // สำรองเมื่อ Render / proxy ตอบไม่ได้; ถ้าบราวเซอร์ถูกบล็อกก็จบที่ Error UI
-          data = await fetchWithTimeout(
-            `https://api.open-meteo.com/v1/forecast?latitude=${weatherLat}&longitude=${weatherLon}&current=weather_code&hourly=weather_code&timezone=Asia%2FBangkok&forecast_days=2`,
-            8000
-          );
-          data = { ...data, weather_meta: { source: 'Open-Meteo (สำรอง)', stale: false } };
+    // ไม่พึ่ง Render เป็นช่องทางหลัก: shared cloud IP อาจโดน Open-Meteo จำกัด 429
+    // Cache เฉพาะแท็บนี้ จำกัดคำขอเมื่อพิกัด GPS ขยับเล็กน้อย และไม่ปลอมข้อมูลเก่าเป็นข้อมูลสด
+    const cacheKey = `harvester-weather-v3:${weatherLat.toFixed(2)},${weatherLon.toFixed(2)}`;
+    const cacheMaxAgeMs = 2 * 60 * 60 * 1000;
+    const cacheFreshMs = 30 * 60 * 1000;
+    let prior = null;
+    try {
+      const saved = sessionStorage.getItem(cacheKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && Date.now() - parsed.at >= 0 && Date.now() - parsed.at < cacheMaxAgeMs &&
+            parsed.data?.current?.time && Array.isArray(parsed.data?.hourly?.time)) {
+          prior = parsed;
         }
-        if (active) setWeatherData(data);
-      } catch (error) {
+      }
+    } catch (error) {
+      console.warn('Weather session cache unavailable:', error);
+    }
+
+    const loadWeather = async () => {
+      setWeatherError('');
+      if (prior) {
+        setWeatherData({ ...prior.data, weather_meta: {
+          ...prior.data.weather_meta, stale: Date.now() - prior.at >= cacheFreshMs,
+          fetched_at: new Date(prior.at).toISOString()
+        }});
+        if (Date.now() - prior.at < cacheFreshMs) {
+          setWeatherLoading(false);
+          return;
+        }
+      } else {
+        setWeatherData(null); // อย่าเอาอากาศแปลงอื่นมาแสดง
+      }
+      setWeatherLoading(true);
+      const directUrl = `https://api.open-meteo.com/v1/forecast?latitude=${weatherLat}&longitude=${weatherLon}&current=weather_code&hourly=weather_code&timezone=Asia%2FBangkok&forecast_days=2`;
+      const proxyUrl = `${WAGE_API}/weather?lat=${weatherLat}&lon=${weatherLon}`;
+      let firstError = null;
+      try {
+        let data;
+        try {
+          // กลับไปใช้รูปแบบที่เคยใช้งานได้: เรียกจากบราวเซอร์โดยตรงก่อน
+          data = await fetchWithTimeout(directUrl, 8500);
+          data = { ...data, weather_meta: { source: 'Open-Meteo', stale: false, fetched_at: new Date().toISOString() } };
+        } catch (directError) {
+          if (controller.signal.aborted) return;
+          firstError = directError;
+          console.warn('Direct weather failed; trying backend:', directError);
+          data = await fetchWithTimeout(proxyUrl, 11000);
+        }
+        if (!active) return;
+        setWeatherData(data);
+        setWeatherError('');
+        try {
+          const reportedAt = Date.parse(data.weather_meta?.fetched_at || '');
+          const at = Number.isFinite(reportedAt) ? reportedAt : Date.now();
+          sessionStorage.setItem(cacheKey, JSON.stringify({ data, at }));
+        }
+        catch (error) { console.warn('Unable to store weather cache:', error); }
+      } catch (lastError) {
         if (!active || controller.signal.aborted) return;
-        console.error('Weather loading failed (proxy and direct):', error);
-        setWeatherError('ดึงข้อมูลสภาพอากาศไม่ได้ในขณะนี้ กรุณากดลองใหม่');
+        console.error('Weather failed (direct and backend):', firstError, lastError);
+        if (prior) {
+          // เมื่อผู้ให้บริการล่ม แสดงข้อมูลเดิมอย่างโปร่งใส สูงสุดสองชั่วโมง
+          setWeatherData({ ...prior.data, weather_meta: {
+            ...prior.data.weather_meta, stale: true, fetched_at: new Date(prior.at).toISOString()
+          }});
+        } else {
+          setWeatherError(/429/.test(`${firstError?.message || ''} ${lastError?.message || ''}`)
+            ? 'ผู้ให้บริการอากาศจำกัดการเรียก (429) กรุณารอ ไม่ควรกดลองใหม่ถี่ ๆ'
+            : 'ผู้ให้บริการอากาศยังตอบไม่ได้ (ดูข้อผิดพลาดจริงได้ที่ Console)');
+        }
       } finally {
         if (active) setWeatherLoading(false);
       }
