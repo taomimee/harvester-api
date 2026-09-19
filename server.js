@@ -87,6 +87,14 @@ app.get('/api/weather', async (req, res) => {
                     return entry;
                 })
                 .catch(error => {
+                    // Show the real upstream failure in Render Logs (timeout, DNS, 429, 5xx).
+                    // Never log API keys or other environment variables.
+                    console.error('Weather provider failed:', {
+                        lat: key.split(',')[0], lon: key.split(',')[1],
+                        status: error.status || null,
+                        code: error.code || null,
+                        message: error.message
+                    });
                     weatherCache.delete(key); weatherCache.set(key, {...cached, retryAfter: Date.now() + 30000});
                     throw error;
                 })
