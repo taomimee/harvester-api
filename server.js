@@ -100,7 +100,7 @@ app.get('/api/weather', async (req, res) => {
                         code: error.code || null,
                         message: error.message
                     });
-                    weatherCache.delete(key); weatherCache.set(key, {...cached, retryAfter: Date.now() + 30000});
+                    weatherCache.delete(key); weatherCache.set(key, {...cached, retryAfter: Date.now() + (error.status === 429 ? 15 * 60 * 1000 : 30000)});
                     throw error;
                 })
                 .finally(() => {
@@ -2631,7 +2631,15 @@ const gpsServer = net.createServer((socket) => {
     });
 });
 
-gpsServer.listen(GPS_PORT, () => {
-    console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
-    console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
-});
+// Render web service must expose just one listener: Express on process.env.PORT.
+// GPS TCP is handled by Hetzner. Keep TCP enabled by default on non-Render hosts
+// so deploying this same file to the GPS host will not silently disable tracking.
+const enableGpsTcp = process.env.RENDER !== 'true' && process.env.ENABLE_GPS_TCP !== 'false';
+if (enableGpsTcp) {
+    gpsServer.listen(GPS_PORT, () => {
+        console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
+        console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
+    });
+} else {
+    console.log('ℹ️ GPS TCP listener disabled on Render; web API serves HTTP only.');
+}
