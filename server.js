@@ -13,7 +13,7 @@ app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
 app.use(express.json());
 
 // Public HTTP health probe; identifies the deployed backend without querying the DB.
-const BACKEND_RELEASE = 'weather-port-fix-20260919';
+const BACKEND_RELEASE = 'weather-single-port-20260919';
 app.get('/api/health', (req, res) => {
     res.set('Cache-Control', 'no-store').json({ok: true, release: BACKEND_RELEASE, weather_route: true});
 });
@@ -2481,7 +2481,10 @@ app.post('/api/plots', async (req,res) => {
 // Render must route public HTTP to PORT, not the GPS TCP listener.
 const HTTP_PORT = Number(process.env.PORT || (process.env.RENDER ? 10000 : 3000));
 const GPS_PORT = Number(process.env.GPS_PORT || 5000);
-if (![HTTP_PORT, GPS_PORT].every(port => Number.isInteger(port) && port > 0 && port <= 65535) || HTTP_PORT === GPS_PORT) {
+// Render web service exposes HTTP only; retain local/Ngrok TCP use by default.
+const GPS_TCP_ENABLED = process.env.ENABLE_GPS_TCP == null ? !process.env.RENDER : process.env.ENABLE_GPS_TCP === 'true';
+const validListenPort = port => Number.isInteger(port) && port > 0 && port <= 65535;
+if (!validListenPort(HTTP_PORT) || (GPS_TCP_ENABLED && (!validListenPort(GPS_PORT) || HTTP_PORT === GPS_PORT))) {
     throw new Error('PORT และ GPS_PORT ต้องเป็นเลขพอร์ตคนละค่า: บน Render ตั้ง PORT=10000 และ GPS_PORT=5000');
 }
 const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
@@ -2622,7 +2625,11 @@ const gpsServer = net.createServer((socket) => {
 gpsServer.on('error', err => {
     console.error(`❌ GPS TCP port ${GPS_PORT} unavailable: ${err.message}`);
 });
-gpsServer.listen(GPS_PORT, '0.0.0.0', () => {
-    console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
-    console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
-});
+if (GPS_TCP_ENABLED) {
+    gpsServer.listen(GPS_PORT, '0.0.0.0', () => {
+        console.log(`📡 TCP GPS Server รันแล้วที่ Port: ${GPS_PORT}`);
+        console.log(`⏳ รอรับสัญญาณจากกล่อง ST-901 ผ่าน Ngrok...`);
+    });
+} else {
+    console.log('✅ GPS TCP listener disabled; this service exposes HTTP only.');
+}
