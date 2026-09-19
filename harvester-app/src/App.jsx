@@ -2637,11 +2637,6 @@ function App() {
   const [financeSubTab, setFinanceSubTab] = useState('dashboard'); // 👈 เพิ่ม State สำหรับคุมเมนูย่อยในหน้าบัญชี
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
-  const [weatherData, setWeatherData] = useState(null);
-  const [weatherLoading, setWeatherLoading] = useState(true);
-  const [weatherError, setWeatherError] = useState('');
-  const [weatherRetryKey, setWeatherRetryKey] = useState(0);
-  const [weatherLocationName, setWeatherLocationName] = useState('กำลังค้นหาพิกัด...');
   const [isMapFullScreen, setIsMapFullScreen] = useState(false);
 
 
@@ -2722,8 +2717,6 @@ function App() {
   const [dashMonth, setDashMonth] = useState(new Date().getMonth() + 1);
   const [dashYear, setDashYear] = useState(new Date().getFullYear());
   const [isFetchingDash, setIsFetchingDash] = useState(false);
-  const [radarOverride, setRadarOverride] = useState(null);
-  const [showHomeWeatherForecast, setShowHomeWeatherForecast] = useState(false);
   
   // 🔐 State สำหรับระบบ 2 ร่าง (ดึงค่าความจำจากเครื่องก่อน ถ้าไม่มีค่อยเป็น DRIVER)
   const [userRole, setUserRole] = useState(() => {
@@ -3195,184 +3188,6 @@ function App() {
     fetchAllCustomers(); // ดึงลูกค้ามาเตรียมไว้
   }, []);
 
-  // ==========================================
-  // 👇 วาง "ระบบสภาพอากาศ + สมองคำนวณหน้าแรก" ตรงนี้ 👇
-  // ==========================================
-
-  const getThaiWeatherText = (code) => {
-    if (code <= 3) return { text: "ปลอดโปร่ง ☀️", desc: "ลุยเกี่ยวได้ยาวๆ ไม่ต้องกังวล", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-    if (code >= 51 && code <= 61) return { text: "มีเมฆมาก ☁️", desc: "ฟ้าครึ้ม แดดร่ม ให้ประเมินดินหน้าแปลง", color: "text-emerald-700", bg: "bg-emerald-100", border: "border-emerald-300" };
-    if ((code >= 63 && code <= 67) || (code >= 80 && code <= 81)) return { text: "ฝนตกหนัก 🌧️", desc: "ต้องหยุดเกี่ยว", color: "text-orange-700", bg: "bg-orange-100", border: "border-orange-300" };
-    if (code >= 82 && code <= 99) return { text: "พายุเข้า ⛈️", desc: "อันตรายพายุเข้า!", color: "text-red-700", bg: "bg-red-100", border: "border-red-300" };
-    return { text: "รอข้อมูล ☀️", desc: "กำลังประเมินสภาพอากาศ...", color: "text-gray-700", bg: "bg-gray-100", border: "border-gray-200" };
-  };
-
-  // 🌤️ ตำแหน่งอากาศ: ใช้เฉพาะคิวที่กำลังเกี่ยวล่าสุด แม้คิวนั้นจะไม่ได้กรอกพิกัดก็ตาม
-  // ถ้าไม่มีพิกัดคิวล่าสุด จะใช้ 🎯 ตำแหน่งฉันเท่านั้น ไม่ใช้ GPS รถ/คิวเก่า/พิกัดจังหวัดสมมติ
-  const weatherActiveJob = jobs
-    .filter(j => j.status === 'IN_PROGRESS')
-    .sort((a, b) => {
-      const newestDate = (new Date(b.job_date || 0).getTime() || 0) - (new Date(a.job_date || 0).getTime() || 0);
-      return newestDate || (Number(b.id) || 0) - (Number(a.id) || 0);
-    })[0] || null;
-  const validWeatherPoint = (lat, lon) =>
-    lat !== '' && lon !== '' && lat != null && lon != null &&
-    Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) &&
-    Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180 &&
-    Number(lat) !== 0 && Number(lon) !== 0;
-  const weatherHasQueueCoords = !!weatherActiveJob && validWeatherPoint(weatherActiveJob.latitude, weatherActiveJob.longitude);
-  const weatherHasMyCoords = !!autoUserLocation && validWeatherPoint(autoUserLocation.lat, autoUserLocation.lon);
-  const weatherCoords = weatherHasQueueCoords
-    ? { lat: weatherActiveJob.latitude, lon: weatherActiveJob.longitude }
-    : weatherHasMyCoords ? autoUserLocation : null;
-  // ปัดพิกัดเพื่อให้การรีเฟรชข้อมูลรถไม่สร้างคำขอสภาพอากาศใหม่
-  const weatherLat = weatherCoords ? Number(Number(weatherCoords.lat).toFixed(3)) : null;
-  const weatherLon = weatherCoords ? Number(Number(weatherCoords.lon).toFixed(3)) : null;
-
-  useEffect(() => {
-    if (activeTab !== 'home') return;
-    if (weatherLat === null || weatherLon === null) {
-      setWeatherData(null); // ห้ามโชว์อากาศจากพิกัดเก่า/พิกัดสมมติ
-      setWeatherLoading(false);
-      setWeatherLocationName('ยังไม่มีพิกัด');
-      setWeatherError(weatherActiveJob
-        ? 'คิวล่าสุดยังไม่ได้กรอกพิกัด กรุณากด 🎯 ตำแหน่งฉัน'
-        : 'ยังไม่มีคิวที่กำลังเกี่ยว กรุณากด 🎯 ตำแหน่งฉัน');
-      return;
-    }
-
-    const controller = new AbortController();
-    let active = true;
-    const fetchWithTimeout = async (url, timeoutMs) => {
-      const requestController = new AbortController();
-      const cancel = () => requestController.abort();
-      controller.signal.addEventListener('abort', cancel, { once: true });
-      const timeout = setTimeout(cancel, timeoutMs);
-      try {
-        const res = await fetch(url, { signal: requestController.signal, cache: 'no-store' });
-        const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(`HTTP ${res.status}${typeof data?.reason === 'string' ? ': ' + data.reason : typeof data?.error === 'string' ? ': ' + data.error : ''}`);
-        if (!data?.current?.time || !Number.isFinite(Number(data.current.weather_code)) ||
-            !Array.isArray(data.hourly?.time) || !data.hourly.time.length ||
-            !Array.isArray(data.hourly?.weather_code) ||
-            data.hourly.time.length !== data.hourly.weather_code.length) {
-          throw new Error('ข้อมูลพยากรณ์อากาศไม่ครบ');
-        }
-        return data;
-      } finally {
-        clearTimeout(timeout);
-        controller.signal.removeEventListener('abort', cancel);
-      }
-    };
-
-    // ไม่พึ่ง Render เป็นช่องทางหลัก: shared cloud IP อาจโดน Open-Meteo จำกัด 429
-    // Cache เฉพาะแท็บนี้ จำกัดคำขอเมื่อพิกัด GPS ขยับเล็กน้อย และไม่ปลอมข้อมูลเก่าเป็นข้อมูลสด
-    const cacheKey = `harvester-weather-v3:${weatherLat.toFixed(2)},${weatherLon.toFixed(2)}`;
-    const cacheMaxAgeMs = 2 * 60 * 60 * 1000;
-    const cacheFreshMs = 30 * 60 * 1000;
-    let prior = null;
-    try {
-      const saved = sessionStorage.getItem(cacheKey);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && Date.now() - parsed.at >= 0 && Date.now() - parsed.at < cacheMaxAgeMs &&
-            parsed.data?.current?.time && Array.isArray(parsed.data?.hourly?.time)) {
-          prior = parsed;
-        }
-      }
-    } catch (error) {
-      console.warn('Weather session cache unavailable:', error);
-    }
-
-    const loadWeather = async () => {
-      setWeatherError('');
-      if (prior) {
-        setWeatherData({ ...prior.data, weather_meta: {
-          ...prior.data.weather_meta, stale: Date.now() - prior.at >= cacheFreshMs,
-          fetched_at: new Date(prior.at).toISOString()
-        }});
-        if (Date.now() - prior.at < cacheFreshMs) {
-          setWeatherLoading(false);
-          return;
-        }
-      } else {
-        setWeatherData(null); // อย่าเอาอากาศแปลงอื่นมาแสดง
-      }
-      setWeatherLoading(true);
-      const directUrl = `https://api.open-meteo.com/v1/forecast?latitude=${weatherLat}&longitude=${weatherLon}&current=weather_code&hourly=weather_code&timezone=Asia%2FBangkok&forecast_days=2`;
-      const proxyUrl = `${WAGE_API}/weather?lat=${weatherLat}&lon=${weatherLon}`;
-      let firstError = null;
-      try {
-        let data;
-        try {
-          // กลับไปใช้รูปแบบที่เคยใช้งานได้: เรียกจากบราวเซอร์โดยตรงก่อน
-          data = await fetchWithTimeout(directUrl, 8500);
-          data = { ...data, weather_meta: { source: 'Open-Meteo', stale: false, fetched_at: new Date().toISOString() } };
-        } catch (directError) {
-          if (controller.signal.aborted) return;
-          firstError = directError;
-          console.warn('Direct weather failed; trying backend:', directError);
-          data = await fetchWithTimeout(proxyUrl, 11000);
-        }
-        if (!active) return;
-        setWeatherData(data);
-        setWeatherError('');
-        try {
-          const reportedAt = Date.parse(data.weather_meta?.fetched_at || '');
-          const at = Number.isFinite(reportedAt) ? reportedAt : Date.now();
-          sessionStorage.setItem(cacheKey, JSON.stringify({ data, at }));
-        }
-        catch (error) { console.warn('Unable to store weather cache:', error); }
-      } catch (lastError) {
-        if (!active || controller.signal.aborted) return;
-        console.error('Weather failed (direct and backend):', firstError, lastError);
-        if (prior) {
-          // เมื่อผู้ให้บริการล่ม แสดงข้อมูลเดิมอย่างโปร่งใส สูงสุดสองชั่วโมง
-          setWeatherData({ ...prior.data, weather_meta: {
-            ...prior.data.weather_meta, stale: true, fetched_at: new Date(prior.at).toISOString()
-          }});
-        } else {
-          setWeatherError(/429/.test(`${firstError?.message || ''} ${lastError?.message || ''}`)
-            ? 'ผู้ให้บริการอากาศจำกัดการเรียก (429) กรุณารอ ไม่ควรกดลองใหม่ถี่ ๆ'
-            : 'ผู้ให้บริการอากาศยังตอบไม่ได้ (ดูข้อผิดพลาดจริงได้ที่ Console)');
-        }
-      } finally {
-        if (active) setWeatherLoading(false);
-      }
-    };
-    loadWeather();
-
-    // ชื่อที่อยู่ไม่ควรขัดขวางหรือบังคับให้ดึงข้อมูลอากาศซ้ำ
-    setWeatherLocationName('กำลังค้นหาพิกัด...');
-    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${weatherLat}&lon=${weatherLon}&zoom=10&addressdetails=1`, { signal: controller.signal })
-      .then(res => {
-        if (!res.ok) throw new Error(`Reverse geocode HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        if (!active) return;
-        if (!data?.address) { setWeatherLocationName('ไม่พบพิกัดที่อยู่'); return; }
-        const address = data.address;
-        const subdistrict = address.suburb || address.village || address.quarter || address.hamlet || '';
-        const district = address.county || address.city_district || address.city || address.town || '';
-        const province = address.state || address.province || '';
-        const name = [
-          subdistrict.replace(/Tambon /ig, '').replace(/ตำบล/g, '').trim(),
-          district.replace(/Amphoe /ig, '').replace(/อำเภอ/g, '').trim(),
-          province.replace(/Province /ig, '').trim()
-        ].filter(Boolean).join(' ');
-        setWeatherLocationName(name || 'ไม่พบพิกัดที่อยู่');
-      })
-      .catch(error => {
-        if (active && error.name !== 'AbortError') setWeatherLocationName('ดึงข้อมูลที่อยู่ไม่สำเร็จ');
-      });
-
-    return () => {
-      active = false;
-      controller.abort(); // ยกเลิกคำขอเก่า ไม่ให้ข้อมูลพิกัดเดิมทับพิกัดใหม่
-    };
-  }, [activeTab, weatherLat, weatherLon, weatherRetryKey]);
-
   const queueAreaRai = (job) => {
     if (job?.status === 'DONE') return Math.max(0, Number(job?.billing_area ?? job?.area_size) || 0);
     const gps = Math.max(0, Number(job?.gps_summary?.area_rai) || 0);
@@ -3472,16 +3287,6 @@ function App() {
   // รถที่ขึ้นหน้าแรกต้องตรงกับคิวที่กำลังทำ ไม่ใช่รถคันแรกในฐานข้อมูลเสมอ
   const mainVehicle = (activeJobNow && vehicles.find(v => String(v.id) === String(activeJobNow.vehicle_id))) || vehicles[0] || null;
 
-  let radarLocationName = "(รอพิกัด...)";
-  if (radarOverride) {
-    radarLocationName = "ตำแหน่งที่กดเลือก 🎯";
-  } else if (activeJobNow && activeJobNow.latitude) {
-    radarLocationName = `แปลง: ${activeJobNow.customers?.name || 'ไม่ระบุชื่อ'}`;
-  } else if (gpsPathData.length > 0) {
-    radarLocationName = "พิกัดรถล่าสุด";
-  } else if (autoUserLocation) {
-    radarLocationName = "ตำแหน่งปัจจุบันของคุณ 📍";
-  }
   // ==========================================
   // 👆 จบสมองคำนวณทั้งหมด 👆
   // ==========================================
@@ -4497,122 +4302,22 @@ function App() {
               </section>;
             })()}
 
-            {/* 4. แจ้งเตือนแบบย่อและพยากรณ์อากาศ — ไม่ขยายการ์ดเมื่อไม่มีเรื่องด่วน */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="mb-3 text-sm font-black text-slate-900">🔔 สภาพอากาศและแจ้งเตือน</h2>
-              <div className="space-y-2">
-
-                {overdueJobs.length > 0 && (
-                  <div
-                    onClick={() => setActiveTab('active')}
-                    className="flex items-center gap-3 bg-orange-50 p-3 rounded-lg border border-orange-200 cursor-pointer hover:bg-orange-100 transition"
-                  >
-                    <div className="text-xl">⚠️</div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-black text-orange-900">เลยวันนัดเริ่มงาน {overdueJobs.length} คิว</p>
-                      <p className="text-xs text-orange-700 font-semibold mt-0.5">แตะเพื่อจัดวันนัดหรือเริ่มงาน</p>
-                    </div>
+            {/* แจ้งเตือนคิวเลยวันนัด */}
+            {overdueJobs.length > 0 && (
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <h2 className="mb-3 text-sm font-black text-slate-900">🔔 แจ้งเตือน</h2>
+                <div
+                  onClick={() => setActiveTab('active')}
+                  className="flex items-center gap-3 bg-orange-50 p-3 rounded-lg border border-orange-200 cursor-pointer hover:bg-orange-100 transition"
+                >
+                  <div className="text-xl">⚠️</div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-orange-900">เลยวันนัดเริ่มงาน {overdueJobs.length} คิว</p>
+                    <p className="text-xs text-orange-700 font-semibold mt-0.5">แตะเพื่อจัดวันนัดหรือเริ่มงาน</p>
                   </div>
-                )}
-
-
-                {/* 🌤️ อากาศแบบย่อ — พยากรณ์ 24 ชม. เปิดดูเมื่ออยากดู */}
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                  <div className="flex justify-between items-start gap-2 border-b border-blue-100 pb-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-blue-900">🌤️ สภาพอากาศ</p>
-                      <p className="text-xs text-blue-700 truncate mt-0.5">
-                        {weatherHasQueueCoords
-                          ? `📍 คิวกำลังเกี่ยวล่าสุด #${weatherActiveJob.id} • ${weatherLocationName}`
-                          : weatherHasMyCoords
-                            ? `🎯 ตำแหน่งฉัน • ${weatherLocationName}`
-                            : '🎯 ไม่มีพิกัดคิวงาน — ใช้ตำแหน่งฉันแทน'}
-                      </p>
-                    </div>
-
-                    {!weatherHasQueueCoords && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!navigator.geolocation) {
-                            alert('❌ เบราว์เซอร์ไม่รองรับตำแหน่งฉัน');
-                            return;
-                          }
-                          navigator.geolocation.getCurrentPosition(
-                            (pos) => {
-                              setAutoUserLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-                              setWeatherRetryKey(key => key + 1);
-                            },
-                            (err) => alert('❌ กรุณาอนุญาตตำแหน่งฉัน: ' + err.message),
-                            { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 }
-                          );
-                        }}
-                        className="bg-white text-blue-700 border border-blue-200 px-2 py-1 rounded text-xs font-bold whitespace-nowrap"
-                      >
-                        🎯 ตำแหน่งฉัน
-                      </button>
-                    )}
-                  </div>
-
-                  {(weatherData && weatherData.current) ? (() => {
-                    const current = getThaiWeatherText(weatherData.current.weather_code);
-                    const currentHour = weatherData.current.time;
-                    const hrIndex = weatherData.hourly.time.findIndex(t => t >= currentHour);
-
-                    return (
-                      <div className="pt-2">
-                        <div className={`p-3 rounded-xl border ${current.bg} ${current.border} ${current.color} shadow-sm`}>
-                          <p className="text-sm font-black">📍 ตอนนี้: {current.text}</p>
-                          <p className="text-xs font-semibold mt-0.5">{current.desc}</p>
-                          {weatherData.weather_meta?.stale && <p className="mt-1 text-[11px] font-bold text-amber-800">⚠️ ข้อมูลล่าสุดที่บันทึกไว้ (อาจไม่ใช่อากาศปัจจุบัน)</p>}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => setShowHomeWeatherForecast(v => !v)}
-                          className="w-full mt-2 py-2 rounded-lg bg-white border border-blue-200 text-blue-700 text-xs font-black"
-                        >
-                          {showHomeWeatherForecast ? 'ซ่อนพยากรณ์ 24 ชม. ▲' : 'ดูพยากรณ์ 24 ชม. ▼'}
-                        </button>
-
-                        {showHomeWeatherForecast && (
-                          <div className="mt-2">
-                            <div className="flex overflow-x-auto gap-2 pb-2 snap-x snap-mandatory">
-                              {Array.from({ length: 24 }, (_, i) => i + 1).map(offset => {
-                                const idx = hrIndex + offset;
-                                if (!weatherData.hourly?.time || !weatherData.hourly.time[idx]) return null;
-                                const t = new Date(weatherData.hourly.time[idx]);
-                                const w = getThaiWeatherText(weatherData.hourly.weather_code[idx]);
-                                const isTomorrow = t.getDate() !== new Date().getDate();
-
-                                return (
-                                  <div key={offset} className={`snap-center shrink-0 w-[31%] p-2 rounded-lg border text-center shadow-sm ${w.bg} ${w.border} ${w.color}`}>
-                                    {isTomorrow && <p className="text-[8px] font-black text-blue-700 mb-1">พรุ่งนี้</p>}
-                                    <p className="text-xs font-bold">{t.getHours()}:00 น.</p>
-                                    <p className="text-xl leading-none my-1">{w.text.split(' ')[1]}</p>
-                                    <p className="text-xs font-bold">{w.text.split(' ')[0]}</p>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })() : weatherError || !weatherLoading ? (
-                    <div className="py-3 text-center" role="alert">
-                      <p className="text-xs font-bold text-red-700">❌ {weatherError || 'ข้อมูลสภาพอากาศไม่พร้อมใช้งาน'}</p>
-                      <button type="button" onClick={() => setWeatherRetryKey(n => n + 1)}
-                        className="mt-2 rounded-lg border border-blue-200 bg-white px-4 py-2 text-xs font-black text-blue-700">
-                        ↻ ลองใหม่
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-center text-slate-600 font-bold py-4" role="status">⏳ กำลังโหลดสภาพอากาศ...</p>
-                  )}
                 </div>
-              </div>
-            </section>
+              </section>
+            )}
           </div>
         )}
 
