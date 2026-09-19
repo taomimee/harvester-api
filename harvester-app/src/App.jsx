@@ -7056,6 +7056,7 @@ function App() {
                     {/* 🚜 แสดงประวัติการลงแปลง (รายงานการทำงาน) */}
                     {wageTab === 'UNPAID' && (
                       <div className="space-y-3">
+                        <p className="text-[11px] text-slate-500">สถานะการจ่ายรายบิล · ยอดเบิกรวมดูด้านบน</p>
                         {displayJobs.length === 0 ? <p className="text-center text-xs text-gray-400 py-5 font-bold">ยังไม่มีประวัติการลงแปลง</p> : null}
                         {displayJobs.map(tx => {
                           const { jobWorkers, paidWorkers, detailsStr } = parseWageNote(tx.note);
@@ -7073,15 +7074,15 @@ function App() {
                           
                           // ถ้าระบุตัวคน ให้โชว์แค่ส่วนแบ่งของเขา ถ้าไม่ได้ระบุ (ดูภาพรวม) ให้โชว์ยอดเต็มบิล
                           const displayAmount = activeWorker ? workerWage(tx, activeWorker, jobWorkers) : totalAmount;
+                          const isWorkerBillPaid = name => tx.status === 'PAID' || paidWorkers.includes(cleanWageName(name));
+                          const billPaid = activeWorker ? isWorkerBillPaid(activeWorker)
+                            : tx.status === 'PAID' || (jobWorkers.length > 0 && jobWorkers.every(isWorkerBillPaid));
+
                           
-                          // ดักว่าในบิลเก่าเคยตัดยอดไปหรือยัง (ถ้าดูภาพรวม เช็คว่ามีใครสักคนในบิลนี้รับไปแล้วหรือยัง)
-                          const isPaidInOldSystem = activeWorker 
-                            ? (paidWorkers.includes(activeWorker) || tx.status === 'PAID')
-                            : (paidWorkers.length > 0 || tx.status === 'PAID');
 
                           return (
                             <div key={tx.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm relative overflow-hidden">
-                               <div className={`absolute top-0 left-0 w-1.5 h-full ${isPaidInOldSystem ? 'bg-orange-400' : 'bg-blue-400'}`}></div>
+                               <div className={`absolute top-0 left-0 w-1.5 h-full ${billPaid ? 'bg-green-500' : 'bg-blue-400'}`}></div>
                                <div className="flex justify-between items-start pl-2">
                                  <div className="flex-1 pr-2">
                                    <div className="mb-2">
@@ -7091,12 +7092,9 @@ function App() {
                                    </div>
                                    <div className="flex flex-wrap gap-1.5 mb-2">
                                      {jobWorkers.map((w, idx) => {
-                                       const isMe = w === activeWorker;
-                                       // โชว์ติ๊กถูกหน้าชื่อ ถ้าคนนั้นรับเงินไปแล้ว
-                                       const hasPaid = paidWorkers.includes(w) || tx.status === 'PAID';
                                        return (
-                                         <span key={idx} className={`text-[10px] font-bold px-2 py-1 rounded-md border shadow-sm ${hasPaid ? 'bg-green-100 text-green-700 border-green-300' : (isMe ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-50 text-gray-500 border-gray-200')}`}>
-                                           {hasPaid ? '✅' : '🧑‍🌾'} {w}
+                                         <span key={idx} className={`text-[10px] font-bold px-2 py-1 rounded-md border shadow-sm ${isWorkerBillPaid(w) ? 'bg-green-100 text-green-800 border-green-300' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>
+                                           {isWorkerBillPaid(w) ? '✅' : '🧑‍🌾'} {w}
                                          </span>
                                        )
                                      })}
@@ -7112,7 +7110,7 @@ function App() {
                                    <span className="inline-block text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-gray-100 text-gray-600 border-gray-200 border">
                                      {activeWorker ? workerRateLabel(tx, activeWorker, divisor) : `ยอดเต็มบิล`}
                                    </span>
-                                   {isPaidInOldSystem && <span className="block text-[9px] text-orange-600 font-bold mt-1 bg-orange-50 px-1 py-0.5 rounded">* มีการตัดยอดแล้ว</span>}
+                                   <span className={`block text-[11px] font-bold mt-2 border px-2 py-1 rounded-lg ${billPaid ? 'bg-green-100 text-green-800 border-green-300' : 'bg-blue-50 text-blue-800 border-blue-200'}`}>{billPaid ? '✓ ตัดยอดแล้ว' : 'รอตัดยอด'}</span>
                                  </div>
                                </div>
                             </div>
