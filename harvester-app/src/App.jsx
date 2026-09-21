@@ -3,6 +3,71 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 
+// 🚜 Frontend-only GPS speed estimate: no extra requests, RPM sensor, or GPS writes.
+// Positions are straight-line samples; ignore implausible jumps, tiny jitter and long gaps.
+const summarizeGpsSpeed = (path, nowMs = Date.now()) => {
+  const empty = {
+    currentKmh: null, lastKmh: null, recentAvgKmh: null,
+    movingAvgKmh: null, harvestAvgKmh: null, maxKmh: null,
+    ageSec: null, validIntervals: 0, recentIntervals: 0
+  };
+  if (!Array.isArray(path) || path.length < 1) return empty;
+  const lastTime = Date.parse(path[path.length - 1]?.created_at || '');
+  if (!Number.isFinite(lastTime)) return empty;
+  const result = { ...empty, ageSec: Math.max(0, (nowMs - lastTime) / 1000) };
+  const rad = v => v * Math.PI / 180;
+  const pointOf = row => {
+    const lat = Number(row?.latitude), lon = Number(row?.longitude);
+    const time = Date.parse(row?.created_at || '');
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(time) ||
+      Math.abs(lat) > 90 || Math.abs(lon) > 180 || !lat || !lon) return null;
+    return { lat, lon, time, harvesting: row?.is_harvesting === true || String(row?.is_harvesting).toLowerCase() === 'true' };
+  };
+  let anchor = null;
+  let movingM = 0, movingS = 0, recentM = 0, recentS = 0;
+  let harvestM = 0, harvestS = 0, tailM = 0, tailS = 0;
+  let latestUsableTime = 0, lastIntervalStopped = false;
+  for (const row of path) {
+    const b = pointOf(row);
+    if (!b) { anchor = null; continue; }
+    if (!anchor) { anchor = b; continue; }
+    const dt = (b.time - anchor.time) / 1000;
+    // Wait until at least 5 seconds of samples accumulate; timestamps can arrive in bursts.
+    if (dt > 0 && dt < 5) continue;
+    if (!Number.isFinite(dt) || dt <= 0 || dt > 120) { anchor = b; continue; }
+    const dLat = rad(b.lat - anchor.lat), dLon = rad(b.lon - anchor.lon);
+    const hav = Math.sin(dLat / 2) ** 2 + Math.cos(rad(anchor.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+    const metres = 12742000 * Math.asin(Math.min(1, Math.sqrt(Math.max(0, hav))));
+    const kmh = metres * 3.6 / dt;
+    if (!Number.isFinite(kmh) || kmh > 45) { anchor = b; continue; } // likely GPS teleport
+    result.validIntervals++;
+    latestUsableTime = b.time;
+    anchor = b;
+    const usefulM = metres >= 2.5 && kmh >= 0.5 ? metres : 0;
+    lastIntervalStopped = usefulM === 0 && dt >= 8;
+    // A sufficiently long stationary interval is 0, not the previous moving speed.
+    if (usefulM > 0) {
+      movingM += usefulM; movingS += dt;
+      result.maxKmh = Math.max(result.maxKmh ?? 0, kmh);
+      if (b.harvesting && kmh <= 15) { harvestM += usefulM; harvestS += dt; }
+      if (b.time >= lastTime - 10 * 60 * 1000) {
+        recentM += usefulM; recentS += dt; result.recentIntervals++;
+      }
+    }
+    if (b.time >= lastTime - 30 * 1000 && b.time - dt * 1000 >= lastTime - 90 * 1000) {
+      tailM += usefulM; tailS += dt;
+    }
+  }
+  const rate = (metres, seconds) => seconds > 0 ? metres * 3.6 / seconds : null;
+  result.movingAvgKmh = rate(movingM, movingS);
+  result.recentAvgKmh = rate(recentM, recentS);
+  result.harvestAvgKmh = rate(harvestM, harvestS);
+  result.lastKmh = latestUsableTime >= lastTime - 30 * 1000 ? rate(tailM, tailS) : null;
+  if (lastIntervalStopped && latestUsableTime >= lastTime - 10 * 1000) result.lastKmh = 0;
+  result.currentKmh = result.ageSec <= 60 ? result.lastKmh : null;
+  return result;
+};
+
 const isAwaitingArea = job => job?.status !== 'DONE' && job?.awaiting_area_confirmation === true;
 const WAGE_API = 'https://harvester-api-server.onrender.com/api';
 const WAGE_ROLES = { DRIVER: '🚜 คนขับ', HELPER: '🔧 เด็กรถเป็นงาน', TRAINEE: '🌱 เด็กฝึกงาน' };
@@ -3011,6 +3076,7 @@ function App() {
   const [trackingMode, setTrackingMode] = useState('realtime');
   const [trackingDate, setTrackingDate] = useState('');
   const [gpsPathData, setGpsPathData] = useState([]);
+  const [gpsSpeedExpanded, setGpsSpeedExpanded] = useState(false);
   const [gpsDataScope, setGpsDataScope] = useState('');
   const [gpsFleetPaths, setGpsFleetPaths] = useState({});
   const [isFetchingGps, setIsFetchingGps] = useState(false);
@@ -3035,6 +3101,7 @@ function App() {
   const gpsViewScopeRef = useRef(gpsViewScope);
   gpsViewScopeRef.current = gpsViewScope;
   const visibleGpsPath = gpsDataScope === gpsViewScope ? gpsPathData : [];
+  const gpsSpeed = useMemo(() => summarizeGpsSpeed(visibleGpsPath), [visibleGpsPath]);
 
   const GPS_FLEET_COLORS = ['#2563EB', '#F97316', '#7C3AED', '#16A34A', '#DB2777', '#0891B2', '#DC2626', '#CA8A04'];
   const vehicleColors = useMemo(() => Object.fromEntries(
@@ -4766,6 +4833,46 @@ function App() {
                   {isFetchingGps && <span className="text-blue-600 font-bold whitespace-nowrap">⏳ โหลด…</span>}
                 </div>
               )}
+
+              {/* 🚀 ความเร็ว GPS: คำนวณจากเส้นทางที่โหลดอยู่แล้ว ไม่เพิ่ม API หรือ RPM สมมติ */}
+              {trackingVehicleId && (
+                <section className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2" aria-label="สถิติความเร็วรถเกี่ยวจาก GPS">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex items-baseline gap-1.5 flex-wrap">
+                      <span className="text-[11px] font-black text-sky-950">🚀 {trackingMode === 'realtime' ? 'ความเร็วประมาณ' : 'ความเร็วช่วงท้าย'}</span>
+                      <strong className="text-xl font-black tabular-nums text-blue-800">
+                        {(trackingMode === 'realtime' ? gpsSpeed.currentKmh : gpsSpeed.lastKmh) === null
+                          ? '—' : (trackingMode === 'realtime' ? gpsSpeed.currentKmh : gpsSpeed.lastKmh).toFixed(1)}
+                      </strong>
+                      <span className="text-[10px] font-bold text-sky-900">กม./ชม.</span>
+                    </div>
+                    <button type="button" aria-expanded={gpsSpeedExpanded}
+                      onClick={() => setGpsSpeedExpanded(open => !open)}
+                      className="shrink-0 rounded-lg border border-sky-300 bg-white px-2.5 py-1 text-[10px] font-black text-blue-900">
+                      {gpsSpeedExpanded ? 'ซ่อนสถิติ ↑' : 'ดูสถิติ ↓'}
+                    </button>
+                  </div>
+                  <p className="mt-0.5 text-[10px] font-semibold text-slate-600">
+                    {trackingMode === 'realtime' && (gpsSpeed.ageSec === null || gpsSpeed.ageSec > 60)
+                      ? `📡 ข้อมูลไม่สด (${gpsAgeText(visibleGpsPath)}) • งดแสดงความเร็วเก่าเป็นค่าปัจจุบัน`
+                      : trackingMode === 'history' ? '📅 ค่าจากข้อมูลย้อนหลัง ไม่ใช่ความเร็วขณะนี้'
+                      : gpsSpeed.currentKmh === null ? 'กำลังรอจุด GPS ที่ห่างกันพอสำหรับคำนวณ'
+                      : 'คำนวณเฉลี่ยระยะทางตรงจาก GPS ช่วงล่าสุดประมาณ 30 วินาที'}
+                  </p>
+                  {gpsSpeedExpanded && (
+                    <div className="mt-2 border-t border-sky-200 pt-2 space-y-2">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="rounded-lg border border-white bg-white/85 p-2"><p className="text-[10px] text-slate-600">เฉลี่ย 10 นาทีท้ายข้อมูล · ขณะวิ่ง</p><b className="text-blue-900 tabular-nums">{gpsSpeed.recentAvgKmh === null ? '—' : gpsSpeed.recentAvgKmh.toFixed(1)} กม./ชม.</b></div>
+                        <div className="rounded-lg border border-white bg-white/85 p-2"><p className="text-[10px] text-slate-600">เฉลี่ยทั้งวัน · ขณะวิ่ง</p><b className="text-blue-900 tabular-nums">{gpsSpeed.movingAvgKmh === null ? '—' : gpsSpeed.movingAvgKmh.toFixed(1)} กม./ชม.</b></div>
+                        <div className="rounded-lg border border-white bg-white/85 p-2"><p className="text-[10px] text-slate-600">เฉลี่ยช่วง GPS ระบุว่ากำลังเกี่ยว</p><b className="text-emerald-800 tabular-nums">{gpsSpeed.harvestAvgKmh === null ? '—' : gpsSpeed.harvestAvgKmh.toFixed(1)} กม./ชม.</b></div>
+                        <div className="rounded-lg border border-white bg-white/85 p-2"><p className="text-[10px] text-slate-600">สูงสุดจากช่วง GPS ที่ผ่านการกรอง</p><b className="text-blue-900 tabular-nums">{gpsSpeed.maxKmh === null ? '—' : gpsSpeed.maxKmh.toFixed(1)} กม./ชม.</b></div>
+                      </div>
+                      <p className="text-[10px] text-slate-600">📡 ใช้ {gpsSpeed.validIntervals.toLocaleString()} ช่วงที่เวลา/พิกัดผ่านการกรอง • ไม่ใช้ GPS กระโดดหรือช่วงขาดสัญญาณ • ความเร็วเป็นค่าประมาณทางตรง ไม่ใช่ความเร็วจากกล่องโดยตรง</p>
+                      <p className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] font-bold text-amber-900">⚙️ รอบเครื่องเฉลี่ย (RPM): ยังวัดไม่ได้จากข้อมูล GPS รุ่นนี้ ต้องต่อเซนเซอร์รอบเครื่องหรือข้อมูล ECU จริง ห้ามนำ กม./ชม. มาแทน RPM</p>
+                    </div>
+                  )}
+                </section>
+              )}
             </div>
 
             {/* แผนที่ */}
@@ -5232,7 +5339,11 @@ function App() {
           const activeMonthJobs = periodJobs.filter(j => j.status !== 'DONE');
 
           completedJobs.forEach(j => {
-            areaTotal += (Number(j.area_size) || 0);
+            // ยอดรายได้ของงานที่ปิดแล้วคิดจากพื้นที่ที่ยืนยันเรียกเก็บ (billing_area)
+            // งานเก่าที่ยังไม่มี billing_area ใช้ area_size เท่านั้น; อย่าใช้ GPS แทนจำนวนไร่ตกลง
+            const finalizedArea = j.billing_area != null && j.billing_area !== ''
+              ? Number(j.billing_area) : Number(j.area_size);
+            areaTotal += Number.isFinite(finalizedArea) ? Math.max(0, finalizedArea) : 0;
             const currentTotal = Number(j.total_price) || 0;
             
             if (Number(j.plot_paid_total) > 0) {
@@ -5554,7 +5665,7 @@ function App() {
                   <span className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 text-[10px] font-black">{periodJobs.length} งาน</span>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-teal-50 rounded-2xl p-3 border border-teal-100"><p className="text-[10px] font-bold text-teal-800">พื้นที่รวม</p><p className="text-xl font-black text-teal-700 mt-1">{formatRaiNgan(areaTotal)}</p></div>
+                  <div className="bg-teal-50 rounded-2xl p-3 border border-teal-100"><p className="text-[10px] font-bold text-teal-800">พื้นที่คิดเงินรวม</p><p className="text-xl font-black text-teal-700 mt-1">{formatRaiNgan(areaTotal)}</p></div>
                   <div className="bg-blue-50 rounded-2xl p-3 border border-blue-100"><p className="text-[10px] font-bold text-blue-800">งานเสร็จแล้ว</p><p className="text-xl font-black text-blue-700 mt-1">{completedJobs.length} <span className="text-xs">งาน</span></p></div>
                   <div className="bg-orange-50 rounded-2xl p-3 border border-orange-100"><p className="text-[10px] font-bold text-orange-800">งานค้าง/กำลังทำ</p><p className="text-xl font-black text-orange-700 mt-1">{activeMonthJobs.length} <span className="text-xs">งาน</span></p></div>
                   <div className="bg-indigo-50 rounded-2xl p-3 border border-indigo-100">
