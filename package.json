@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [],
   "author": "",
@@ -17,10 +17,13 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "multer": "^1.4.5-lts.1",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
+    "multer": "^1.4.5-lts.1",
     "react-leaflet": "^5.0.0",
     "react-leaflet-draw": "^0.21.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.15"
   }
 }

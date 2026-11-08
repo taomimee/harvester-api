@@ -2,6 +2,8 @@ import { useEffect, useState, useRef, useMemo } from 'react'
 import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
+import FieldTrips from './FieldTrips.jsx'
+import { fieldTripPeriodStats } from './field-trip-reports.mjs'
 
 // 🚜 Frontend-only GPS speed estimate: no extra requests, RPM sensor, or GPS writes.
 // Positions are straight-line samples; ignore implausible jumps, tiny jitter and long gaps.
@@ -2912,6 +2914,11 @@ function App() {
   const [expandedId, setExpandedId] = useState(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [activeTab, setActiveTab] = useState('home')
+  const [fieldTrips, setFieldTrips] = useState(null);
+  const fieldDebt = (fieldTrips || []).reduce((sum, t) => sum + Math.max(0, Number(t.summary.broker_balance)), 0);
+  const fieldDebtTrips = (fieldTrips || []).filter(t => t.summary.broker_balance > 0);
+  const fieldReceipts = (fieldTrips || []).flatMap(t => t.payments.filter(p => !p.voided_at).map(p => ({...p, trip: t}))).sort((a,b) => b.payment_date.localeCompare(a.payment_date));
+  const fieldReceived = fieldReceipts.reduce((sum, p) => sum + Number(p.amount), 0);
   const [financeSubTab, setFinanceSubTab] = useState('dashboard'); // 👈 เพิ่ม State สำหรับคุมเมนูย่อยในหน้าบัญชี
   const [showMapPicker, setShowMapPicker] = useState(false)
   const [customersList, setCustomersList] = useState([])
@@ -3609,13 +3616,14 @@ function App() {
   const todayAreaInfo = todaySummaryJobs.map(job => ({
     job, area: getQueueDayAreaInfo(job, todayStart, tomorrowStart)
   }));
-  const todayMeasuredArea = todayAreaInfo.reduce((sum, item) => sum + item.area.measuredToday, 0);
+  const todayFieldDays = (fieldTrips || []).flatMap(t => t.days).filter(d => isInHomeDay(`${d.work_date}T12:00:00+07:00`, todayStart, tomorrowStart));
+  const todayMeasuredArea = todayAreaInfo.reduce((sum, item) => sum + item.area.measuredToday, 0) + todayFieldDays.reduce((sum,d) => sum + d.confirmed_rai, 0);
   const todayPendingArea = todayAreaInfo.reduce((sum, item) => sum + item.area.notRecordedYet, 0);
   const todayUnknownAreaCount = todayAreaInfo.filter(item => item.area.needsArea).length;
   // ยอดงานที่ปิดวันนี้เป็นยอดบิลก่อนส่วนลด/มัดจำ ไม่ใช่เงินสดรับวันนี้
   const todayBilledValue = completedTodayJobs.reduce((sum, job) =>
     sum + Math.max(0, Number(job.billing_area ?? job.area_size) || 0) *
-      Math.max(0, Number(job.price_per_rai) || 0), 0);
+      Math.max(0, Number(job.price_per_rai) || 0), 0) + todayFieldDays.reduce((sum,d) => sum + d.harvest_amount, 0);
 
   const overdueJobs = fieldJobs.filter(j => {
     if (j.status !== 'PENDING') return false;
@@ -3624,7 +3632,7 @@ function App() {
   });
 
   const debtorsList = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID');
-  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+  const totalDebtValue = debtorsList.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0) + fieldDebt;
   const debtorCustomerCount = new Set(
     debtorsList.map(j => String(j.customer_id ?? j.customers?.phone ?? j.customers?.name ?? j.id))
   ).size;
@@ -4490,6 +4498,8 @@ function App() {
           <button onClick={() => setActiveTab('active')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'active' ? 'bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-md shadow-green-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🚜 คิวงาน</button>
 
           <button type="button" onClick={() => { setActiveTab('history'); setCurrentPage(1); setExpandedId(null); fetchJobs(); }} className={`min-w-[64px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'history' ? 'bg-slate-800 text-white shadow-md' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📚 ประวัติ</button>
+
+          <button type="button" onClick={() => setActiveTab('field')} className={`min-w-[90px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs ${activeTab === 'field' ? 'bg-green-800 text-white' : 'text-gray-600 hover:bg-green-50'}`}>🌾 ออกพื้นที่</button>
           
           <button onClick={() => setActiveTab('calendar')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'calendar' ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md shadow-orange-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>📅 ปฏิทิน</button>
           
@@ -4503,6 +4513,13 @@ function App() {
               <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
             </>
           )}
+        </div>
+
+        <div hidden={activeTab !== 'field'}>
+          <FieldTrips api={WAGE_API} visible={activeTab === 'field'} vehicles={vehicles}
+            profiles={wageProfiles.map(p => ({...p, name: p.sourceName || p.name}))} userRole={userRole} getToken={requireBossToken}
+            onOpenMap={openGpsPlot} onOpenWages={name => { setWageFilter(name ? [cleanWageName(name)] : []); setShowWageSummary(true); }}
+            onChange={data => { setFieldTrips(data); refreshWageLedger(); }} />
         </div>
 
         {/* 👇 แถบสมุดจดค่าแรง (สำหรับคนขับ - แบบการ์ดกดได้เลย) 👇 */}
@@ -4550,14 +4567,18 @@ function App() {
         {activeTab === 'home' && (
           <div className="space-y-4">
 
+            <button type="button" onClick={() => setActiveTab('field')} className="w-full flex items-center justify-between gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-left">
+              <span><b className="text-green-900">🌾 งานนอกพื้นที่</b><span className="block mt-1 text-xs text-green-800">{fieldTrips ? `${fieldTrips.filter(t => t.status === 'OPEN').length} ทริปกำลังออกงาน · ปิดยอดรายวัน / รับเงินจากนายหน้า` : 'เปิดสมุดทริปและยอดรายวัน'}</span></span><b className="text-green-900">→</b>
+            </button>
+
             {/* 1. ภาพรวมวันนี้ — บอกตัวเลขหนึ่งความหมายต่อการ์ด ไม่รวมยอดคิวกับยอดทำจริงเป็นเลขเดียว */}
             <section aria-label="ภาพรวมงานวันนี้" className="grid grid-cols-2 gap-3">
               <div className="flex min-h-[122px] flex-col rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
                 <p className="text-xs font-bold text-slate-600">🚜 งานวันนี้</p>
                 <p className="mt-2 text-3xl font-black leading-none tabular-nums text-slate-900">
-                  {todaySummaryJobs.length}<span className="ml-1 text-sm font-semibold text-slate-500">งาน</span>
+                  {todaySummaryJobs.length + todayFieldDays.length}<span className="ml-1 text-sm font-semibold text-slate-500">งาน</span>
                 </p>
-                <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">ปิดแล้ว {todayCompletedCount} · ยังไม่ปิด {todaySummaryJobs.length - todayCompletedCount}</p>
+                <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">ปิดแล้ว {todayCompletedCount + todayFieldDays.length} · ยังไม่ปิด {todaySummaryJobs.length - todayCompletedCount}{todayFieldDays.length > 0 && ` · นอกพื้นที่ ${todayFieldDays.length} รอบรายวัน`}</p>
               </div>
 
               <div className="flex min-h-[122px] flex-col rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3.5 shadow-sm">
@@ -4576,7 +4597,7 @@ function App() {
                   <p className="mt-2 text-2xl font-black leading-none tabular-nums text-blue-700">
                     {Math.round(todayBilledValue).toLocaleString('th-TH')}<span className="ml-1 text-sm font-semibold">฿</span>
                   </p>
-                  <p className="mt-auto pt-2 text-[11px] text-slate-600">ยอดบิลก่อนส่วนลด · {todayCompletedCount} งาน</p>
+                  <p className="mt-auto pt-2 text-[11px] text-slate-600">ยอดบิลก่อนส่วนลด · {todayCompletedCount} คิว{todayFieldDays.length > 0 && ` · นอกพื้นที่ ${todayFieldDays.length} รอบรายวัน`}</p>
                 </div>
               )}
 
@@ -4584,14 +4605,14 @@ function App() {
                 <button
                   type="button"
                   onClick={() => { setActiveTab('finance'); setFinanceSubTab('debt'); }}
-                  aria-label={`เปิดบัญชีลูกหนี้ค้าง ${debtorCustomerCount} ราย`}
+                  aria-label={`เปิดบัญชีลูกหนี้ค้าง ${debtorCustomerCount} ราย และนายหน้า ${fieldDebtTrips.length} ทริป`}
                   className={`flex min-h-[118px] flex-col rounded-2xl border p-3.5 text-left shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 ${totalDebtValue > 0 ? 'border-rose-200 bg-rose-50/70' : 'border-emerald-200 bg-emerald-50/70'}`}
                 >
                   <p className={`text-xs font-bold ${totalDebtValue > 0 ? 'text-rose-900' : 'text-emerald-900'}`}>💸 ลูกหนี้ค้าง</p>
                   <p className={`mt-2 text-2xl font-black leading-none tabular-nums ${totalDebtValue > 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
                     {Math.round(totalDebtValue).toLocaleString('th-TH')}<span className="ml-1 text-sm font-semibold">฿</span>
                   </p>
-                  <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">{debtorCustomerCount > 0 ? `${debtorCustomerCount} ราย · เปิดบัญชี →` : 'ไม่มีลูกหนี้ค้าง'}</p>
+                  <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">{totalDebtValue > 0 ? `${debtorCustomerCount} ราย · นายหน้า ${fieldDebtTrips.length} ทริป · เปิดบัญชี →` : 'ไม่มีลูกหนี้ค้าง'}</p>
                 </button>
               )}
             </section>
@@ -5326,7 +5347,7 @@ function App() {
           });
           
           const periodWages = wageTransactions.filter(tx => {
-            const d = new Date(tx.created_at || tx.transaction_date || tx.paid_at);
+            const d = new Date(tx.field_day_id ? tx.transaction_date : tx.created_at || tx.transaction_date || tx.paid_at);
             return !Number.isNaN(d.getTime()) && d.getFullYear() === dashYear && (dashMonth === 0 || (d.getMonth() + 1) === dashMonth);
           });
 
@@ -5369,6 +5390,11 @@ function App() {
             const paidDate = new Date(receipt.paid_at);
             if (paidDate.getFullYear() === dashYear && (dashMonth === 0 || paidDate.getMonth() + 1 === dashMonth)) calcTotalIncome += Number(receipt.amount || 0);
           }
+
+          const fieldPeriod = fieldTripPeriodStats(fieldTrips, dashYear, dashMonth);
+          calcTotalIncome += fieldPeriod.received;
+          calcTotalUnpaid += fieldPeriod.outstanding;
+          areaTotal += fieldPeriod.rai;
 
           // ✅ 'ค่าแรง' คือการรับรู้ต้นทุนตอนปิดงานแล้ว
           // ส่วน 'เบิกค่าแรง' คือการจ่ายหนี้ค่าแรง จึงห้ามนับเป็นต้นทุนซ้ำ
@@ -5518,7 +5544,7 @@ function App() {
           });
 
           const debtJobs = jobs.filter(j => j.status === 'DONE' && j.payment_status !== 'PAID'); // ลูกหนี้รวมทั้งหมดตลอดกาล
-          const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+          const debtAmount = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0) + fieldDebt;
           
           // 👇 สร้างตัวแปรเก็บยอดรวมกลุ่มตามลูกค้า 
           const groupedDebtorsMap = {};
@@ -5550,6 +5576,7 @@ function App() {
 
           // 👇 นำลูกค้าที่รวมยอดแล้ว มาเรียงลำดับคนที่ติดหนี้เยอะสุด 5 อันดับแรก
           const topDebtors = Object.values(groupedDebtorsMap)
+            .concat(fieldDebtTrips.map(t => ({name:`นายหน้า ${t.broker_name || t.location}`, total_price:t.summary.broker_balance, crop_areas:{นอกพื้นที่:t.summary.rai}, job_count:t.days.length, field:true})))
             .sort((a, b) => b.total_price - a.total_price)
             .slice(0, 5);
           
@@ -5561,6 +5588,10 @@ function App() {
 
           return (
             <div className="space-y-4 pb-3">
+              <button type="button" onClick={() => setActiveTab('field')} className="w-full rounded-xl border border-green-200 bg-green-50 p-4 text-left text-sm text-green-900">
+                <b>🌾 งานนอกพื้นที่ในช่วงที่เลือก ↗</b>
+                {fieldTrips ? <p className="mt-1 text-xs">ปิดงาน {fieldPeriod.days} วัน · {fieldPeriod.rai.toLocaleString()} ไร่ · ค่าเกี่ยว {fieldPeriod.earned.toLocaleString()} บาท · รับเงินจริง {fieldPeriod.received.toLocaleString()} บาท · ค้างรับ {fieldPeriod.outstanding.toLocaleString()} บาท (หักเงินรับตามลำดับวันงานแล้ว)</p> : <p className="mt-1 text-xs">ยังโหลดข้อมูลงานนอกพื้นที่ไม่ได้ ยอดสรุปนี้อาจยังไม่ครบ กดเปิดทริปเพื่อลองโหลดอีกครั้ง</p>}
+              </button>
               {/* Header */}
               <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden">
                 <div className="absolute -right-10 -top-10 w-32 h-32 rounded-full bg-purple-400/10 blur-2xl"></div>
@@ -5632,7 +5663,7 @@ function App() {
                 <button onClick={() => setFinanceSubTab('debt')} className="text-left bg-amber-50 rounded-2xl p-4 border border-amber-200 shadow-sm hover:bg-amber-100 transition col-span-2 sm:col-span-1">
                   <p className="text-[10px] font-black text-amber-900">💳 ลูกหนี้ค้าง </p>
                   <p className="text-2xl font-black text-amber-600 mt-1">{formatMoney(debtAmount)} <span className="text-xs">฿</span></p>
-                  <p className="text-[10px] text-amber-700 font-bold mt-1">{debtJobs.length} รายการ • กดเพื่อตามเก็บ</p>
+                  <p className="text-[10px] text-amber-700 font-bold mt-1">{debtJobs.length + fieldDebtTrips.length} รายการ • กดเพื่อตามเก็บ</p>
                 </button>
               </div>
 
@@ -5741,18 +5772,18 @@ function App() {
                   <div className="flex items-center justify-between mb-3">
                     <div><h3 className="font-black text-gray-900">⚠️ สิ่งที่ต้องจัดการ</h3><p className="text-[11px] text-gray-500 mt-1">รายการสำคัญที่ไม่ควรมองข้าม</p></div>
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime */}
-                    <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100">{(debtJobs.length + (totalUnpaidWageAllTime > 0 ? 1 : 0))} เรื่อง</span>
+                    <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-red-50 text-red-600 border border-red-100">{(debtJobs.length + fieldDebtTrips.length + (totalUnpaidWageAllTime > 0 ? 1 : 0))} เรื่อง</span>
                   </div>
                   <div className="space-y-2">
                     <button onClick={() => setFinanceSubTab('debt')} className="w-full flex items-center justify-between p-3 rounded-2xl bg-red-50 border border-red-100 text-left hover:bg-red-100 transition">
-                      <span><span className="block text-xs font-black text-red-800">💳 ลูกหนี้ค้างชำระ (ทั้งหมด)</span><span className="block text-[10px] text-red-600 mt-0.5">{debtJobs.length} รายการ</span></span><strong className="text-red-600">{formatMoney(debtAmount)} ฿</strong>
+                      <span><span className="block text-xs font-black text-red-800">💳 ลูกหนี้ค้างชำระ (ทั้งหมด)</span><span className="block text-[10px] text-red-600 mt-0.5">{debtJobs.length + fieldDebtTrips.length} รายการ</span></span><strong className="text-red-600">{formatMoney(debtAmount)} ฿</strong>
                     </button>
                     
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime และแก้ข้อความเป็น "ยอดสะสมรวม" */}
                     {totalUnpaidWageAllTime > 0 && <button onClick={() => { setWageFilter([]); setShowWageSummary(true); }} className="w-full flex items-center justify-between p-3 rounded-2xl bg-orange-50 border border-orange-100 text-left hover:bg-orange-100 transition"><span><span className="block text-xs font-black text-orange-800">👷 ค่าแรงรอจ่าย (ยอดคงเหลือปัจจุบัน)</span><span className="block text-[10px] text-orange-600 mt-0.5">ยอดค้างจ่ายจริงของทีม ณ ตอนนี้</span></span><strong className="text-orange-600">{formatMoney(totalUnpaidWageAllTime)} ฿</strong></button>}
                     
                     {/* 👇 เปลี่ยนเป็น totalUnpaidWageAllTime */}
-                    {debtJobs.length === 0 && totalUnpaidWageAllTime <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
+                    {debtJobs.length === 0 && fieldDebtTrips.length === 0 && totalUnpaidWageAllTime <= 0 && <div className="text-center py-5 rounded-2xl bg-emerald-50 border border-emerald-100"><div className="text-3xl">✅</div><p className="text-xs font-black text-emerald-700 mt-1">ไม่มีรายการเร่งด่วน</p></div>}
                   </div>
                 </div>
 
@@ -5760,7 +5791,7 @@ function App() {
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="font-black text-gray-900">👥 ลูกหนี้ก้อนใหญ่</h3>
-                      <p className="text-[11px] text-gray-500 mt-1">5 ลูกค้าที่มียอดค้างสูงสุด (รวมทุกแปลง)</p>
+                      <p className="text-[11px] text-gray-500 mt-1">5 ลูกค้า / ทริปนายหน้าที่มียอดค้างสูงสุด</p>
                     </div>
                     <button onClick={() => setFinanceSubTab('debt')} className="text-[10px] font-black text-red-600">ดูทั้งหมด →</button>
                   </div>
@@ -5778,7 +5809,7 @@ function App() {
                             <p className="text-[10px] text-gray-500 mt-0.5">
                               {Object.entries(debtor.crop_areas)
                                 .map(([cropName, area]) => `${cropName} ${formatRaiNgan(area)}`)
-                                .join(' + ')} • ({debtor.job_count} คิวงาน)
+                                .join(' + ')} • ({debtor.job_count} {debtor.field ? 'วันทำงาน' : 'คิวงาน'})
                             </p>
                             
                           </div>
@@ -5813,7 +5844,7 @@ function App() {
              groupedDebts[cName].total += (Number(job.total_price) || 0);
           });
           
-          const totalDebtAll = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0);
+          const totalDebtAll = debtJobs.reduce((sum, j) => sum + (Number(j.total_price) || 0), 0) + fieldDebt;
 
           // 🆕 เรียง "เจ้าลูกหนี้" ตามงานล่าสุดของแต่ละเจ้า: ใหม่สุดอยู่บนสุด
           // ไม่เปลี่ยนลำดับ group.jobs ภายใน เพื่อไม่กระทบ logic รับชำระ/ส่วนลดเดิม
@@ -5963,7 +5994,7 @@ function App() {
               <div className="bg-gradient-to-r from-red-50 to-orange-50 p-5 rounded-xl border border-red-200 shadow-sm flex justify-between items-center">
                  <div>
                    <h2 className="text-lg font-black text-red-800">💸 ลูกหนี้</h2>
-                   <p className="text-xs text-red-600 font-semibold mt-1">รอเก็บเงิน {debtJobs.length} งาน</p>
+                   <p className="text-xs text-red-600 font-semibold mt-1">รอเก็บเงิน {debtJobs.length} งาน · นายหน้าค้าง {fieldDebt.toLocaleString()} บาท</p>
                  </div>
                  <div className="text-right">
                    <span className="block text-xs text-red-700 font-bold mb-1">ยอดหนี้รวมทั้งหมด</span>
@@ -5971,10 +6002,13 @@ function App() {
                  </div>
               </div>
 
+              {(fieldTrips || []).filter(t => t.summary.broker_balance > 0).map(t => <button type="button" key={t.id} onClick={() => setActiveTab('field')} className="w-full rounded-xl border border-amber-200 bg-amber-50 p-4 text-left">
+                <div className="flex justify-between gap-3"><b>🌾 นายหน้า · {t.location}</b><b>{Number(t.summary.broker_balance).toLocaleString()} ฿</b></div><p className="mt-1 text-xs">{t.broker_name || 'ยังไม่ระบุชื่อนายหน้า'} · รับเงินที่สมุดทริป ↗</p>
+              </button>)}
               {debtJobs.length === 0 ? (
                  <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
                    <span className="text-4xl mb-2 block">🎉</span>
-                   <p className="font-bold">ไม่มีลูกหนี้ค้างชำระ ยอดเยี่ยมมาก!</p>
+                   <p className="font-bold">ไม่มีลูกหนี้คิวงานในพื้นที่</p>
                 </div>
               ) : (
                  debtCustomerNamesNewestFirst.map(customerName => {
@@ -6090,7 +6124,7 @@ function App() {
                <div className="text-right">
                  <span className="block text-xs text-green-700 font-bold mb-1">ยอดรับรวมทั้งหมด</span>
                  <span className="text-3xl font-black text-green-600">
-                   {jobs.filter(j => j.payment_status === 'PAID' || j.payment_status === 'DEPOSIT').reduce((sum, j) => {
+                   {(fieldReceived + jobs.filter(j => j.payment_status === 'PAID' || j.payment_status === 'DEPOSIT').reduce((sum, j) => {
                       if (Number(j.plot_paid_total) > 0) return sum + Number(j.plot_paid_total);
                       const orig = Number(j.billing_area ?? j.area_size ?? 0) * Number(j.price_per_rai || 0);
                       const trueTotal = orig > Number(j.total_price) ? orig : (Number(j.total_price) || 0);
@@ -6100,11 +6134,14 @@ function App() {
                       
                       const paidAmount = trueTotal > Number(j.total_price) ? trueTotal - Number(j.total_price) : 0;
                       return sum + paidAmount;
-                   }, 0).toLocaleString()} <span className="text-sm">฿</span>
+                   }, 0)).toLocaleString()} <span className="text-sm">฿</span>
                  </span>
                </div>
             </div>
 
+            {fieldReceipts.map(p => <button type="button" key={p.id} onClick={() => setActiveTab('field')} className="w-full rounded-xl border border-green-200 bg-green-50 p-4 text-left">
+              <div className="flex justify-between gap-3"><b>🌾 รับจากนายหน้า · {p.trip.location}</b><b>{Number(p.amount).toLocaleString()} ฿</b></div><p className="mt-1 text-xs">{new Date(`${p.payment_date}T12:00:00+07:00`).toLocaleDateString('th-TH')} · {p.note || 'รับค่าเกี่ยวงานนอกพื้นที่'}</p>
+            </button>)}
             {jobs.flatMap(job => (job.plot_receipts || []).map(receipt => ({ job, receipt }))).sort((a,b) => new Date(b.receipt.paid_at) - new Date(a.receipt.paid_at)).map(({job,receipt}) => <button key={`${job.id}/${receipt.request_id}`} onClick={() => inspectJobIntegrity(job)} className="w-full rounded-xl border border-emerald-200 bg-white p-4 text-left shadow-sm">
               <div className="flex justify-between gap-3"><b className="text-slate-900">{job.customers?.name || 'ลูกค้า'} · #{job.id}</b><b className="text-emerald-700">{Number(receipt.amount).toLocaleString()} ฿</b></div>
               <p className="mt-1 text-xs text-slate-500">{new Date(receipt.paid_at).toLocaleString('th-TH')}</p><p className="mt-2 text-sm text-slate-700">{receipt.mode === 'BALANCE' ? 'รับยอดค้างทั้งหมด' : receipt.items.map(i => `${i.name} ${formatRaiNgan(i.area)}`).join(' / ')}</p>
@@ -6112,7 +6149,7 @@ function App() {
             {jobs.filter(j => receivedForJob(j) > 0).length === 0 ? (
                <div className="text-center text-gray-500 py-10 bg-white rounded-xl shadow-sm border border-gray-200">
                  <span className="text-4xl mb-2 block">🍃</span>
-                 <p className="font-bold">ยังไม่มีประวัติการรับเงินครับ</p>
+                 <p className="font-bold">ยังไม่มีประวัติรับเงินจากคิวงานในพื้นที่</p>
               </div>
             ) : (
               jobs.filter(j => receivedForJob(j) > 0 && !Number(j.plot_paid_total))
@@ -7349,7 +7386,7 @@ function App() {
 
                           // 👤 ใช้ job_id ของบิลค่าแรงเป็นตัวหลัก เพื่อบอกว่าค่าแรงนี้มาจากงานของใคร
                           const sourceJob = jobs.find(j => Number(j.id) === Number(tx.job_id));
-                          const sourceJobName = sourceJob?.customers?.name || sourceJob?.customer_name || (tx.job_id ? `งาน #${tx.job_id}` : 'ไม่พบชื่องาน');
+                          const sourceJobName = tx.field_trip_id ? `ออกพื้นที่ ${tx.field_trip_label || ''} · ปิดยอดรายวัน` : sourceJob?.customers?.name || sourceJob?.customer_name || (tx.job_id ? `งาน #${tx.job_id}` : 'ไม่พบชื่องาน');
                           // ซ่อนเลขรอบภายในระบบ เช่น [รอบงาน:12] ไม่ให้รกสมุดค่าแรง
                           const cleanDetailsStr = String(detailsStr || '')
                             .replace(/\s*\[รอบงาน:[^\]]+\]/g, '')
@@ -7384,7 +7421,7 @@ function App() {
                                      })}
                                    </div>
                                    <p className="text-sm text-gray-700 font-bold mb-1">{cleanDetailsStr ? `📐 ${cleanDetailsStr}` : ''}</p>
-                                   <p className="text-[10px] text-gray-500">📅 ลงสมุด: {new Date(tx.created_at).toLocaleString('th-TH')}</p>
+                                   <p className="text-[10px] text-gray-500">📅 {tx.field_day_id ? 'วันทำงาน' : 'ลงสมุด'}: {new Date(tx.field_day_id ? tx.transaction_date : tx.created_at).toLocaleString('th-TH')}</p>
                                  </div>
 
                                  <div className="text-right shrink-0">
