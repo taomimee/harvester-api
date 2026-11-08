@@ -10,6 +10,7 @@ app.use(cors());
 // Editable GPS boundaries and reviewed exclusion rings share the existing JSON column.
 app.use('/api/plots', express.json({ limit: '2mb' }));
 app.use('/api/gps-route-edits', express.json({ limit: '5mb' }));
+app.use('/api/field-trips', express.json({ limit: '2mb' }));
 app.use(express.json());
 
 // Weather is fetched server-side so browsers only contact the app's existing API.
@@ -377,6 +378,11 @@ const loadGpsJobSummary = async () => {
     if(!data || data.length<500) return byJob;
   }
 };
+
+const { registerFieldTrips, supabaseStore } = require('./lib/field-trip-routes');
+const fieldTripStore = supabaseStore(supabase);
+registerFieldTrips(app, { store: fieldTripStore, isBoss: bossSessionValid,
+    normalizePlots: normalizeJobPlots, geometry: plotGeometry, center: plotCenter });
 
 app.get('/api/jobs', async (req, res) => {
     const { data, error } = await supabase
@@ -2073,12 +2079,14 @@ app.get('/api/dashboard', async (req, res) => {
             .lte('job_date', endDate);
 
         // 2. ดึงข้อมูลรายจ่าย (จาก transactions)
-        const { data: expenses } = await supabase
+        const { data: expenses, error: expensesError } = await supabase
             .from('transactions')
             .select('total_amount, category')
             .eq('type', 'OUT')
+            .is('field_day_id', null)
             .gte('created_at', startDate)
             .lte('created_at', endDate);
+        if (expensesError) throw expensesError;
 
         // คำนวณยอดต่างๆ
         let totalIncome = 0;
@@ -2115,7 +2123,16 @@ app.get('/api/dashboard', async (req, res) => {
             });
         }
 
+        const { fieldTripPeriodStats } = await import('./harvester-app/src/field-trip-reports.mjs');
+        const fieldRows = await fieldTripStore.list();
+        const fieldPeriod = fieldTripPeriodStats(fieldRows.map(row => row.document), Number(year), Number(month));
+        totalIncome += fieldPeriod.received;
+        totalUnpaid += fieldPeriod.outstanding;
+        totalArea += fieldPeriod.rai;
+        totalExpense += fieldPeriod.wages;
+
         res.json({
+            fieldTrips: fieldPeriod,
             totalIncome,
             totalUnpaid,
             totalExpense,
