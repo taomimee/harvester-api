@@ -3,6 +3,7 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
+import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
 import './gps-workspace.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
 
@@ -860,7 +861,7 @@ const gpsEdgeInBox = (a, b, bounds) => {
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
 function TrackingMap({
   pathData, vehicleId, workDate, trackingMode, focusRequest,
-  leaveGuardRef, onRouteStats, isFetchingGps,
+  leaveGuardRef, onRouteStats, isFetchingGps, autoArea,
   jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot,
   fleetPaths = {}, fleetVehicles = [], vehicleColors = {},
   fleetFitRequest = 0, onSelectVehicle
@@ -870,6 +871,8 @@ function TrackingMap({
   const [linkCreatingQueue, setLinkCreatingQueue] = useState(false);
   const [plotRevision, setPlotRevision] = useState(null);
   const [plotReload, setPlotReload] = useState(0);
+  const autoHarvestEdges = useMemo(() => autoArea?.enabled && Array.isArray(autoArea.accepted_edges)
+    ? new Set(autoArea.accepted_edges) : null, [autoArea]);
 
   const activeLinkJobs = useMemo(() => jobs.filter(j => j.status !== 'DONE').sort((a,b) => {
     const priority = { IN_PROGRESS: 1, PAUSED: 2, PENDING: 3 };
@@ -1269,7 +1272,7 @@ function TrackingMap({
 
     return {
       km,
-      harvesting: explicitHarvesting || inferredHarvesting,
+      harvesting: autoHarvestEdges ? autoHarvestEdges.has(gpsEdgeKey(a,b)) : explicitHarvesting || inferredHarvesting,
       inferredSpeedKmh
     };
   };
@@ -1338,7 +1341,7 @@ function TrackingMap({
       console.warn('คำนวณพื้นที่เกี่ยวไม่ได้:', err);
       return null;
     }
-  }, [pathData, headWidthMeters, excludedEdges, routeReady]);
+  }, [pathData, headWidthMeters, excludedEdges, routeReady, autoHarvestEdges]);
 
   const plotGeometries = useMemo(() => plots.map(plot => {
     try { return plotGeometry(plot); } catch (_) { return null; }
@@ -1851,6 +1854,19 @@ function TrackingMap({
   }, []);
 
   // ผู้ใช้ลาก/แตะแผนที่เอง = กำลังสำรวจตำแหน่งอื่น
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map || !autoArea?.enabled) return;
+    const layer = L.layerGroup().addTo(map);
+    for (const plot of autoArea.plots || []) {
+      if (plot.geometry) L.geoJSON(plot.geometry, {
+        style: {color:'#10b981',weight:1.5,fillColor:'#10b981',fillOpacity:.14},interactive:false
+      }).addTo(layer);
+    }
+    return () => {map.removeLayer(layer);};
+  }, [autoArea]);
+
+  // ผู้ใช้ลาก/แตะแผนที่เอง = กำลังสำรวจตำแหน่งอื่น
   // Auto-refresh ยังดึงข้อมูลต่อ แต่กล้องจะไม่เด้งกลับจนกว่าจะกดเปิดตามรถใหม่
   useEffect(() => {
     if (!mapInstance.current) return;
@@ -1935,7 +1951,7 @@ function TrackingMap({
       polylineLayer.current = routeGroup;
       markerLayer.current = markerGroup;
     }
-  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded, vehicleColors, fleetVehicles, vehicleId]);
+  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded, vehicleColors, fleetVehicles, vehicleId, autoHarvestEdges]);
 
   // 🚜 ภาพรวมรถหลายคัน — รถอื่นใช้สีประจำคัน, รถที่เลือกยังคงเส้นละเอียดเกี่ยว/วิ่งแบบเดิม
   useEffect(() => {
@@ -2631,7 +2647,7 @@ function TrackingMap({
           </div>
 
           <button type="button" className="gps-plot-launcher" aria-expanded={mobileToolsOpen && sheetTab === 'plots'} aria-controls="gps-plot-sheet" onClick={() => {setSheetTab('plots');setMobileToolsOpen(v => sheetTab === 'plots' ? !v : true);}}>
-            <span><strong>{selectedPlotId ? (plots.find(p => p.id === selectedPlotId)?.name || 'แปลงที่เลือก') : `🌾 แปลง${plotDateLabel} ${plots.length} แปลง`}</strong><small>{selectedPlotId ? 'แตะเพื่อเปิดรายการแปลง' : `พื้นที่ GPS รวม ${formatThaiRai(overallProgress.totalRai)}`}</small></span>
+            <span><strong>{selectedPlotId ? (plots.find(p => p.id === selectedPlotId)?.name || 'แปลงที่เลือก') : `🌾 แปลง${plotDateLabel} ${plots.length} แปลง`}</strong><small>{selectedPlotId ? 'แตะเพื่อเปิดรายการแปลง' : `ขอบแปลงที่บันทึก ${formatThaiRai(overallProgress.totalRai)}`}</small></span>
             <span aria-hidden="true">{mobileToolsOpen ? '⌄' : '⌃'}</span>
           </button>
         </>
@@ -2641,7 +2657,7 @@ function TrackingMap({
         <section id="gps-plot-sheet" className="gps-sheet" aria-label={sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : 'รายการแปลง'}>
           <div className="gps-sheet-header" onTouchStart={e => {sheetSwipeStart.current = e.touches[0].clientY;}} onTouchEnd={e => {if (sheetSwipeStart.current !== null && e.changedTouches[0].clientY - sheetSwipeStart.current > 55) setMobileToolsOpen(false);sheetSwipeStart.current = null;}}>
             <span className="gps-sheet-handle" aria-hidden="true" />
-            <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel} · ${plots.length} แปลง`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : `พื้นที่ GPS รวม ${formatThaiRai(overallProgress.totalRai)}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
+            <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel} · ${plots.length} แปลง`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : `ขอบแปลงที่บันทึก ${formatThaiRai(overallProgress.totalRai)}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
             {workspaceMode === 'manage' && <div className="gps-sheet-tabs" role="group" aria-label="เนื้อหาแผงแปลง"><button type="button" aria-pressed={sheetTab === 'plots'} onClick={() => setSheetTab('plots')}>รายการแปลง</button><button type="button" aria-pressed={sheetTab === 'tools'} onClick={() => setSheetTab('tools')}>เครื่องมือ</button></div>}
           </div>
           <div className="gps-sheet-body">
@@ -2929,6 +2945,7 @@ function App() {
   const effectiveTrackingDate = trackingMode === 'realtime'
     ? getLocalDateString()
     : (trackingDate || getLocalDateString());
+  const gpsAutoArea = useGpsArea(trackingVehicleId, effectiveTrackingDate, activeTab === 'gps');
 
   const gpsViewScope = `${trackingVehicleId}/${effectiveTrackingDate}`;
   const gpsViewScopeRef = useRef(gpsViewScope);
@@ -4579,6 +4596,7 @@ function App() {
                 <div className="gps-time-mode" role="group" aria-label="ช่วงเวลาพิกัด"><button type="button" aria-pressed={trackingMode === 'realtime'} onClick={() => changeGpsMode('realtime')}>สดวันนี้</button><button type="button" aria-pressed={trackingMode === 'history'} onClick={() => changeGpsMode('history')}>ย้อนหลัง</button></div>
                 <span className="gps-signal" role="status">{isFetchingGps || isFetchingFleetGps ? 'กำลังอัปเดต…' : trackingMode === 'history' ? `${visibleGpsPath.length.toLocaleString()} จุด` : Date.now()-gpsLastPointTime(visibleGpsPath) <= 60000 ? '● สด' : gpsAgeText(visibleGpsPath)}</span>
               </div>
+              <GpsAreaSummary data={gpsAutoArea.data} error={gpsAutoArea.error} history={trackingMode === 'history'} />
               {trackingMode === 'history' && <div className="gps-date-row">
                 <button type="button" aria-label="วันก่อนหน้า" onClick={() => shiftTrackingDate(-1)}>‹</button>
                 <input type="date" aria-label="วันที่ดูพิกัด" value={trackingDate || getLocalDateString()} onChange={e => {if(e.target.value && gpsLeaveGuard.current?.() !== false)setTrackingDate(e.target.value);}} />
@@ -4612,6 +4630,7 @@ function App() {
                 focusRequest={gpsFocusRequest}
                 leaveGuardRef={gpsLeaveGuard}
                 onRouteStats={setGpsRouteStats}
+                autoArea={gpsAutoArea.data}
                 isFetchingGps={isFetchingGps || isFetchingFleetGps}
                 fleetPaths={trackingMode === 'realtime' ? gpsFleetPaths : {}}
                 fleetVehicles={vehicles}
