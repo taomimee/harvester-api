@@ -383,6 +383,8 @@ const { registerFieldTrips, supabaseStore } = require('./lib/field-trip-routes')
 const fieldTripStore = supabaseStore(supabase);
 registerFieldTrips(app, { store: fieldTripStore, isBoss: bossSessionValid,
     normalizePlots: normalizeJobPlots, geometry: plotGeometry, center: plotCenter });
+const { registerGpsArea, gpsAreaStore } = require('./lib/gps-auto-routes');
+registerGpsArea(app, { store: gpsAreaStore(supabase) });
 
 app.get('/api/jobs', async (req, res) => {
     const { data, error } = await supabase
