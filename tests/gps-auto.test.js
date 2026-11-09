@@ -55,6 +55,59 @@ test('manual excluded edges are respected and separate fields remain separate',(
   const b=trace(field(600,0),{offset:1000,start:Date.parse(a.at(-1).created_at)+300000});
   assert.equal(measure([...a,...b]).plots.length,2);
 });
+test('automatic locks survive refresh, a restart and driving back through the field',()=>{
+  const positions=field();for(let i=1;i<=120;i++)positions.push([i*5,57]);
+  const rows=trace(positions),closed=measure(rows);
+  assert.equal(closed.locked_count,1);assert.equal(closed.locked_plots.length,1);
+  assert.ok(closed.plots[0].locked_at);assert.equal(closed.plots[0].number,1);
+  const reloaded=analyzeGpsDay(rows,{...options,previous:JSON.parse(JSON.stringify(closed))});
+  assert.deepEqual(reloaded.locked_plots,closed.locked_plots);
+  const returned=analyzeGpsDay(trace([...positions,...field()]),{...options,previous:reloaded});
+  assert.deepEqual(returned.locked_plots,closed.locked_plots);
+  assert.equal(returned.locked_count,1);assert.equal(returned.plots.length,1);
+  assert.ok(Math.abs(returned.estimated_rai-closed.estimated_rai)<.02);
+});
+test('a brief trip away and return does not lock a field',()=>{
+  const rows=trace(field()),start=Date.parse(rows.at(-1).created_at)+6000;
+  const brief=trace([[40,57],[80,57],[120,57],[160,57],[200,57],[160,57],[120,57],[80,57],[40,57],[0,57]],{start,offset:1000,step:30});
+  assert.equal(measure([...rows,...brief]).locked_count,0);
+});
+test('new fields get stable numbers while locked boundaries and rai stay unchanged',()=>{
+  const positions=field();for(let i=1;i<=120;i++)positions.push([i*5,57]);
+  const first=measure(trace(positions));
+  const second=analyzeGpsDay(trace([...positions,...field(600,0)]),{...options,previous:first});
+  assert.deepEqual(second.locked_plots,first.locked_plots);
+  assert.equal(second.locked_count,1);assert.equal(second.plots.length,2);
+  assert.deepEqual(second.plots.map(p=>p.number),[1,2]);
+  const exit=[...positions,...field(600,0)];for(let i=1;i<=120;i++)exit.push([600+i*5,57]);
+  const third=analyzeGpsDay(trace(exit),{...options,previous:second});
+  assert.equal(third.locked_count,2);assert.equal(third.locked_plots.length,2);
+  assert.deepEqual(third.locked_plots[0],first.locked_plots[0]);
+  assert.ok(Math.abs(third.estimated_rai-third.completed_rai)<.000001);
+});
+test('harvesting additional land on return adds only new area to the original field',()=>{
+  const positions=field();for(let i=1;i<=120;i++)positions.push([i*5,57]);
+  const first=measure(trace(positions));
+  const more=[...positions,...field(60,0)];
+  const active=analyzeGpsDay(trace(more),{...options,previous:first});
+  assert.deepEqual(active.locked_plots,first.locked_plots);
+  assert.equal(active.plots.length,1);assert.equal(active.plots[0].number,1);
+  assert.ok(active.working_rai>1 && active.working_rai<3);
+  for(let i=1;i<=120;i++)more.push([60+i*5,57]);
+  const done=analyzeGpsDay(trace(more),{...options,previous:active});
+  assert.equal(done.locked_count,1);assert.equal(done.locked_plots.length,2);
+  assert.deepEqual(done.locked_plots[0],first.locked_plots[0]);
+  assert.ok(done.estimated_rai>5 && done.estimated_rai<7);
+});
+test('explicit route corrections can remove a mistaken lock, unrelated scopes cannot import it',()=>{
+  const positions=field();for(let i=1;i<=120;i++)positions.push([i*5,57]);
+  const rows=trace(positions),closed=measure(rows);
+  const excluded=rows.slice(1).map((b,i)=>`${rows[i].id}>${b.id}`);
+  const corrected=analyzeGpsDay(rows,{...options,previous:closed,excludedEdges:excluded,routeRevision:1});
+  assert.equal(corrected.locked_count,0);assert.equal(corrected.estimated_rai,0);
+  assert.equal(analyzeGpsDay([],{...options,vehicleId:10,previous:closed}).locked_count,0);
+  assert.equal(analyzeGpsDay([],{...options,workDate:'2026-11-10',previous:closed}).locked_count,0);
+});
 function memoryStore(rows) {
   const saved=new Map();let writes=0;
   return {settings:async()=>({enabled:true,head_width_m:3}),saved:async(v,d)=>saved.get(`${v}/${d}`)||null,edges:async()=>({excluded_edges:[],revision:0}),gps:async(v,d)=>rows.filter(p=>thaiDay(Date.parse(p.created_at))===d),
@@ -69,6 +122,21 @@ test('background processing persists without any browser request and repeated ru
   const archived=store.state().saved.result;store.setRows([]);now+=30000;
   assert.deepEqual((await service.get(9,'2026-11-09')).plots,archived.plots);
   assert.equal(store.state().writes,1);
+});
+test('background lock persists through a service restart and expired tracker history',async()=>{
+  const positions=field();for(let i=1;i<=120;i++)positions.push([i*5,57]);
+  const store=memoryStore(trace(positions)),now=()=>Date.parse('2026-11-09T08:00:00Z');
+  const service=createAreaService(store,{now});
+  await service.tick();const first=store.state().saved.result;
+  assert.equal(first.locked_count,1);
+  store.setRows(trace([...positions,...field(600,0)]));
+  const restarted=createAreaService(store,{now});
+  await restarted.tick();const second=store.state().saved.result;
+  assert.deepEqual(second.locked_plots,first.locked_plots);
+  assert.equal(second.plots.length,2);
+  store.setRows([]);
+  const expired=await createAreaService(store,{now}).get(9,'2026-11-09');
+  assert.equal(expired.archived,true);assert.deepEqual(expired.locked_plots,first.locked_plots);
 });
 test('concurrent screen requests share one calculation and errors do not become zero rai',async()=>{
   const store=memoryStore(trace(field()));let calls=0;
