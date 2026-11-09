@@ -4,6 +4,7 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
+import GpsAutoPlots from './GpsAutoPlots.jsx'
 import './gps-workspace.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
 
@@ -873,6 +874,15 @@ function TrackingMap({
   const [plotReload, setPlotReload] = useState(0);
   const autoHarvestEdges = useMemo(() => autoArea?.enabled && Array.isArray(autoArea.accepted_edges)
     ? new Set(autoArea.accepted_edges) : null, [autoArea]);
+  const autoLockCount = autoArea?.locked_count || 0;
+  const autoWorkingCount = (autoArea?.plots || []).filter(p => p.state !== 'completed').length;
+  const selectAutoPlot = plot => {
+    if (!mapInstance.current || !plot.geometry) return;
+    const bounds = L.geoJSON(plot.geometry).getBounds();
+    if (!bounds.isValid()) return;
+    setAutoFollow(false); setMobileToolsOpen(false);
+    mapInstance.current.fitBounds(bounds, {padding:[35,35],maxZoom:19});
+  };
 
   const activeLinkJobs = useMemo(() => jobs.filter(j => j.status !== 'DONE').sort((a,b) => {
     const priority = { IN_PROGRESS: 1, PAUSED: 2, PENDING: 3 };
@@ -1859,9 +1869,11 @@ function TrackingMap({
     if (!map || !autoArea?.enabled) return;
     const layer = L.layerGroup().addTo(map);
     for (const plot of autoArea.plots || []) {
+      const locked = plot.state === 'completed' && plot.locked_at;
       if (plot.geometry) L.geoJSON(plot.geometry, {
-        style: {color:'#10b981',weight:1.5,fillColor:'#10b981',fillOpacity:.14},interactive:false
-      }).addTo(layer);
+        style: {color:locked?'#047857':'#d97706',weight:locked?3:2,fillColor:locked?'#10b981':'#fbbf24',fillOpacity:.16},interactive:true
+      }).bindTooltip(`${locked?'🔒':'🌾'} แปลงที่ ${plot.number || ''} · ${Number(plot.estimated_rai).toFixed(2)} ไร่${locked?' · ล็อกแล้ว':''}`)
+        .on('click', () => {setSheetTab('plots');setMobileToolsOpen(true);setAutoFollow(false);}).addTo(layer);
     }
     return () => {map.removeLayer(layer);};
   }, [autoArea]);
@@ -2647,7 +2659,7 @@ function TrackingMap({
           </div>
 
           <button type="button" className="gps-plot-launcher" aria-expanded={mobileToolsOpen && sheetTab === 'plots'} aria-controls="gps-plot-sheet" onClick={() => {setSheetTab('plots');setMobileToolsOpen(v => sheetTab === 'plots' ? !v : true);}}>
-            <span><strong>{selectedPlotId ? (plots.find(p => p.id === selectedPlotId)?.name || 'แปลงที่เลือก') : `🌾 แปลง${plotDateLabel} ${plots.length} แปลง`}</strong><small>{selectedPlotId ? 'แตะเพื่อเปิดรายการแปลง' : `ขอบแปลงที่บันทึก ${formatThaiRai(overallProgress.totalRai)}`}</small></span>
+            <span><strong>{autoArea?.enabled ? `🔒 ล็อกแล้ว ${autoLockCount} แปลง${autoWorkingCount ? ` · กำลังวัด ${autoWorkingCount}` : ''}` : selectedPlotId ? (plots.find(p => p.id === selectedPlotId)?.name || 'แปลงที่เลือก') : `🌾 แปลง${plotDateLabel} ${plots.length} แปลง`}</strong><small>{autoArea?.enabled ? 'บันทึกแปลงอัตโนมัติ · แตะดูยอดแต่ละแปลง' : selectedPlotId ? 'แตะเพื่อเปิดรายการแปลง' : `ขอบแปลงที่บันทึก ${formatThaiRai(overallProgress.totalRai)}`}</small></span>
             <span aria-hidden="true">{mobileToolsOpen ? '⌄' : '⌃'}</span>
           </button>
         </>
@@ -2657,7 +2669,7 @@ function TrackingMap({
         <section id="gps-plot-sheet" className="gps-sheet" aria-label={sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : 'รายการแปลง'}>
           <div className="gps-sheet-header" onTouchStart={e => {sheetSwipeStart.current = e.touches[0].clientY;}} onTouchEnd={e => {if (sheetSwipeStart.current !== null && e.changedTouches[0].clientY - sheetSwipeStart.current > 55) setMobileToolsOpen(false);sheetSwipeStart.current = null;}}>
             <span className="gps-sheet-handle" aria-hidden="true" />
-            <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel} · ${plots.length} แปลง`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : `ขอบแปลงที่บันทึก ${formatThaiRai(overallProgress.totalRai)}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
+            <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel}`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : autoArea?.enabled ? `ล็อกอัตโนมัติแล้ว ${autoLockCount} แปลง` : `ขอบแปลงที่บันทึก ${formatThaiRai(overallProgress.totalRai)}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
             {workspaceMode === 'manage' && <div className="gps-sheet-tabs" role="group" aria-label="เนื้อหาแผงแปลง"><button type="button" aria-pressed={sheetTab === 'plots'} onClick={() => setSheetTab('plots')}>รายการแปลง</button><button type="button" aria-pressed={sheetTab === 'tools'} onClick={() => setSheetTab('tools')}>เครื่องมือ</button></div>}
           </div>
           <div className="gps-sheet-body">
@@ -2674,7 +2686,9 @@ function TrackingMap({
                 <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={() => {const backup=readPlotBackup();if(!backup.pending)return alert('ไม่มีฉบับแก้ไขรอบันทึก');if(window.confirm('เปิดฉบับสำรองเพื่อตรวจคิวก่อนบันทึกแทนแปลงของรถและวันนี้?'))openLinkReview(hydratePlots(backup.plots),backup.plots.map((_,i)=>i));}}>กู้ฉบับในเครื่อง</button>
               </div></details>
             </> : <>
-              {!plots.length && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : `${plotDateLabel}ยังไม่มีแปลงที่บันทึก`}{workspaceMode === 'manage' && plotRevision !== null && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
+              <GpsAutoPlots data={autoArea} onSelect={selectAutoPlot} />
+              {(plots.length > 0 || workspaceMode === 'manage') && <h3 className="gps-manual-plots-heading">ขอบแปลงที่บันทึกเอง · {plots.length} แปลง</h3>}
+              {!plots.length && (!autoArea?.enabled || workspaceMode === 'manage') && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : 'ยังไม่มีขอบแปลงที่บันทึกเอง'}{workspaceMode === 'manage' && plotRevision !== null && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
               {plots.map((plot,i) => {
                 const progress=plotProgressList[i] || {percent:0,coveredRai:0,totalRai:Number(plot.area?.rawRai||0)};
                 const center=plot.center || centerFromPoints(plot.points);
