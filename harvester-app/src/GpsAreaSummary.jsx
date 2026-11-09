@@ -43,7 +43,7 @@ export default function GpsAreaSummary({ data, error, history }) {
   else if (time) message = `วัดอัตโนมัติ · พิกัดถึง ${time} น.`
   const hasArea = available && data.estimated_rai > 0
   return <section className="gps-area-summary" aria-label="ยอดไร่จาก GPS อัตโนมัติ">
-    <div className="gps-area-caption"><strong>{history ? 'เกี่ยวได้ในวันที่เลือก' : 'เกี่ยวแล้ววันนี้'}</strong><small>{error || message}</small></div>
+    <div className="gps-area-caption"><strong>{history ? 'เกี่ยวได้ในวันที่เลือก' : 'เกี่ยวแล้ววันนี้'}</strong><small>{error || message}</small>{data?.lock_version && <small>🔒 ล็อกแล้ว {data.locked_count || 0} แปลง{data.working_rai > 0 ? ' · กำลังวัดต่อ' : ''}</small>}</div>
     <div className="gps-area-value"><small>ประมาณจาก GPS</small><div><strong>{hasArea ? data.estimated_rai.toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—'}</strong><span>ไร่</span></div></div>
   </section>
 }
