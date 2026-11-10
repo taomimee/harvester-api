@@ -14,7 +14,21 @@ The GPS page shows the selected vehicle's daily harvested-area estimate without 
 - An explicit manual route correction or header-width change permits recalculation of that day's locks; unrelated new GPS cannot reshape an existing receipt. The lock is an automated measurement record, not a claim that the surveyed/customer field is complete. A long unloading trip outside the threshold can cause a lock; a return is handled without an extra field count.
 - Adjacent plots may form one continuous footprint. Component counts are not presented as verified cadastral plot counts; the headline is rai.
 
-The measured result does not alter manually saved plot boundaries, existing customer jobs, broker-confirmed area, wages, or withdrawals. Manual boundaries have their own section in the same plot list. This release adds fields to the existing `gps_area_daily.result` JSON; no schema or access changes are needed.
+Automatic measurement alone does not alter manually saved plot boundaries, customer jobs, broker-confirmed area, wages, or withdrawals. Saved editable copies have their own section in the same plot list. Locks use the existing `gps_area_daily.result` JSON; no schema or access changes are needed.
+
+## Using a locked plot
+
+The lock card offers queue linking, boundary editing and (for owners) field-trip entry. These actions copy only locked receipts into the existing `harvest_plots` workflow. Receipt/part IDs are stable: retries reuse a saved copy and retain its edits and queue assignment. Additional locked coverage creates only the missing parts. The source lock stays intact.
+
+Every MultiPolygon part and inner exclusion ring is retained. Parts share `auto_origin.plot_id`, so queue summaries and field-trip references count the logical field once while summing all its areas. Selecting a queue from the auto card applies to all reviewed parts. Substantial overlap with another saved plot is shown for review before queue linking.
+
+The field-trip handoff asks for the destination trip, selects the GPS references and opens the existing daily entry if present. It preserves confirmed rai, plot count, crew and price. A new day still requires confirmed rai and crew before posting wages. Linking or editing geometry alone never posts wages or receives money. An already queued plot cannot enter a field-trip day; a claimed field-trip reference is rejected when saving a customer queue link.
+
+Saved field-trip GPS references are snapshots: reopen and save the existing daily entry to refresh an edited reference. Confirmed rai changes only through that explicit daily form. No new tables, migrations, or LINE delivery are part of this update.
+
+On phones the existing main navigation shows every tab in two rows. Field-trip headings use explicit dark text on their light surfaces, including on phones preferring dark mode. Daily, receipt and trip-edit dialogs scroll their body independently while keeping the title/close control and save/cancel actions visible; the background page is locked until the dialog closes. Layout checks cover 320 and 390 pixel viewports and both existing roles.
+
+To undo this UI extension, redeploy the previous source commit. Imported copies remain compatible with the original plot editor, and no business-data restore or GPS-schedule change is needed.
 
 ## Data and background execution
 
