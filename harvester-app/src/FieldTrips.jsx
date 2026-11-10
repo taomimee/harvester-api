@@ -31,6 +31,12 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
   useEffect(() => { changeCallback.current = onChange; }, [onChange]);
   const trip = trips.find(t => t.id === selected);
   const canWrite = userRole === 'BOSS';
+  useEffect(() => {
+    if (!visible || !modal) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [visible, modal]);
   const fetchTrips = useCallback(async () => {
     const response = await fetch(`${api}/field-trips`, { cache: 'no-store' });
     const data = await response.json();
@@ -188,6 +194,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
     {modal && <div className="ft-overlay"><section role="dialog" aria-modal="true" aria-labelledby="ft-dialog-title" className="ft-dialog">
       <div className="ft-row"><h3 id="ft-dialog-title">{titles[modal]}</h3><button type="button" aria-label="ปิดหน้าบันทึก" disabled={busy || uncertain} onClick={() => setModal(null)}>✕</button></div>
       <form onSubmit={submit}>
+        <div className="ft-dialog-body">
         <fieldset disabled={busy || uncertain}>
           {(modal === 'create' || modal === 'edit') && <>
             <label>พื้นที่ออกงาน<input required autoFocus maxLength={200} placeholder="เช่น ลพบุรี" value={draft.location} onChange={e => field('location', e.target.value)} /></label>
@@ -228,6 +235,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
           {modal === 'close' && <><p>ปิดทริปเมื่อเลิกออกงานครั้งนี้ ยอดค้างจากนายหน้ายังติดตามและรับเงินภายหลังได้</p><label>วันจบทริป<input required type="date" min={trip.days.at(-1)?.work_date || trip.start_date} value={draft.end_date} onChange={e => field('end_date', e.target.value)} /></label></>}
           {modal === 'reopen' && <p>เปิดทริป {trip.location} เพื่อลงผลงานรายวันต่อ ยอดรับเงินและค่าแรงเดิมยังอยู่ครบ</p>}
         </fieldset>
+        </div>
         {error && <div className="ft-error" role="alert">{error}{!uncertain && <button type="button" onClick={load}>โหลดข้อมูลล่าสุด</button>}</div>}
         <div className="ft-dialog-footer"><button type="button" className="ft-button" disabled={busy || uncertain} onClick={() => setModal(null)}>ยกเลิก</button>
           <button type={uncertain ? 'button' : 'submit'} className="ft-button ft-primary" disabled={busy || !canWrite} onClick={uncertain ? () => save() : undefined}>{busy ? 'กำลังบันทึก…' : uncertain ? 'ตรวจสอบและบันทึกซ้ำ' : modal === 'day' ? 'ปิดงานวันนี้และลงค่าแรง' : 'บันทึก'}</button></div>

@@ -7,6 +7,7 @@ import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
 import GpsAutoPlots from './GpsAutoPlots.jsx'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
+import './mobile-layout.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
 
 // 🚜 Frontend-only GPS speed estimate: no extra requests, RPM sensor, or GPS writes.
@@ -4389,7 +4390,7 @@ function App() {
         </header>
 
         {/* 🔘 เมนูหลัก — ประวัติคิวงานใช้ร่วมกันทั้งสองโหมด (บัญชีแยกเฉพาะเถ้าแก่) */}
-        <div className="flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
+        <nav aria-label="เมนูหลัก" data-mode={userRole === 'BOSS' ? 'boss' : 'driver'} className="app-main-nav flex bg-white rounded-2xl p-1.5 mb-5 shadow-sm border border-gray-100 overflow-x-auto gap-1">
 
           <button onClick={() => setActiveTab('home')} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'home' ? 'bg-gradient-to-r from-gray-800 to-black text-white shadow-md scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>🏠 หน้าแรก</button>
 
@@ -4411,7 +4412,7 @@ function App() {
               <button onClick={() => { setActiveTab('settings'); fetchAllCustomers(); }} className={`min-w-[60px] flex-1 py-2.5 rounded-xl font-bold text-[11px] sm:text-xs transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md shadow-slate-200 scale-[1.02]' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>⚙️ ตั้งค่า</button>
             </>
           )}
-        </div>
+        </nav>
 
         <div hidden={activeTab !== 'field'}>
           <FieldTrips api={WAGE_API} visible={activeTab === 'field'} vehicles={vehicles}
