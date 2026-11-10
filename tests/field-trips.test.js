@@ -111,9 +111,17 @@ test('daily work posts to existing wages while broker money stays receivable', a
     await success({ type: 'PAYMENT_VOID', id: lastPayment.id, reason: 'ทดสอบการแก้รายการรับผิด' });
     assert.ok(current.summary.broker_balance > 0); assert.ok(current.payments.at(-1).voided_at);
   });
-  await t.test('one open trip per vehicle is enforced by database', async () => {
+  await t.test('a new trip can use the same vehicle while the prior trip and receivable stay open', async () => {
     await success({ type: 'REOPEN' });
-    assert.equal((await send(create, { id: randomUUID(), revision: 0 })).status, 409);
+    const before=await store.get(tripId);
+    const wages=(await db.query('select * from transactions order by id')).rows;
+    const next=await send({...create,location:'พื้นที่ใหม่'},{id:randomUUID(),revision:0});
+    assert.equal(next.status,200,next.data.error);
+    assert.equal(next.data.summary.broker_balance,0);
+    assert.deepEqual(await store.get(tripId),before);
+    assert.deepEqual((await db.query('select * from transactions order by id')).rows,wages);
+    // GPS claims remain exclusive across open trips, even for the same vehicle.
+    assert.equal((await send({...firstDay,id:randomUUID()}, {id:next.data.id,revision:1})).status,409);
   });
   await t.test('new financial tables and writer are inaccessible to public roles', async () => {
     await db.exec('set role anon');

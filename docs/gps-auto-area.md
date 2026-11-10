@@ -14,7 +14,7 @@ The GPS page shows the selected vehicle's daily harvested-area estimate without 
 - An explicit manual route correction or header-width change permits recalculation of that day's locks; unrelated new GPS cannot reshape an existing receipt. The lock is an automated measurement record, not a claim that the surveyed/customer field is complete. A long unloading trip outside the threshold can cause a lock; a return is handled without an extra field count.
 - Adjacent plots may form one continuous footprint. Component counts are not presented as verified cadastral plot counts; the headline is rai.
 
-Automatic measurement alone does not alter manually saved plot boundaries, customer jobs, broker-confirmed area, wages, or withdrawals. Saved editable copies have their own section in the same plot list. Locks use the existing `gps_area_daily.result` JSON; no schema or access changes are needed.
+Automatic locks now append ordinary editable plots in the background. They do not alter existing boundaries, customer jobs, broker-confirmed area, wages, or withdrawals. Saved editable copies have their own section in the same plot list. Locks use the existing `gps_area_daily.result` JSON; no schema or access changes are needed.
 
 ## Using a locked plot
 
@@ -46,3 +46,11 @@ New tables enable RLS, deny public/client access, and grant only the existing ba
 `node scripts/audit-gps-history.cjs INPUT.json OUTPUT.json` compares an offline daily snapshot against saved polygons; those polygons are reference data, not surveyed ground truth. Keep real traces and audit outputs out of the public repository.
 
 To roll back, disable the `harvester-gps-area` schedule and deploy the previous code. Keep the new snapshot tables intact for recovery; no removal or restoration of business records is required.
+
+## Automatic editable copies (November 10 update)
+
+The background service publishes locked receipts to `harvest_plots`, using the same receipt/part IDs as manual import. The existing plot list refreshes when idle and immediately offers queue linking, editing and field-trip entry. Open editors and pending local changes are preserved. Raw lock details remain available in a collapsed status section.
+
+`publish_gps_area_plots` shares the existing GPS advisory lock and compares revisions before appending unassigned plots. It records handled source parts on the daily snapshot. Retries cannot duplicate copies, overwrite an edit or revive a deleted copy. Current existing copies are reused. For older manual plots, covered area is subtracted; a source part already covered by at least 80% is treated as an existing corrected boundary, so the worker does not refill its holes/edges. New clipped fragments below 25 m² are ignored; untouched receipt parts retain the existing 1 m² minimum. Measurement receipts themselves are unchanged.
+
+Apply `20261110155250_trip_auto_sessions.sql` before deploying this release. No queue, wage, payment or confirmed area is written by automatic publication. Returning to a field can append newly locked coverage without counting a second logical field. The background schedule is unchanged.

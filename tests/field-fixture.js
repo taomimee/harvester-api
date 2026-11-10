@@ -24,6 +24,9 @@ async function createFixture() {
   await db.exec(`create trigger wage_transaction_snapshot before insert on public.transactions
     for each row execute function public.wage_transaction_snapshot_trigger();`);
   await db.exec(readFileSync(path.join(__dirname, '../supabase/migrations/20261108065513_field_trips.sql'), 'utf8'));
+  await db.exec(`create table harvest_plots(id serial primary key,vehicle_id bigint,work_date date,plots_data jsonb,revision integer,created_at timestamptz default now());
+    create table gps_area_daily(vehicle_id bigint,work_date date,result jsonb,primary key(vehicle_id,work_date));`);
+  await db.exec(readFileSync(path.join(__dirname, '../supabase/migrations/20261110155250_trip_auto_sessions.sql'), 'utf8'));
   const vehicles = [{ id: 1, name: 'ช้างขาว 1' }, { id: 2, name: 'ช้างขาว 2' }];
   const profiles = [{ name: 'สมชาย', role: 'DRIVER' }, { name: 'สมปอง', role: 'HELPER' }, { name: 'น้อย', role: 'TRAINEE' }];
   const store = {

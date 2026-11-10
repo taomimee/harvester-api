@@ -19,7 +19,7 @@ function PlotShape({ plot }) {
   const scale = Math.min(80 / w, 48 / h);
   return <svg viewBox="0 0 100 68" aria-label={`ขอบแปลง ${plot.name}`} role="img">{polygons.map((rings, i) => <path key={i} d={rings.map(ring => ring.map((p, j) => `${j ? 'L' : 'M'}${10 + (p[0] - minX) * scale},${58 - (p[1] - minY) * scale}`).join(' ') + 'Z').join(' ')} fill="#c7dfc4" fillRule="evenodd" stroke="#43633e" strokeWidth="1.5" />)}</svg>;
 }
-export default function FieldTrips({ api, visible, vehicles, profiles, userRole, getToken, onOpenWages, onOpenMap, onChange, gpsEntry }) {
+export default function FieldTrips({ api, visible, vehicles, profiles, userRole, getToken, bossFetch, onOpenWages, onOpenMap, onChange, gpsEntry }) {
   const [trips, setTrips] = useState([]), [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true), [loadError, setLoadError] = useState('');
   const [filter, setFilter] = useState('OPEN'), [modal, setModal] = useState(null);
@@ -95,8 +95,9 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
   const save = async action => {
     if (saving.current) return;
     let token;
-    try { token = getToken(); if (!token) throw new Error('กรุณาเข้าโหมดเถ้าแก่ก่อนบันทึก'); }
+    try { token = await getToken(); if (!token) throw new Error('กรุณาเข้าโหมดเถ้าแก่ก่อนบันทึก'); }
     catch (e) { setError(e.message); return; }
+    if (saving.current) return;
     if (!pending.current) pending.current = {
       id: modal === 'create' ? draft.id : trip.id,
       body: { request_id: crypto.randomUUID(), revision: modal === 'create' ? 0 : trip.revision, action }
@@ -104,7 +105,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
     saving.current = true; setBusy(true); setError('');
     try {
       const request = pending.current;
-      const response = await fetch(`${api}/field-trips/${request.id}/actions`, {
+      const response = await (bossFetch || fetch)(`${api}/field-trips/${request.id}/actions`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(request.body)
       });
       const data = await response.json();
@@ -119,7 +120,8 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
       pending.current = null; setUncertain(false);
       changeCallback.current?.(updated);
     } catch (e) {
-      if (!e.confirmedFailure) { setUncertain(true); setError('ยังยืนยันผลการบันทึกไม่ได้ กดตรวจสอบและบันทึกซ้ำ ระบบจะใช้รายการเดิมเพื่อป้องกันยอดซ้ำ'); }
+      if (/ยังไม่ได้ยืนยันรหัส/.test(e.message)) pending.current=null;
+      if (!e.confirmedFailure && !/ยังไม่ได้ยืนยันรหัส/.test(e.message)) { setUncertain(true); setError('ยังยืนยันผลการบันทึกไม่ได้ กดตรวจสอบและบันทึกซ้ำ ระบบจะใช้รายการเดิมเพื่อป้องกันยอดซ้ำ'); }
       else setError(e.message);
     } finally { saving.current = false; setBusy(false); }
   };
@@ -201,6 +203,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
             <label>พื้นที่ออกงาน<input required autoFocus maxLength={200} placeholder="เช่น ลพบุรี" value={draft.location} onChange={e => field('location', e.target.value)} /></label>
             <label>นายหน้า (ถ้ามี)<input maxLength={200} value={draft.broker_name} onChange={e => field('broker_name', e.target.value)} /></label>
             <label>รถที่ออกงาน<select required value={draft.vehicle_id} onChange={e => field('vehicle_id', e.target.value)}><option value="">เลือกรถ</option>{vehicles.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></label>
+            {modal==='create' && trips.some(t=>t.status==='OPEN' && String(t.vehicles[0].id)===String(draft.vehicle_id)) && <p className="ft-note">รถคันนี้มีทริปเดิมที่ยังเปิดอยู่ เริ่มทริปใหม่ได้ โดยยอดงานและยอดค้างนายหน้าของแต่ละทริปจะแยกกัน</p>}
             {modal === 'create' && <label>วันเริ่มทริป<input required type="date" value={draft.start_date} onChange={e => field('start_date', e.target.value)} /></label>}
             <label>ค่าเกี่ยวตั้งต้น (บาท/ไร่)<input required type="number" min="0.01" max="100000" step="0.01" value={draft.price_per_rai} onChange={e => field('price_per_rai', e.target.value)} /></label>
             <p className="ft-help">ยังไม่ต้องกำหนดวันกลับ ค่าเกี่ยวปรับได้ตอนลงยอดแต่ละวัน</p>
