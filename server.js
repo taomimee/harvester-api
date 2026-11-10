@@ -138,40 +138,9 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
     }
 });
 
-// Boss authorization is enforced for worker profile writes, not a client-supplied role.
-const bossCrypto = require('crypto');
-const bossSessions = new Map();
-const bossAttempts = new Map();
-const bossSessionValid = req => {
-    const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
-    const expires = bossSessions.get(token);
-    if (!expires || expires <= Date.now()) { bossSessions.delete(token); return false; }
-    return true;
-};
-app.post('/api/boss/session', (req, res) => {
-    const expected = process.env.BOSS_PIN;
-    if (!expected) return res.status(503).json({ error: 'กรุณาตั้ง BOSS_PIN ที่ Server ก่อนใช้งานโหมดเถ้าแก่' });
-    const now = Date.now();
-    for (const [key, value] of bossAttempts) if (value.until <= now) bossAttempts.delete(key);
-    for (const [key, value] of bossSessions) if (value <= now) bossSessions.delete(key);
-    const key = req.ip;
-    const attempt = bossAttempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
-    if (attempt.count >= 5) return res.status(429).json({ error: 'ใส่รหัสผิดหลายครั้ง กรุณารอ 15 นาที' });
-    const received = bossCrypto.createHash('sha256').update(String(req.body?.pin || '')).digest();
-    const wanted = bossCrypto.createHash('sha256').update(expected).digest();
-    if (!bossCrypto.timingSafeEqual(received, wanted)) {
-        attempt.count++; bossAttempts.set(key, attempt);
-        return res.status(401).json({ error: 'รหัสเถ้าแก่ไม่ถูกต้อง' });
-    }
-    bossAttempts.delete(key);
-    const token = bossCrypto.randomBytes(32).toString('hex');
-    bossSessions.set(token, now + 8 * 60 * 60 * 1000);
-    res.json({ token });
-});
-app.delete('/api/boss/session', (req, res) => {
-    bossSessions.delete(String(req.headers.authorization || '').replace(/^Bearer /, ''));
-    res.json({ success: true });
-});
+// Durable sessions retain the original eight-hour lifetime across host restarts.
+const {registerBossSessions,bossSessionStore}=require('./lib/boss-sessions');
+const bossSessionValid=registerBossSessions(app,{store:bossSessionStore(supabase)});
 
 // Worker levels: profiles are shared across devices; historical splits live on rounds/transactions.
 app.get('/api/wage-workers', async (req, res) => {
@@ -386,8 +355,10 @@ const { registerFieldTrips, supabaseStore } = require('./lib/field-trip-routes')
 const fieldTripStore = supabaseStore(supabase);
 registerFieldTrips(app, { store: fieldTripStore, isBoss: bossSessionValid,
     normalizePlots: normalizeJobPlots, geometry: plotGeometry, center: plotCenter });
-const { registerGpsArea, gpsAreaStore } = require('./lib/gps-auto-routes');
-registerGpsArea(app, { store: gpsAreaStore(supabase) });
+const { registerGpsArea, gpsAreaStore, createAreaService } = require('./lib/gps-auto-routes');
+const {createAutoPublisher,autoPublishStore}=require('./lib/gps-auto-publish');
+const areaStore=gpsAreaStore(supabase);
+registerGpsArea(app, {store:areaStore,service:createAreaService(areaStore,{publish:createAutoPublisher(autoPublishStore(supabase),normalizeJobPlots)})});
 
 app.get('/api/jobs', async (req, res) => {
     const { data, error } = await supabase
