@@ -2,6 +2,10 @@
 /* This screen uses light surfaces even when the phone prefers a dark theme. */
 .field-trips { color-scheme:light; min-width:0; font-size:15px; }
 .field-trips h2,.field-trips h3,.field-trips h4 { color:#25352a; }
+/* Plot thumbnails must not set the minimum width of the daily grid track. */
+.ft-days { grid-template-columns:minmax(0,1fr); }
+.ft-day { min-width:0; }
+.ft-plots { max-width:100%; }
 .ft-header > div,.ft-row > h3,.ft-row > h4,.ft-payment > div { min-width:0; overflow-wrap:anywhere; }
 .ft-dialog { display:flex; flex-direction:column; overflow:hidden; }
 .ft-dialog > .ft-row { flex:none; }
@@ -36,7 +40,8 @@
   .ft-day-total strong { display:block; font-size:21px; }
   .ft-day-total span { display:block; margin-top:3px; font-size:14px; }
   .ft-crew button { min-height:44px; font-size:13px; }
-  .ft-plots button { flex-basis:140px; }
+  .ft-plots { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); overflow:visible; }
+  .ft-plots button { min-width:0; }
   .ft-plots span,.ft-plots small { font-size:13px; white-space:normal; overflow-wrap:anywhere; }
   .ft-payment { align-items:flex-start; }
   .ft-payment p,.ft-payment small { font-size:13px; }
