@@ -1,3 +1,5 @@
+import {useBossSession} from './BossSession';
+import './boss-session.css';
 import { useEffect, useState, useRef, useMemo } from 'react'
 import L from 'leaflet'
 import * as turf from '@turf/turf'
@@ -1242,7 +1244,12 @@ function TrackingMap({
   const useAutoPlot = async (autoPlot, action) => {
     if (isSavingPlot || plotRevision === null || savingScopes.current.has(plotStorageKey)) return;
     try {
-      const plan = prepareAutoPlotUse(autoArea, autoPlot.id, plots, vehicleId, workDate);
+      let plan;
+      if(autoArea?.editable_ready) {
+        const ids=plots.filter(p=>p.auto_origin?.plot_id===autoPlot.id).map(p=>p.id);
+        if(!ids.length)throw new Error('พื้นที่นี้มีอยู่ในแปลงที่บันทึกไว้แล้ว หรือเคยลบออก ให้เลือกจากรายการแปลงด้านล่าง');
+        plan={plots,ids,added:[],skipped:[],indices:plots.flatMap((p,i)=>ids.includes(p.id)?[i]:[])};
+      } else plan = prepareAutoPlotUse(autoArea, autoPlot.id, plots, vehicleId, workDate);
       const prepared = hydratePlots(plan.plots);
       const invalid = prepared.find(p=>p.geometryError);
       if (invalid) throw new Error(invalid.geometryError);
@@ -1270,6 +1277,19 @@ function TrackingMap({
       .finally(()=>clearTimeout(timer));
     return ()=>{active=false;controller.abort();clearTimeout(timer);};
   },[vehicleId,workDate,plotReload]);
+
+  // Background locks arrive as ordinary saved plots. Refresh only while idle;
+  // an open boundary editor or an unsaved local backup must never be replaced.
+  useEffect(()=>{
+    if(!autoArea?.editable_ready || autoArea.editable_revision===plotRevision || plotRevision===null ||
+      drawMode || linkReview || isSavingPlot || isAutoPlotting || routeEdit || readPlotBackup().pending)return;
+    const controller=new AbortController();
+    fetch(`https://harvester-api-server.onrender.com/api/plots-snapshot/${vehicleId}?date=${encodeURIComponent(workDate)}`,{signal:controller.signal,cache:'no-store'})
+      .then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.error);return data;})
+      .then(data=>{if(controller.signal.aborted)return;setPlots(hydratePlots(data.plots_data));setPlotRevision(data.revision);writePlotBackup(data.plots_data,false);setPlotSyncStatus('✅ แปลงอัตโนมัติพร้อมใช้แล้ว');})
+      .catch(error=>{if(!controller.signal.aborted)setPlotSyncStatus(error.message||'โหลดแปลงอัตโนมัติไม่ได้ กรุณาลองใหม่');});
+    return ()=>controller.abort();
+  },[autoArea?.editable_ready,autoArea?.editable_revision,plotRevision,vehicleId,workDate,drawMode,linkReview,isSavingPlot,isAutoPlotting,routeEdit]);
 
   // 🧠 วิเคราะห์แต่ละช่วงทาง: ใช้ธงจาก server ก่อน และมี fallback คำนวณความเร็วจากระยะ/เวลา
   // ช่วยแยกช่วงเกี่ยวได้แม้ ST-901 บางจุดรายงาน speed=0 หรือข้อมูลเก่า is_harvesting=false
@@ -2723,22 +2743,26 @@ function TrackingMap({
                 <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={() => {const backup=readPlotBackup();if(!backup.pending)return alert('ไม่มีฉบับแก้ไขรอบันทึก');if(window.confirm('เปิดฉบับสำรองเพื่อตรวจคิวก่อนบันทึกแทนแปลงของรถและวันนี้?'))openLinkReview(hydratePlots(backup.plots),backup.plots.map((_,i)=>i));}}>กู้ฉบับในเครื่อง</button>
               </div></details>
             </> : <>
-              <GpsAutoPlots data={autoArea} onSelect={selectAutoPlot} savedPlots={plots} onUse={useAutoPlot}
+              <details open={!autoArea?.editable_ready}><summary>สถานะการวัดอัตโนมัติ · ล็อกแล้ว {autoLockCount} แปลง</summary><GpsAutoPlots data={autoArea} onSelect={selectAutoPlot} savedPlots={plots} onUse={useAutoPlot}
                 onEdit={id=>openPlotEditor(plots.findIndex(p=>p.id===id))} onOpenJob={onOpenJob}
-                onField={plot=>useAutoPlot(plot,'field')} busy={isSavingPlot || plotRevision===null} canPostWork={canPostWork} />
-              {(plots.length > 0 || workspaceMode === 'manage') && <h3 className="gps-manual-plots-heading">แปลงที่นำไปใช้ / บันทึกเอง · {plots.length} รายการ</h3>}
+                onField={plot=>useAutoPlot(plot,'field')} busy={isSavingPlot || plotRevision===null} canPostWork={canPostWork} /></details>
+              {autoArea?.editable_error && <p role="status">{autoArea.editable_error}</p>}
+              {(plots.length > 0 || workspaceMode === 'manage') && <h3 className="gps-manual-plots-heading">แปลงพร้อมใช้ · {new Set(plots.map(p=>p.auto_origin?.plot_id||p.id)).size} แปลง</h3>}
               {!plots.length && (!autoArea?.enabled || workspaceMode === 'manage') && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : 'ยังไม่มีขอบแปลงที่บันทึกเอง'}{workspaceMode === 'manage' && plotRevision !== null && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
               {plots.map((plot,i) => {
                 const progress=plotProgressList[i] || {percent:0,coveredRai:0,totalRai:Number(plot.area?.rawRai||0)};
                 const center=plot.center || centerFromPoints(plot.points);
                 return <article key={plot.id || i} className={`gps-plot-card ${selectedPlotId === plot.id ? 'is-selected' : ''}`}>
                   <button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(plot)} aria-label={`ดู ${plot.name || `แปลงที่ ${i+1}`} บนแผนที่`}><span><strong>{plot.name || `แปลงที่ ${i+1}`}</strong><small>แตะเพื่อซูมไปที่แปลง ↗</small></span><b>{plot.area?.text || formatThaiRai(progress.totalRai)}</b></button>
-                  <p className="gps-plot-progress">เกี่ยวประมาณ {formatThaiRai(progress.coveredRai)} · {progress.percent.toFixed(0)}%</p>
+                  <p className="gps-plot-progress">{plot.auto_origin ? '🔒 บันทึกอัตโนมัติเมื่อรถออกจากแปลง · แก้ไขได้' : `เกี่ยวประมาณ ${formatThaiRai(progress.coveredRai)} · ${progress.percent.toFixed(0)}%`}</p>
                   <div className="gps-plot-buttons">
+                    {plot.auto_origin && <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>{setWorkspaceMode('manage');openLinkReview(plots,plots.flatMap((p,j)=>p.auto_origin?.plot_id===plot.auto_origin.plot_id?[j]:[]));}}>🔗 ผูกคิว / ยอด</button>}
+                    {plot.auto_origin && <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');openPlotEditor(i);}}>✏️ แก้ขอบแปลง</button>}
+                    {canPostWork && !plot.job_id && <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>onOpenField?.({vehicle_id:Number(vehicleId),work_date:workDate,plot_ids:plot.auto_origin ? plots.filter(p=>p.auto_origin?.plot_id===plot.auto_origin.plot_id).map(p=>p.id):[plot.id]})}>ใช้ลงยอดนอกพื้นที่</button>}
                     {plot.job_id && <button type="button" onClick={() => onOpenJob?.(plot.job_id)}>เปิดคิวงาน #{plot.job_id}</button>}
                     {center && <button type="button" onClick={() => copyPlotCenter(center)}>📍 คัดลอกพิกัด</button>}
                     {workspaceMode === 'manage' && <>
-                      <button type="button" disabled={isSavingPlot} onClick={() => openPlotEditor(i)}>✏️ แก้ขอบแปลง</button>
+                      {!plot.auto_origin && <button type="button" disabled={isSavingPlot} onClick={() => openPlotEditor(i)}>✏️ แก้ขอบแปลง</button>}
                       <button type="button" disabled={isSavingPlot || isAutoPlotting} onClick={() => openExclusionPanel(i)}>พื้นที่หัก {(plot.holes || []).length} วง</button>
                       <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={() => openLinkReview(plots,[i])}>{plot.job_id ? 'เปลี่ยนคิวเจ้าของแปลง' : 'เลือกคิวเจ้าของแปลง'}</button>
                     </>}
@@ -2844,12 +2868,12 @@ function App() {
   const saveWageProfile = async (name, role) => {
     if (userRole !== 'BOSS') throw new Error('เฉพาะเถ้าแก่เท่านั้นที่แก้ไขระดับค่าแรงได้');
     let bossToken = getBossToken();
-    if (!bossToken) bossToken = requireBossToken();
+    if (!bossToken) bossToken = await requireBossToken();
     if (!bossToken) throw new Error('ยังไม่ได้ยืนยันสิทธิ์เถ้าแก่');
     name = cleanWageName(name);
-    const res = await fetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bossToken}` }, body: JSON.stringify({ name, role }) });
+    const res = await bossFetch(`${WAGE_API}/wage-workers`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bossToken}` }, body: JSON.stringify({ name, role }) });
     const data = await res.json();
-    if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
+
     if (!res.ok) throw new Error(data.error || 'บันทึกไม่สำเร็จ');
     setWageProfiles(prev => [...prev.filter(p => p.name !== cleanWageName(data.name)), ...normalizeWageProfiles([data]).filter(p => p.name === cleanWageName(data.name))].sort((a,b) => a.name.localeCompare(b.name, 'th')));
     setWageProfileError('');
@@ -2903,23 +2927,15 @@ function App() {
     getBossToken(); // Migrate an already verified session before the tab is closed.
     return localStorage.getItem('harvester_role') || 'DRIVER';
   });
-  const requireBossToken = () => {
-    const token = getBossToken();
-    if (token) return token;
-    setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER');
-    throw new Error('สิทธิ์เถ้าแก่เดิมไม่อยู่ในเครื่องนี้ กรุณากดเข้าโหมดเถ้าแก่หนึ่งครั้ง ระบบจะจำสิทธิ์ไว้');
-  };
-  const authorizeBoss = async () => {
-    const existing = getBossToken();
-    if (existing) return existing;
-    const pin = window.prompt('กรุณาใส่ PIN เถ้าแก่');
-    if (!pin) return null;
-    const res = await fetch(`${WAGE_API}/boss/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'ยืนยันสิทธิ์ไม่สำเร็จ');
-    localStorage.setItem('harvester_boss_token', data.token);
-    sessionStorage.setItem('harvester_boss_token', data.token);
-    return data.token;
+  const {requireToken:requireBossToken,bossFetch,authorize:authorizeBoss,sessionDialog}=useBossSession({api:WAGE_API,getToken:getBossToken,clearToken:clearBossToken,onAuthorized:()=>{setUserRole('BOSS');localStorage.setItem('harvester_role','BOSS');}});
+  const [signOutDialog,setSignOutDialog]=useState(false),[signOutBusy,setSignOutBusy]=useState(false),[signOutError,setSignOutError]=useState('');
+  const signOutBoss=async()=>{
+    if(signOutBusy)return;setSignOutBusy(true);setSignOutError('');
+    try {
+      const token=getBossToken();
+      if(token){const response=await fetch(`${WAGE_API}/boss/session`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw new Error('ออกจากระบบไม่สำเร็จ กรุณาลองอีกครั้ง');}
+      clearBossToken();setUserRole('DRIVER');localStorage.setItem('harvester_role','DRIVER');setActiveTab('home');setFullScreenIndex(null);setSignOutDialog(false);
+    } catch(error){setSignOutError(error.message);}finally{setSignOutBusy(false);}
   };
   const [currentDriverName, setCurrentDriverName] = useState(''); // เก็บชื่อคนขับเพื่อให้ดึงค่าแรงถูกคน
 
@@ -3229,7 +3245,7 @@ function App() {
       : 'https://harvester-api-server.onrender.com/api/transactions/expenses';
 
     try {
-      const res = await fetch(url, {
+      const res = await (isPartial ? fetch : bossFetch)(url, {
         method: isEditing ? 'PUT' : 'POST',
         body: formData 
       });
@@ -3994,12 +4010,12 @@ function App() {
     if (!window.confirm(retrying ? 'ตรวจสอบและบันทึกรายการเดิมอีกครั้ง? ระบบจะไม่รับเงินซ้ำ' : `รับเงิน ${amount.toLocaleString()} บาท${mode === 'PLOTS' ? ` จาก ${items.length} แปลงที่เลือก` : ' เพื่อปิดยอดค้าง'} ใช่ไหม?`)) return;
     paymentBusy.current = true; setSavingPlotPayment(true);
     try {
-      const token = requireBossToken();
+      const token = await requireBossToken();
       if (!token) throw new Error('กรุณายืนยันสิทธิ์เถ้าแก่');
       if (!paymentRequest.current) paymentRequest.current = { request_id: crypto.randomUUID(), mode, items, expected_amount: amount, expected_rate: Number(data.payment?.rate || 0), discount, discount_note: plotDiscountNote.trim() };
-      const res = await fetch(`${WAGE_API}/jobs/${job.id}/plot-payments`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(paymentRequest.current) });
+      const res = await bossFetch(`${WAGE_API}/jobs/${job.id}/plot-payments`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(paymentRequest.current) });
       const result = await res.json();
-      if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
+
       if (!res.ok) { if (res.status < 500) paymentRequest.current = null; throw new Error(result.error || 'รับเงินไม่สำเร็จ'); }
       paymentRequest.current = null;
       await fetchJobs(); await fetchDashboard();
@@ -4019,12 +4035,12 @@ function App() {
     if (!window.confirm(correctionRequest.current ? 'ตรวจผลแก้ไขรายการเดิมอีกครั้ง?' : `แก้รายการเดิม: ส่วนลด ${discount.toLocaleString()} บาท · รับจริง ${roundBaht(gross-discount).toLocaleString()} บาท ใช่ไหม?`)) return;
     paymentBusy.current = true; setSavingPlotPayment(true);
     try {
-      const token = requireBossToken();
+      const token = await requireBossToken();
       if (!token) throw new Error('กรุณายืนยันสิทธิ์เถ้าแก่');
       if (!correctionRequest.current) correctionRequest.current = {request_id:crypto.randomUUID(),discount,expected_revision:Number(r.revision || 0),reason:receiptEdit.reason.trim()};
-      const res = await fetch(`${WAGE_API}/jobs/${job.id}/plot-payments/${r.request_id}`, {method:'PATCH',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(correctionRequest.current)});
+      const res = await bossFetch(`${WAGE_API}/jobs/${job.id}/plot-payments/${r.request_id}`, {method:'PATCH',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(correctionRequest.current)});
       const result = await res.json();
-      if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role','DRIVER'); }
+
       if (!res.ok) { if (res.status < 500) correctionRequest.current = null; throw new Error(result.error || 'แก้ไขไม่สำเร็จ'); }
       correctionRequest.current = null;
       await fetchJobs(); await fetchDashboard();
@@ -4100,7 +4116,7 @@ function App() {
 
       let bossToken = '';
       if (!isPartial) {
-        bossToken = requireBossToken();
+        bossToken = await requireBossToken();
         if (!bossToken) throw new Error('ยังไม่ได้ยืนยันสิทธิ์เถ้าแก่');
       }
       const res = await fetch(url, {
@@ -4111,7 +4127,7 @@ function App() {
 
       let result = {};
       try { result = await res.json(); } catch (_) {}
-      if (res.status === 403) { clearBossToken(); setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); }
+
       if (!res.ok) throw new Error(`${result.error || `HTTP ${res.status}`}${result.code ? ` [${result.code}]` : ''}${result.stage ? ` (ขั้น: ${result.stage})` : ''}`);
 
       if (isPartial) {
@@ -4356,6 +4372,8 @@ function App() {
 
   return (
     <div className="harvester-app min-h-screen bg-slate-50 p-3 sm:p-4 font-sans pb-24">
+      {sessionDialog}
+      {signOutDialog && <div className="boss-session-overlay"><section className="boss-session-dialog" role="dialog" aria-modal="true" aria-labelledby="sign-out-title"><h2 id="sign-out-title">กลับไปโหมดลูกน้อง?</h2><p>เมื่อต้องการกลับเข้าโหมดเถ้าแก่ ให้ใส่รหัสอีกครั้ง</p>{signOutError && <p role="alert">{signOutError}</p>}<div><button disabled={signOutBusy} onClick={()=>setSignOutDialog(false)}>ยกเลิก</button><button disabled={signOutBusy} onClick={signOutBoss}>{signOutBusy?'กำลังออก…':'กลับโหมดลูกน้อง'}</button></div></section></div>}
       <div className="mx-auto max-w-md">
 
         {/* 🐘 คืนสีทองช้างขาวเจริญทรัพย์จากเวอร์ชันเดิม — คงระบบ PIN ที่ปลอดภัยไว้ */}
@@ -4369,12 +4387,7 @@ function App() {
                 try {
                   if (await authorizeBoss()) { setUserRole('BOSS'); localStorage.setItem('harvester_role', 'BOSS'); }
                 } catch(e) { alert(e.message); }
-              } else if (window.confirm('กลับไปโหมดลูกน้องใช่ไหม?')) {
-                const token = getBossToken();
-                clearBossToken();
-                setUserRole('DRIVER'); localStorage.setItem('harvester_role', 'DRIVER'); setActiveTab('home'); setFullScreenIndex(null);
-                if (token) fetch(`${WAGE_API}/boss/session`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
-              }
+              } else {setSignOutError('');setSignOutDialog(true);}
             }}
           >{userRole === 'BOSS' ? '🔓' : '🔒'}</button>
           <div className="relative mx-auto mb-2 w-fit">
@@ -4417,7 +4430,7 @@ function App() {
         <div hidden={activeTab !== 'field'}>
           <FieldTrips api={WAGE_API} visible={activeTab === 'field'} vehicles={vehicles}
             gpsEntry={fieldGpsEntry}
-            profiles={wageProfiles.map(p => ({...p, name: p.sourceName || p.name}))} userRole={userRole} getToken={requireBossToken}
+            profiles={wageProfiles.map(p => ({...p, name: p.sourceName || p.name}))} userRole={userRole} getToken={requireBossToken} bossFetch={bossFetch}
             onOpenMap={openGpsPlot} onOpenWages={name => { setWageFilter(name ? [cleanWageName(name)] : []); setShowWageSummary(true); }}
             onChange={data => { setFieldTrips(data); refreshWageLedger(); }} />
         </div>
