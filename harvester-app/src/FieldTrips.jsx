@@ -151,6 +151,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
     {visible && canWrite && gpsEntry && handledGpsEntry !== gpsEntry.request_id && <div className="ft-note" role="region" aria-label="ใช้แปลงออโต้ในทริป">
       <strong>ใช้แปลงออโต้ของวันที่ {dayLabel(gpsEntry.work_date)}</strong>
       <p>เลือกทริปเพื่อผูกกับยอดรายวัน ยอดไร่ที่เคยยืนยันไว้จะคงเดิม</p>
+      {gpsEntry.skipped_fragments > 0 && <p>ข้ามเศษขอบ GPS เล็กกว่า 1 ตร.ม. จำนวน {gpsEntry.skipped_fragments} ชิ้น รวม {amount(gpsEntry.skipped_square_metres)} ตร.ม. โดยเก็บข้อมูล GPS ต้นฉบับไว้</p>}
       {!loading && !trips.some(t=>t.status==='OPEN' && t.vehicles.some(v=>String(v.id)===String(gpsEntry.vehicle_id)) && t.start_date<=gpsEntry.work_date) && <p>ยังไม่มีทริปที่ตรงกับรถและวันที่นี้ ให้เริ่มทริปหรือเปิดทริปเดิมก่อน</p>}
       {trips.filter(t=>t.status==='OPEN' && t.vehicles.some(v=>String(v.id)===String(gpsEntry.vehicle_id)) && t.start_date<=gpsEntry.work_date).map(t=><button key={t.id} className="ft-button ft-primary" onClick={()=>openGpsEntry(t)}>ลงยอดที่ {t.location}</button>)}
       <button className="ft-button" onClick={()=>setHandledGpsEntry(gpsEntry.request_id)}>ไว้ก่อน</button>

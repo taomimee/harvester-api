@@ -1,6 +1,43 @@
 /* Keep every main destination visible on phones, in both existing roles. */
 @media (max-width: 520px) {
+  .harvester-app { overflow-wrap:break-word; }
+  .harvester-app .grid > *,.harvester-app .flex > :is(div,span,p,h2,h3,h4) { min-width:0; }
+  .harvester-app button { min-height:44px; }
+  .harvester-app button.rounded-full { min-width:44px; flex-shrink:0; }
+  .harvester-app form { text-align:left; }
+  .harvester-app .app-expense-form > .grid { grid-template-columns:minmax(0,1fr); }
+  .app-job-plot-strip > button { flex-basis:calc((100% - .5rem) / 2)!important; }
+  .app-job-identity { gap:8px; flex-wrap:wrap; text-align:left; }
+  .app-job-identity > span { flex:none; }
+  .app-job-money { flex-wrap:wrap; gap:10px; text-align:left; }
+  .app-job-money > div:last-child { flex:none; }
+  .harvester-app .app-job-actions { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .app-job-status-actions > button { flex:1 1 100px; }
+  .app-photo-upload { flex-direction:column; }
+  .app-photo-upload > :is(select,label) { width:100%; text-align:center; }
+  .harvester-app .app-photo-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .harvester-app .app-payment-plots { max-height:none; overflow:visible; }
+  .harvester-app .app-round-metrics { grid-template-columns:minmax(0,1fr); }
+  .app-round-metrics > div { display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; border-left:0; border-right:0; }
+  .app-round-metrics > div > :last-child { flex-shrink:0; }
+  .harvester-app .fixed.inset-0 { padding:10px; }
+  .harvester-app .fixed.inset-0 > .bg-white { max-height:calc(100dvh - 20px); overflow-y:auto; min-width:0; }
   nav.app-main-nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); overflow:visible; gap:5px; }
   .app-main-nav[data-mode="driver"] { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .app-main-nav > button { min-width:0; min-height:48px; padding:9px 3px; font-size:13px; line-height:1.5; transform:none; }
+}
+/* Keep GPS forms usable above the map header, including short landscape screens. */
+.harvester-app .gps-link-dialog > .bg-white { overflow:hidden; }
+.gps-link-dialog > div > :first-child, .gps-link-dialog > div > :last-child { flex-shrink:0; }
+@media (max-height:500px) {
+  .gps-link-dialog > div > :first-child { max-height:30dvh; overflow-y:auto; padding:10px 14px; }
+}
+@media (max-width: 380px) {
+  nav.app-main-nav { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media (max-width: 520px) {
+  .harvester-app .app-finance-nav { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); overflow:visible; }
+  .app-finance-nav > button:last-child { grid-column:1 / -1; }
+  .harvester-app :is(.text-xs,[class~="text-[10px]"],[class~="text-[11px]"]) { font-size:13px; line-height:1.6; }
+  .harvester-app input:not([type=checkbox]):not([type=radio]):not([type=file]),.harvester-app select,.harvester-app textarea { min-width:0; max-width:100%; font-size:16px; }
 }
