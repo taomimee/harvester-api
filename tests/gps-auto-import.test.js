@@ -43,6 +43,24 @@ test('stale vehicle/day or unusable geometry cannot import into another scope',a
   assert.throws(()=>prepareAutoPlotUse(result,'field-1',[],1,'2026-11-11'),/รถหรือวันที่/);
   assert.throws(()=>prepareAutoPlotUse({...result,locked_plots:[{...receipt,geometry:{type:'LineString',coordinates:[]}}]},'field-1',[],1,day),/ขอบแปลง/);
 });
+
+test('sub-square-metre lock fragments cannot block a usable field or renumber its saved parts',async()=>{
+  const {prepareAutoPlotUse}=await helpers;
+  // GPS locks may omit a closing coordinate; editable plots close their rings.
+  const tiny=ring(100,15,.000001,.000001).slice(0,-1);
+  const extra={...receipt,id:receipt.id+'-later',geometry:{type:'MultiPolygon',coordinates:[[tiny],[ring(100.004,15,.001,.001)]]}};
+  const input={...result,locked_plots:[receipt,extra]},original=structuredClone(input);
+  const first=prepareAutoPlotUse(input,'field-1',[],1,day);
+  assert.equal(first.ids.length,3);assert.equal(first.skipped.length,1);
+  assert.ok(first.skipped[0].squareMetres>0 && first.skipped[0].squareMetres<1);
+  assert.ok(first.ids.includes(`auto-${extra.id}-2`));
+  assert.equal(first.plots.every(p=>turf.area(geometry(p))>=1),true);
+  assert.deepEqual(input,original);
+  first.plots[2].name='ชื่อที่แก้ไว้';first.plots[2].job_id=99;
+  const again=prepareAutoPlotUse(input,'field-1',first.plots,1,day);
+  assert.deepEqual(again.plots,first.plots);assert.equal(again.added.length,0);
+  assert.throws(()=>prepareAutoPlotUse({...result,locked_plots:[{...extra,geometry:{type:'Polygon',coordinates:[tiny]}}]},'field-1',[],1,day),/เฉพาะเศษ/);
+});
 test('field-trip handoff keeps confirmed area and does not create a second daily job',async()=>{
   const {prepareFieldGpsDay}=await helpers;
   const old={id:'old-day',work_date:day,vehicle_id:'1',plot_count:4,confirmed_rai:30,price_per_rai:600,crew:[{name:'สมชาย'}],gps_plots:[{key:`1/${day}/old`}],note:'ยอดนายหน้า'};

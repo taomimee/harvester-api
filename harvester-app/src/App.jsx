@@ -163,7 +163,7 @@ function JobPlotPreviews({ plots, receipts = [], fullyPaid = false, onOpen, onAl
         <button type="button" aria-label="เลื่อนดูแปลงถัดไป" onClick={() => stripRef.current?.scrollBy({left: stripRef.current.clientWidth, behavior: 'smooth'})} className="rounded-md border border-blue-200 bg-white px-2 py-1">→</button>
       </div>
     </div>}
-    <div ref={stripRef} className="flex gap-2 overflow-x-auto overscroll-x-contain snap-x snap-mandatory touch-pan-x pb-2">{plots.map((plot, i) => {
+    <div ref={stripRef} className="app-job-plot-strip flex gap-2 overflow-x-auto overscroll-x-contain snap-x snap-mandatory touch-pan-x pb-2">{plots.map((plot, i) => {
       const paths = plotPreviewPaths(plot.preview_geometry);
       const isPaid = fullyPaid || paidPlotKeys.has(plotPaymentKey(plot));
       return <button type="button" key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} onClick={() => onOpen(plot)} style={{flex: '0 0 calc((100% - 1rem) / 3)'}} className="min-w-0 snap-start overflow-hidden rounded-lg border border-sky-200 bg-white text-left" aria-label={`เปิดแผนที่ ${plot.name || `แปลง ${i+1}`}${isPaid ? ' · จ่ายแล้ว' : ''}`}>
@@ -1250,7 +1250,7 @@ function TrackingMap({
       setWorkspaceMode('manage'); setSheetTab('plots'); setAutoFollow(false);
       if (action === 'link') {openLinkReview(prepared,plan.indices);return;}
       if (plan.added.length && !await savePlotsToServer(prepared)) return;
-      if (action === 'field') {onOpenField?.({vehicle_id:Number(vehicleId),work_date:workDate,plot_ids:plan.ids});return;}
+      if (action === 'field') {onOpenField?.({vehicle_id:Number(vehicleId),work_date:workDate,plot_ids:plan.ids,skipped_fragments:plan.skipped.length,skipped_square_metres:plan.skipped.reduce((sum,p)=>sum+p.squareMetres,0)});return;}
       setPlotSyncStatus(plan.indices.length > 1 ? `นำแปลงมาใช้แล้ว ${plan.indices.length} ส่วน · แก้แต่ละส่วนได้จากรายการแปลง` : 'นำแปลงมาใช้แล้ว · แก้ขอบได้ทันที');
       openPlotEditor(plan.indices[0],prepared[plan.indices[0]]);
     } catch(error) {setPlotSyncStatus(`❌ ${error.message}`);setMobileToolsOpen(true);}
@@ -2510,8 +2510,8 @@ function TrackingMap({
           </div>
         </div>
       </>}
-      {linkReview && <div role="dialog" aria-modal="true" aria-label="เลือกคิวเจ้าของแปลง" className="absolute inset-0 z-[700] bg-slate-950/50 flex items-end sm:items-center justify-center p-2">
-        <div className="bg-white rounded-2xl shadow-2xl w-full sm:max-w-xl max-h-[92%] flex flex-col overflow-hidden">
+      {linkReview && <div role="dialog" aria-modal="true" aria-label="เลือกคิวเจ้าของแปลง" className="gps-link-dialog fixed inset-0 z-[700] bg-slate-950/50 flex items-end sm:items-center justify-center p-2">
+        <div className="bg-white rounded-2xl shadow-2xl w-full sm:max-w-xl max-h-[96dvh] flex flex-col overflow-hidden">
           <div className="p-4 border-b">
             <h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3>
             <p className="text-xs text-slate-500">ค้นหาคิวเดิมที่ยังไม่เสร็จ หรือสร้างคิวใหม่จากแปลงนี้</p>
@@ -4355,7 +4355,7 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-3 sm:p-4 font-sans pb-24">
+    <div className="harvester-app min-h-screen bg-slate-50 p-3 sm:p-4 font-sans pb-24">
       <div className="mx-auto max-w-md">
 
         {/* 🐘 คืนสีทองช้างขาวเจริญทรัพย์จากเวอร์ชันเดิม — คงระบบ PIN ที่ปลอดภัยไว้ */}
@@ -4454,7 +4454,7 @@ function App() {
 
         {/* 📑 เมนูย่อยสำหรับแท็บบัญชี (ซ่อนจากคนขับ โชว์เฉพาะเถ้าแก่) */}
         {activeTab === 'finance' && userRole === 'BOSS' && (
-          <div className="flex bg-gray-200 rounded-xl p-1 mb-5 gap-1 shadow-inner overflow-x-auto">
+          <div className="app-finance-nav flex bg-gray-200 rounded-xl p-1 mb-5 gap-1 shadow-inner overflow-x-auto">
              <button onClick={() => { setFinanceSubTab('dashboard'); fetchDashboard(); }} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'dashboard' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>📊 สรุปยอด</button>
              <button onClick={() => setFinanceSubTab('debt')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'debt' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💸 ลูกหนี้</button>
              <button onClick={() => setFinanceSubTab('income')} className={`min-w-[65px] flex-1 py-2 rounded-lg font-bold text-xs transition ${financeSubTab === 'income' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>💵 รับเงิน</button>
@@ -4815,7 +4815,7 @@ function App() {
                 <div 
                   key={job.id} 
                   id={`job-card-${job.id}`} 
-                  className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 transition-all duration-300"
+                  className="app-job-card bg-white rounded-2xl p-4 shadow-sm border border-slate-200 transition-all duration-300"
                 >
                   <div className="bg-slate-100 border border-slate-300 rounded-lg p-2 mb-3">
                     <div className="text-slate-700 font-bold text-sm flex justify-between px-1">
@@ -4825,7 +4825,7 @@ function App() {
                   </div>
 
                   <div className="cursor-pointer" onClick={() => setExpandedId(isExpanded ? null : job.id)}>
-                    <div className="flex justify-between items-start mb-3">
+                    <div className="app-job-identity flex justify-between items-start mb-3">
                       <div>
                         <h2 className="text-lg font-bold text-gray-900">{job.customers?.name || 'ไม่ระบุชื่อ'}</h2>
                         <p className="text-sm text-slate-600">
@@ -4896,7 +4896,7 @@ function App() {
                     <JobPlotPreviews plots={job.gps_summary_error ? [] : job.gps_summary?.plots} receipts={job.plot_receipts} fullyPaid={job.status === 'DONE' && job.payment_status === 'PAID'} onAll={() => setGpsJobDetail(job.id)} onOpen={openGpsPlot} />
                     {/* 💰 กล่องโชว์ยอดเงิน (ซ่อนไม่ให้คนขับเห็น) */}
                     {userRole === 'BOSS' && (Number(job.price_per_rai) > 0 || Number(job.total_price) > 0) ? (
-                      <div className="bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
+                      <div className="app-job-money bg-green-50 p-2 rounded-lg mb-3 flex justify-between items-center border border-green-200">
                         <div>
                           <span className="block text-green-700 text-xs">
                             {job.status === 'DONE' ? (job.payment_status === 'PAID' ? 'รับครบแล้ว' : 'ยอดค้าง') : Number(job.plot_paid_total) > 0 ? 'ค้างเก็บประมาณ' : 'ยอดประมาณ'} ({job.price_per_rai || 0} บ./ไร่)
@@ -4949,7 +4949,7 @@ function App() {
                         <div className="mt-3">
 
                         {/* ลูกน้องอ่านประวัติได้ แต่แก้รูปของงานที่จบแล้วไม่ได้ */}
-                        {(userRole === 'BOSS' || !isHistoryView) && <div className="flex gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200 items-center">
+                        {(userRole === 'BOSS' || !isHistoryView) && <div className="app-photo-upload flex gap-2 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-200 items-center">
                           <select
                             className="text-xs p-2 rounded-md border border-gray-300 flex-1 outline-none font-bold text-gray-700 bg-white"
                             value={uploadCategory}
@@ -4982,7 +4982,7 @@ function App() {
                             ยังไม่มีรูปภาพสำหรับงานนี้
                           </div>
                         ) : (
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="app-photo-grid grid grid-cols-3 gap-2">
                             {/* 👇 สังเกตตรงวงเล็บ (img, idx) และ setFullScreenIndex(idx) นะครับ 👇 */}
                             {jobAttachments.map((img, idx) => (
                               <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 shadow-sm cursor-pointer hover:opacity-90 transition group" onClick={(e) => { e.stopPropagation(); setFullScreenIndex(idx); }}>
@@ -5022,7 +5022,7 @@ function App() {
                       {isAwaitingArea(job) && <div className="bg-violet-50 border border-violet-300 rounded-xl p-3 mb-3 text-violet-950 font-bold text-sm">{userRole === 'BOSS' ? 'ยืนยันไร่เพื่อปิดงานและลงค่าแรง' : 'รอเถ้าแก่ยืนยันไร่และปิดงาน'}</div>}
                       {job.status === 'PAUSED' && !isAwaitingArea(job) && <button disabled={!!markingAwaitId} onClick={() => markAwaitingArea(job)} className="w-full mb-3 bg-violet-700 text-white rounded-xl py-3 text-sm font-bold disabled:opacity-50">{markingAwaitId === job.id ? 'กำลังบันทึก…' : '✓ เกี่ยวเสร็จแล้ว · รอยืนยันไร่'}</button>}
                       {/* กลุ่มปุ่มเปลี่ยนสถานะงาน */}
-                      <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-200">
+                      <div className="app-job-status-actions flex flex-wrap gap-2 pt-3 border-t border-gray-200">
                         {job.status !== 'DONE' && job.status !== 'IN_PROGRESS' && (!isAwaitingArea(job) || userRole === 'BOSS') && (
                           <button 
                             onClick={() => updateStatus(job.id, 'IN_PROGRESS')} 
@@ -5071,7 +5071,7 @@ function App() {
 
                       {/* 👇 ซ่อนกลุ่มปุ่มแก้ไข/ลบงานจากคนขับ (แถมไปให้เพื่อความสมบูรณ์ครับ) 👇 */}
                       {userRole === 'BOSS' && (
-                        <div className="grid grid-cols-3 gap-2 pt-2 mt-2">
+                        <div className="app-job-actions grid grid-cols-3 gap-2 pt-2 mt-2">
                           <button onClick={(e) => { e.stopPropagation(); inspectJobIntegrity(job); }} className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs py-2 rounded-lg font-bold transition">🌾 รอบงาน / รับเงิน</button>
                           <button onClick={(e) => { e.stopPropagation(); openEditForm(job); }} className="bg-gray-600 hover:bg-gray-700 text-white text-xs py-2 rounded-lg font-bold transition">✏️ แก้ไขข้อมูล</button>
                           <button onClick={(e) => { e.stopPropagation(); handleDeleteJob(job.id); }} className="bg-red-600 hover:bg-red-700 text-white text-xs py-2 rounded-lg font-bold transition">🗑️ ลบงาน</button>
@@ -6540,7 +6540,7 @@ function App() {
                         {payment.legacy && <p className="text-sm text-amber-800 mb-3">งานนี้มีเงินรับแบบเดิม ให้รับยอดที่เหลือผ่านหน้าลูกหนี้</p>}
                         {d?.gps_error && <p className="text-sm text-red-700">โหลดแปลงไม่สำเร็จ กรุณาปิดแล้วเปิดตรวจยอดใหม่</p>}
                         {!plots.length && !d?.gps_error && <p className="text-sm text-slate-500 py-3">ยังไม่มีแปลง GPS ที่เชื่อมกับงานนี้</p>}
-                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                        <div className="app-payment-plots space-y-2 max-h-80 overflow-y-auto">
                           {plots.map(plot => {
                             const key = plotPaymentKey(plot);
                             const paid = paidKeys.has(key);
@@ -6723,7 +6723,7 @@ function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="app-round-metrics grid grid-cols-3 gap-2">
                       <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center">
                         <p className="text-[10px] text-amber-700 font-bold">🗣️ ลูกค้าแจ้งประมาณ</p>
                         <p className="font-black text-amber-900">{job.area_size != null && job.area_size !== '' ? formatRaiNgan(job.area_size) : 'ไม่ระบุ'}</p>
@@ -6744,7 +6744,7 @@ function App() {
                     <label className="block text-gray-800 font-black text-sm">📐 พื้นที่รอบนี้</label>
                     {Number(job.gps_summary?.plot_count || 0) > 0 && !job.gps_summary_error && (
                       <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-3">
-                        <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                        <div className="app-round-metrics grid grid-cols-3 gap-2 text-center text-[10px]">
                           <div><span className="block text-sky-700 font-bold">🛰️ GPS รวม</span><b className="text-sky-950">{formatRaiNgan(getJobGpsArea(job))}</b></div>
                           <div className="border-x border-sky-200"><span className="block text-sky-700 font-bold">✅ ลงรอบแล้ว</span><b className="text-sky-950">{formatRaiNgan(ws.measuredArea)}</b></div>
                           <div><span className="block text-sky-700 font-bold">✨ ยังไม่ลงรอบ</span><b className="text-sky-950">{formatRaiNgan(Math.max(0,getJobGpsArea(job)-ws.measuredArea))}</b></div>
@@ -7339,7 +7339,7 @@ function App() {
                 </button>
               </div>
               
-              <form onSubmit={handleExpenseSubmit} className="space-y-3">
+              <form onSubmit={handleExpenseSubmit} className="app-expense-form space-y-3">
                 {/* หมวดหมู่ (ระบบเรียนรู้คำอัตโนมัติ) */}
                 {(() => {
                   // 🧠 1. ดึงชื่อหมวดหมู่ที่เคยบันทึกไว้ในประวัติ มาผสมกับหมวดหมู่พื้นฐาน
