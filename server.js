@@ -350,7 +350,8 @@ const normalizeJobPlots = (plots, vehicle, date) => {
   });
 };
 const loadGpsJobSummary = async () => {
-  const byJob = new Map(), scopes = new Set();
+  const byJob = new Map(), scopes = new Set(), counted = new Map();
+  const { gpsPlotGroupKey } = require('./lib/field-trips');
   for (let offset=0; ; offset+=500) {
     const {data,error} = await supabase.from('harvest_plots').select('id,vehicle_id,work_date,plots_data,created_at')
       .order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+499);
@@ -370,7 +371,9 @@ const loadGpsJobSummary = async () => {
         const group=byJob.get(jobId);
         try {
           const geometry=plotGeometry(plot), area=geometry.netSqM/1600;
-          group.plot_count++;group.area_rai+=area;
+          if (!counted.has(jobId)) counted.set(jobId,new Set());
+          counted.get(jobId).add(gpsPlotGroupKey({...plot,id},row.vehicle_id,row.work_date));
+          group.plot_count=counted.get(jobId).size;group.area_rai+=area;
           group.plots.push({id,name:plot.name || `แปลงที่ ${index+1}`,area_rai:area,vehicle_id:row.vehicle_id,work_date:row.work_date,center:plotCenter(geometry.net || geometry.outer),preview_geometry:geometry.net?.geometry || null});
         } catch (_) { group.invalid_count++; }
       }
@@ -2492,6 +2495,12 @@ app.post('/api/plots', async (req,res) => {
     let normalized;
     try { normalized=normalizeJobPlots(plots_data,vehicle_id,work_date); } catch(e) {return res.status(400).json({error:e.message});}
     try {
+      const linkedKeys=normalized.filter(p=>p.job_id!=null).map(p=>`${vehicle_id}/${work_date}/${p.id}`);
+      if (linkedKeys.length) {
+        const claims=await supabase.from('field_trip_gps_claims').select('plot_key').in('plot_key',linkedKeys).limit(1);
+        if(claims.error) throw claims.error;
+        if(claims.data?.length) return res.status(409).json({error:'แปลงนี้ใช้ในยอดนอกพื้นที่แล้ว กรุณาแก้ยอดวันเดิมในทริป ไม่ผูกซ้ำกับคิวลูกค้า'});
+      }
       const {data,error}=await supabase.rpc('save_gps_job_plots',{p_vehicle_id:Number(vehicle_id),p_work_date:work_date,p_plots:normalized,p_expected_revision:expected_revision});
       if(error) {
         if(String(error.message).includes('GPS_REVISION_CONFLICT')) return res.status(409).json({error:'อีกหน้าจอแก้แปลงแล้ว กรุณาโหลดแปลงล่าสุด แล้วเลือกคิวใหม่'});

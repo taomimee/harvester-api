@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './field-trips.css';
+import { prepareFieldGpsDay } from './gps-auto-import.mjs';
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const amount = n => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
@@ -18,17 +19,24 @@ function PlotShape({ plot }) {
   const scale = Math.min(80 / w, 48 / h);
   return <svg viewBox="0 0 100 68" aria-label={`ขอบแปลง ${plot.name}`} role="img">{polygons.map((rings, i) => <path key={i} d={rings.map(ring => ring.map((p, j) => `${j ? 'L' : 'M'}${10 + (p[0] - minX) * scale},${58 - (p[1] - minY) * scale}`).join(' ') + 'Z').join(' ')} fill="#c7dfc4" fillRule="evenodd" stroke="#43633e" strokeWidth="1.5" />)}</svg>;
 }
-export default function FieldTrips({ api, visible, vehicles, profiles, userRole, getToken, onOpenWages, onOpenMap, onChange }) {
+export default function FieldTrips({ api, visible, vehicles, profiles, userRole, getToken, onOpenWages, onOpenMap, onChange, gpsEntry }) {
   const [trips, setTrips] = useState([]), [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true), [loadError, setLoadError] = useState('');
   const [filter, setFilter] = useState('OPEN'), [modal, setModal] = useState(null);
   const [draft, setDraft] = useState({}), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false), [uncertain, setUncertain] = useState(false);
   const [gps, setGps] = useState({ plots: [], invalid: [] }), [gpsBusy, setGpsBusy] = useState(false), [gpsError, setGpsError] = useState('');
+  const [handledGpsEntry, setHandledGpsEntry] = useState(null);
   const pending = useRef(null), saving = useRef(false), changeCallback = useRef(onChange), loadSequence = useRef(0);
   useEffect(() => { changeCallback.current = onChange; }, [onChange]);
   const trip = trips.find(t => t.id === selected);
   const canWrite = userRole === 'BOSS';
+  useEffect(() => {
+    if (!visible || !modal) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [visible, modal]);
   const fetchTrips = useCallback(async () => {
     const response = await fetch(`${api}/field-trips`, { cache: 'no-store' });
     const data = await response.json();
@@ -78,6 +86,12 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
     price_per_rai: trip.price_per_rai, worker_names: trip.days.at(-1)?.crew.map(p => p.name) || [], gps_keys: [], note: ''
   }); };
   const openPayment = () => open('payment', { id: crypto.randomUUID(), kind: 'BROKER_RECEIPT', payment_date: today(), amount: '', note: '' });
+  const openGpsEntry = target => {
+    try {
+      const value = prepareFieldGpsDay(target,gpsEntry,crypto.randomUUID());
+      setSelected(target.id); resetGps(); open('day',value); setHandledGpsEntry(gpsEntry.request_id);
+    } catch(e) { setNotice(e.message); }
+  };
   const save = async action => {
     if (saving.current) return;
     let token;
@@ -134,6 +148,13 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
     {loadError && <div className="ft-error" role="alert">{loadError} <button onClick={load}>ลองโหลดอีกครั้ง</button></div>}
     {notice && <p className="ft-success" role="status">{notice}</p>}
     {loading && <p role="status">กำลังโหลดทริป…</p>}
+    {visible && canWrite && gpsEntry && handledGpsEntry !== gpsEntry.request_id && <div className="ft-note" role="region" aria-label="ใช้แปลงออโต้ในทริป">
+      <strong>ใช้แปลงออโต้ของวันที่ {dayLabel(gpsEntry.work_date)}</strong>
+      <p>เลือกทริปเพื่อผูกกับยอดรายวัน ยอดไร่ที่เคยยืนยันไว้จะคงเดิม</p>
+      {!loading && !trips.some(t=>t.status==='OPEN' && t.vehicles.some(v=>String(v.id)===String(gpsEntry.vehicle_id)) && t.start_date<=gpsEntry.work_date) && <p>ยังไม่มีทริปที่ตรงกับรถและวันที่นี้ ให้เริ่มทริปหรือเปิดทริปเดิมก่อน</p>}
+      {trips.filter(t=>t.status==='OPEN' && t.vehicles.some(v=>String(v.id)===String(gpsEntry.vehicle_id)) && t.start_date<=gpsEntry.work_date).map(t=><button key={t.id} className="ft-button ft-primary" onClick={()=>openGpsEntry(t)}>ลงยอดที่ {t.location}</button>)}
+      <button className="ft-button" onClick={()=>setHandledGpsEntry(gpsEntry.request_id)}>ไว้ก่อน</button>
+    </div>}
     {!trip ? <>
       <div className="ft-tabs"><button aria-pressed={filter === 'OPEN'} onClick={() => setFilter('OPEN')}>กำลังออกงาน ({trips.filter(t => t.status === 'OPEN').length})</button><button aria-pressed={filter === 'CLOSED'} onClick={() => setFilter('CLOSED')}>จบทริปแล้ว</button></div>
       {!loading && !loadError && !trips.some(t => t.status === filter) && <div className="ft-empty"><h3>{filter === 'OPEN' ? 'ยังไม่มีทริปที่เปิดอยู่' : 'ยังไม่มีทริปที่จบแล้ว'}</h3><p>หนึ่งทริปใช้รถหนึ่งคัน ลงผลงานรายวันได้โดยไม่ต้องเพิ่มชื่อลูกค้า</p>{canWrite && <button className="ft-button ft-primary" onClick={() => openTrip()}>เริ่มทริปแรก</button>}</div>}
@@ -157,7 +178,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
         <div className="ft-day-total"><strong>{d.plot_count} แปลง · {amount(d.confirmed_rai)} ไร่</strong><span>ค่าเกี่ยว {amount(d.harvest_amount)} บาท</span></div>
         <p>ค่าเกี่ยว {amount(d.price_per_rai)} บาท/ไร่ · ค่าแรง {amount(d.wage_amount)} บาท</p>
         <div className="ft-crew">{d.crew.map(w => <button key={w.name} onClick={() => onOpenWages(w.name)}>{w.name} · {amount(w.amount)} ฿ ↗</button>)}</div>
-        {!!d.gps_plots.length && <><p className="ft-gps-caption">GPS อ้างอิง {d.gps_plots.length} แปลง · {amount(d.gps_rai)} ไร่</p><div className="ft-plots">{d.gps_plots.map(p => <button key={p.key} onClick={() => onOpenMap(p)}><PlotShape plot={p}/><span>{p.name}</span><small>{amount(p.area_rai)} ไร่</small></button>)}</div></>}
+        {!!d.gps_plots.length && <><p className="ft-gps-caption">GPS อ้างอิง {new Set(d.gps_plots.map(p=>p.group_key || p.key)).size} แปลง · {amount(d.gps_rai)} ไร่</p><div className="ft-plots">{d.gps_plots.map(p => <button key={p.key} onClick={() => onOpenMap(p)}><PlotShape plot={p}/><span>{p.name}</span><small>{amount(p.area_rai)} ไร่</small></button>)}</div></>}
         {d.note && <p className="ft-day-note">{d.note}</p>}
       </article>)}</div>
       <div className="ft-section-heading"><h3>เงินรับจากนายหน้า</h3><span>เบิกบางส่วนหรือตัดยอดที่ค้างทั้งหมดได้</span></div>
@@ -173,6 +194,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
     {modal && <div className="ft-overlay"><section role="dialog" aria-modal="true" aria-labelledby="ft-dialog-title" className="ft-dialog">
       <div className="ft-row"><h3 id="ft-dialog-title">{titles[modal]}</h3><button type="button" aria-label="ปิดหน้าบันทึก" disabled={busy || uncertain} onClick={() => setModal(null)}>✕</button></div>
       <form onSubmit={submit}>
+        <div className="ft-dialog-body">
         <fieldset disabled={busy || uncertain}>
           {(modal === 'create' || modal === 'edit') && <>
             <label>พื้นที่ออกงาน<input required autoFocus maxLength={200} placeholder="เช่น ลพบุรี" value={draft.location} onChange={e => field('location', e.target.value)} /></label>
@@ -213,6 +235,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
           {modal === 'close' && <><p>ปิดทริปเมื่อเลิกออกงานครั้งนี้ ยอดค้างจากนายหน้ายังติดตามและรับเงินภายหลังได้</p><label>วันจบทริป<input required type="date" min={trip.days.at(-1)?.work_date || trip.start_date} value={draft.end_date} onChange={e => field('end_date', e.target.value)} /></label></>}
           {modal === 'reopen' && <p>เปิดทริป {trip.location} เพื่อลงผลงานรายวันต่อ ยอดรับเงินและค่าแรงเดิมยังอยู่ครบ</p>}
         </fieldset>
+        </div>
         {error && <div className="ft-error" role="alert">{error}{!uncertain && <button type="button" onClick={load}>โหลดข้อมูลล่าสุด</button>}</div>}
         <div className="ft-dialog-footer"><button type="button" className="ft-button" disabled={busy || uncertain} onClick={() => setModal(null)}>ยกเลิก</button>
           <button type={uncertain ? 'button' : 'submit'} className="ft-button ft-primary" disabled={busy || !canWrite} onClick={uncertain ? () => save() : undefined}>{busy ? 'กำลังบันทึก…' : uncertain ? 'ตรวจสอบและบันทึกซ้ำ' : modal === 'day' ? 'ปิดงานวันนี้และลงค่าแรง' : 'บันทึก'}</button></div>
