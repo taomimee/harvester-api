@@ -5,6 +5,7 @@ import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
 import GpsAutoPlots from './GpsAutoPlots.jsx'
+import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
 
@@ -863,7 +864,7 @@ const gpsEdgeInBox = (a, b, bounds) => {
 function TrackingMap({
   pathData, vehicleId, workDate, trackingMode, focusRequest,
   leaveGuardRef, onRouteStats, isFetchingGps, autoArea,
-  jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot,
+  jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot, onOpenField, canPostWork,
   fleetPaths = {}, fleetVehicles = [], vehicleColors = {},
   fleetFitRequest = 0, onSelectVehicle
 }) {
@@ -893,24 +894,41 @@ function TrackingMap({
 
   const openLinkReview = (all, indices, after = null) => {
     setLinkNewQueueDrafts({}); setAutoFollow(false); setMobileToolsOpen(false);
-    setLinkReview({all:all.map(p => ({...p,id:p.id || plotNewId()})),indices,after,scope:plotScopeRef.current});
+    const overlaps = new Set();
+    for (const i of indices) {
+      if (!all[i].auto_origin) continue;
+      for (const [j,other] of all.entries()) {
+        if (indices.includes(j) || other.auto_origin?.plot_id === all[i].auto_origin.plot_id) continue;
+        try {
+          const a=plotGeometry(all[i]), b=plotGeometry(other);
+          const overlap=a.net && b.net ? plotClip('intersect',a.net,b.net) : null;
+          if (overlap && turf.area(overlap)>Math.max(80,Math.min(a.netSqM,b.netSqM)*.3)) overlaps.add(other.name || `แปลงที่ ${j+1}`);
+        } catch { /* Invalid older plots remain available for their existing repair flow. */ }
+      }
+    }
+    setLinkReview({all:all.map(p => ({...p,id:p.id || plotNewId()})),indices,after,scope:plotScopeRef.current,overlaps:[...overlaps]});
+  };
+
+  const linkedPartIndices = index => {
+    const group=linkReview?.all[index]?.auto_origin?.plot_id;
+    return group ? linkReview.indices.filter(i=>linkReview.all[i].auto_origin?.plot_id===group) : [index];
   };
 
   const setPlotJob = (index, value) => {
     const job=activeLinkJobs.find(j => String(j.id) === value);
-    const plotId = linkReview?.all?.[index]?.id;
-    if (plotId) setLinkNewQueueDrafts(d => { const next={...d}; delete next[plotId]; return next; });
-    setLinkReview(review => ({...review,all:review.all.map((p,i) => i!==index ? p : {...p,job_id:job ? Number(job.id) : null,name:job ? `${job.customers?.name || 'ลูกค้า'} — แปลงที่ ${index+1}` : `แปลงที่ ${index+1}`})}));
+    const indices=linkedPartIndices(index);
+    setLinkNewQueueDrafts(d => { const next={...d}; for(const i of indices) delete next[linkReview.all[i].id]; return next; });
+    setLinkReview(review => ({...review,all:review.all.map((p,i) => !indices.includes(i) ? p : {...p,job_id:job ? Number(job.id) : null,name:p.auto_origin ? p.name : job ? `${job.customers?.name || 'ลูกค้า'} — แปลงที่ ${i+1}` : p.name})}));
   };
 
   const setNewQueueDraft = (plotId, patch) => {
-    setLinkNewQueueDrafts(d => ({
-      ...d,
-      [plotId]: {
-        ...(d[plotId] || { query:'', customer_name:'', phone:'', create_new:false }),
-        ...patch
-      }
-    }));
+    const index=linkReview.all.findIndex(p=>p.id===plotId);
+    const ids=linkedPartIndices(index).map(i=>linkReview.all[i].id);
+    setLinkNewQueueDrafts(d => {
+      const next={...d};
+      for (const id of ids) next[id]={...(d[id] || {query:'',customer_name:'',phone:'',create_new:false}),...patch};
+      return next;
+    });
   };
 
   const selectCustomerForNewQueue = (index, customer) => {
@@ -1145,8 +1163,8 @@ function TrackingMap({
     setDraftError('');
   };
 
-  const openPlotEditor = (plotIndex) => {
-    const plot = plots[plotIndex];
+  const openPlotEditor = (plotIndex, suppliedPlot) => {
+    const plot = suppliedPlot || plots[plotIndex];
     if (!plot?.points || plot.points.length < 3) return;
     setAutoFollow(false);
     setEditingPlotIndex(plotIndex);
@@ -1219,6 +1237,22 @@ function TrackingMap({
       setPlotSyncStatus('✅ บันทึกแล้ว • ยอดพื้นที่ GPS ในคิวอัปเดตแล้ว');onPlotsSaved?.();return true;
     } catch(e) {if(plotScopeRef.current===scope) setPlotSyncStatus(`ยังไม่เข้าคิว: ${e.message} • ฉบับแก้ไขสำรองในเครื่อง ถ้าบันทึกขัดข้องให้โหลดล่าสุดก่อน`);return false;}
     finally {clearTimeout(timer);savingScopes.current.delete(scope);if(plotScopeRef.current===scope)setIsSavingPlot(false);}
+  };
+  const useAutoPlot = async (autoPlot, action) => {
+    if (isSavingPlot || plotRevision === null || savingScopes.current.has(plotStorageKey)) return;
+    try {
+      const plan = prepareAutoPlotUse(autoArea, autoPlot.id, plots, vehicleId, workDate);
+      const prepared = hydratePlots(plan.plots);
+      const invalid = prepared.find(p=>p.geometryError);
+      if (invalid) throw new Error(invalid.geometryError);
+      if (action === 'field' && plan.indices.some(i=>prepared[i].job_id != null)) throw new Error('แปลงนี้อยู่ในคิวลูกค้าแล้ว ให้เปิดคิวนั้นเพื่อลงยอด ป้องกันการลงซ้ำ');
+      setWorkspaceMode('manage'); setSheetTab('plots'); setAutoFollow(false);
+      if (action === 'link') {openLinkReview(prepared,plan.indices);return;}
+      if (plan.added.length && !await savePlotsToServer(prepared)) return;
+      if (action === 'field') {onOpenField?.({vehicle_id:Number(vehicleId),work_date:workDate,plot_ids:plan.ids});return;}
+      setPlotSyncStatus(plan.indices.length > 1 ? `นำแปลงมาใช้แล้ว ${plan.indices.length} ส่วน · แก้แต่ละส่วนได้จากรายการแปลง` : 'นำแปลงมาใช้แล้ว · แก้ขอบได้ทันที');
+      openPlotEditor(plan.indices[0],prepared[plan.indices[0]]);
+    } catch(error) {setPlotSyncStatus(`❌ ${error.message}`);setMobileToolsOpen(true);}
   };
   useEffect(() => {
     let active=true;
@@ -2480,6 +2514,8 @@ function TrackingMap({
           <div className="p-4 border-b">
             <h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3>
             <p className="text-xs text-slate-500">ค้นหาคิวเดิมที่ยังไม่เสร็จ หรือสร้างคิวใหม่จากแปลงนี้</p>
+            {linkReview.indices.some(i=>linkReview.all[i].auto_origin) && <p className="text-xs text-slate-600 mt-2">เลือกคิวครั้งเดียว จะผูกทุกส่วนของแปลงออโต้เดียวกัน ยอด GPS ใช้ประกอบการลงยอดในคิว</p>}
+            {linkReview.overlaps?.length>0 && <p role="alert" className="text-xs text-amber-800 bg-amber-50 p-2 mt-2 rounded-lg">ขอบซ้อนกับแปลงที่บันทึกไว้: {linkReview.overlaps.join(' / ')} หากเป็นงานเดียวกัน ให้เลือกใช้เพียงชุดเดียวเพื่อไม่ให้ยอดซ้ำ</p>}
           </div>
           <div className="p-3 space-y-3 overflow-y-auto">
             {linkReview.indices.map(index=>{
@@ -2686,8 +2722,10 @@ function TrackingMap({
                 <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={() => {const backup=readPlotBackup();if(!backup.pending)return alert('ไม่มีฉบับแก้ไขรอบันทึก');if(window.confirm('เปิดฉบับสำรองเพื่อตรวจคิวก่อนบันทึกแทนแปลงของรถและวันนี้?'))openLinkReview(hydratePlots(backup.plots),backup.plots.map((_,i)=>i));}}>กู้ฉบับในเครื่อง</button>
               </div></details>
             </> : <>
-              <GpsAutoPlots data={autoArea} onSelect={selectAutoPlot} />
-              {(plots.length > 0 || workspaceMode === 'manage') && <h3 className="gps-manual-plots-heading">ขอบแปลงที่บันทึกเอง · {plots.length} แปลง</h3>}
+              <GpsAutoPlots data={autoArea} onSelect={selectAutoPlot} savedPlots={plots} onUse={useAutoPlot}
+                onEdit={id=>openPlotEditor(plots.findIndex(p=>p.id===id))} onOpenJob={onOpenJob}
+                onField={plot=>useAutoPlot(plot,'field')} busy={isSavingPlot || plotRevision===null} canPostWork={canPostWork} />
+              {(plots.length > 0 || workspaceMode === 'manage') && <h3 className="gps-manual-plots-heading">แปลงที่นำไปใช้ / บันทึกเอง · {plots.length} รายการ</h3>}
               {!plots.length && (!autoArea?.enabled || workspaceMode === 'manage') && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : 'ยังไม่มีขอบแปลงที่บันทึกเอง'}{workspaceMode === 'manage' && plotRevision !== null && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
               {plots.map((plot,i) => {
                 const progress=plotProgressList[i] || {percent:0,coveredRai:0,totalRai:Number(plot.area?.rawRai||0)};
@@ -2759,6 +2797,7 @@ function App() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [activeTab, setActiveTab] = useState('home')
   const [fieldTrips, setFieldTrips] = useState(null);
+  const [fieldGpsEntry, setFieldGpsEntry] = useState(null);
   const fieldDebt = (fieldTrips || []).reduce((sum, t) => sum + Math.max(0, Number(t.summary.broker_balance)), 0);
   const fieldDebtTrips = (fieldTrips || []).filter(t => t.summary.broker_balance > 0);
   const fieldReceipts = (fieldTrips || []).flatMap(t => t.payments.filter(p => !p.voided_at).map(p => ({...p, trip: t}))).sort((a,b) => b.payment_date.localeCompare(a.payment_date));
@@ -4376,6 +4415,7 @@ function App() {
 
         <div hidden={activeTab !== 'field'}>
           <FieldTrips api={WAGE_API} visible={activeTab === 'field'} vehicles={vehicles}
+            gpsEntry={fieldGpsEntry}
             profiles={wageProfiles.map(p => ({...p, name: p.sourceName || p.name}))} userRole={userRole} getToken={requireBossToken}
             onOpenMap={openGpsPlot} onOpenWages={name => { setWageFilter(name ? [cleanWageName(name)] : []); setShowWageSummary(true); }}
             onChange={data => { setFieldTrips(data); refreshWageLedger(); }} />
@@ -4637,6 +4677,8 @@ function App() {
                 onQueueCreated={async()=>{await fetchJobs();fetchAllCustomers();}}
                 focusPlot={gpsFocusPlot}
                 onOpenJob={id=>{setActiveTab('active');setGpsJobDetail(id);fetchJobs();}}
+                canPostWork={userRole === 'BOSS'}
+                onOpenField={entry=>{setFieldGpsEntry({...entry,request_id:crypto.randomUUID()});setActiveTab('field');}}
                 pathData={visibleGpsPath}
                 vehicleId={trackingVehicleId}
                 workDate={effectiveTrackingDate}
