@@ -44,7 +44,7 @@ export function useBossSession({api,getToken,clearToken,onAuthorized}) {
       if(response.status!==401 && response.status!==403)throw new Error('ตรวจสิทธิ์ไม่ได้ชั่วคราว กรุณาลองใหม่');
       clearToken();
     }
-    return requireToken();
+    return ask();
   };
   const sessionDialog=dialog && <div className="boss-session-overlay"><form className="boss-session-dialog" role="dialog" aria-modal="true" aria-labelledby="boss-session-title" onSubmit={submit}>
     <h2 id="boss-session-title">ยืนยันโหมดเถ้าแก่</h2><p>ใส่รหัสเพื่อทำรายการต่อ ข้อมูลที่กำลังกรอกยังอยู่ครบ</p>
