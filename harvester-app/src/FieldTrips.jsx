@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './field-trips.css';
 import { prepareFieldGpsDay } from './gps-auto-import.mjs';
+import { formatRaiNgan } from './thai-area.mjs';
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const amount = n => Number(n || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
@@ -163,11 +164,11 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
       {!loading && !loadError && !trips.some(t => t.status === filter) && <div className="ft-empty"><h3>{filter === 'OPEN' ? 'ยังไม่มีทริปที่เปิดอยู่' : 'ยังไม่มีทริปที่จบแล้ว'}</h3><p>หนึ่งทริปใช้รถหนึ่งคัน ลงผลงานรายวันได้โดยไม่ต้องเพิ่มชื่อลูกค้า</p>{canWrite && <button className="ft-button ft-primary" onClick={() => openTrip()}>เริ่มทริปแรก</button>}</div>}
       <div className="ft-trip-list">{trips.filter(t => t.status === filter).map(t => <button className="ft-trip-card" key={t.id} onClick={() => { setSelected(t.id); setNotice(''); }}>
         <span className="ft-status">{t.status === 'OPEN' ? 'กำลังออกงาน' : 'จบทริปแล้ว'}</span><h3>{t.location}</h3><p>{t.vehicles[0].name} · {dayLabel(t.start_date)}</p>
-        <strong>{amount(t.summary.rai)} ไร่ <span> / {t.summary.plots} แปลง</span></strong><p>{t.summary.broker_balance >= 0 ? 'ค้างรับจากนายหน้า' : 'รับล่วงหน้าเหลือ'} {amount(Math.abs(t.summary.broker_balance))} บาท</p>
+        <strong>{formatRaiNgan(t.summary.rai)} <span> / {t.summary.plots} แปลง</span></strong><p>{t.summary.broker_balance >= 0 ? 'ค้างรับจากนายหน้า' : 'รับล่วงหน้าเหลือ'} {amount(Math.abs(t.summary.broker_balance))} บาท</p>
       </button>)}</div>
     </> : <>
       <div className="ft-trip-meta"><span className="ft-status">{trip.status === 'OPEN' ? 'กำลังออกงาน' : 'จบทริปแล้ว'}</span><span>{trip.broker_name ? `นายหน้า: ${trip.broker_name}` : 'ยังไม่ระบุชื่อนายหน้า'}</span>{canWrite && trip.status === 'OPEN' && <button onClick={() => openTrip(trip)}>แก้ข้อมูลทริป</button>}</div>
-      <div className="ft-metrics"><Metric label="ผลงานสะสม" value={`${amount(trip.summary.rai)} ไร่`} hint={`${trip.summary.plots} แปลง · ${trip.summary.work_days} วัน`} />
+      <div className="ft-metrics"><Metric label="ผลงานสะสม" value={formatRaiNgan(trip.summary.rai)} hint={`${trip.summary.plots} แปลง · ${trip.summary.work_days} วัน`} />
         <Metric label="ค่าเกี่ยวสะสม" value={`${amount(trip.summary.earned)} ฿`} hint="จากยอดไร่ที่นายหน้ายืนยัน" />
         <Metric label="รับจากนายหน้าแล้ว" value={`${amount(trip.summary.received)} ฿`} hint="เฉพาะเงินที่ได้รับจริง" />
         <Metric accent label={trip.summary.broker_balance >= 0 ? 'ค้างรับจากนายหน้า' : 'เงินรับล่วงหน้าคงเหลือ'} value={`${amount(Math.abs(trip.summary.broker_balance))} ฿`} hint="รับครบวันนี้แล้วทำงานต่อได้" /></div>
@@ -178,10 +179,10 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
       {!trip.days.length && <p className="ft-empty">ยังไม่ได้ลงยอดรายวัน เมื่อเกี่ยวเสร็จให้ลงจำนวนแปลงและยอดไร่ที่นายหน้าแจ้ง</p>}
       <div className="ft-days">{[...trip.days].reverse().map(d => <article className="ft-day" key={d.id}>
         <div className="ft-row"><h4>{dayLabel(d.work_date)}</h4><span className="ft-closed">ปิดงานแล้ว</span>{canWrite && trip.status === 'OPEN' && <button onClick={() => openDay(d)}>แก้ยอดวันนี้</button>}</div>
-        <div className="ft-day-total"><strong>{d.plot_count} แปลง · {amount(d.confirmed_rai)} ไร่</strong><span>ค่าเกี่ยว {amount(d.harvest_amount)} บาท</span></div>
+        <div className="ft-day-total"><strong>{d.plot_count} แปลง · {formatRaiNgan(d.confirmed_rai)}</strong><span>ค่าเกี่ยว {amount(d.harvest_amount)} บาท</span></div>
         <p>ค่าเกี่ยว {amount(d.price_per_rai)} บาท/ไร่ · ค่าแรง {amount(d.wage_amount)} บาท</p>
         <div className="ft-crew">{d.crew.map(w => <button key={w.name} onClick={() => onOpenWages(w.name)}>{w.name} · {amount(w.amount)} ฿ ↗</button>)}</div>
-        {!!d.gps_plots.length && <><p className="ft-gps-caption">GPS อ้างอิง {new Set(d.gps_plots.map(p=>p.group_key || p.key)).size} แปลง · {amount(d.gps_rai)} ไร่</p><div className="ft-plots">{d.gps_plots.map(p => <button key={p.key} onClick={() => onOpenMap(p)}><PlotShape plot={p}/><span>{p.name}</span><small>{amount(p.area_rai)} ไร่</small></button>)}</div></>}
+        {!!d.gps_plots.length && <><p className="ft-gps-caption">GPS อ้างอิง {new Set(d.gps_plots.map(p=>p.group_key || p.key)).size} แปลง · {formatRaiNgan(d.gps_rai)}</p><div className="ft-plots">{d.gps_plots.map(p => <button key={p.key} onClick={() => onOpenMap(p)}><PlotShape plot={p}/><span>{p.name}</span><small>{formatRaiNgan(p.area_rai)}</small></button>)}</div></>}
         {d.note && <p className="ft-day-note">{d.note}</p>}
       </article>)}</div>
       <div className="ft-section-heading"><h3>เงินรับจากนายหน้า</h3><span>เบิกบางส่วนหรือตัดยอดที่ค้างทั้งหมดได้</span></div>
@@ -213,7 +214,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
             <p className="ft-help">{trip.vehicles[0].name} · ปิดงานวันนี้แล้ว ค่าแรงจะเข้ายอดสะสมของคนทำงานทันที</p>
             <label>วันที่ทำงาน<input required type="date" min={trip.start_date} value={draft.work_date} onChange={e => { resetGps(); setDraft(d => ({ ...d, work_date: e.target.value, gps_keys: [] })); }} /></label>
             <div className="ft-form-grid"><label>จำนวนแปลงวันนี้<input autoFocus required type="number" min="1" max="10000" step="1" value={draft.plot_count} onChange={e => field('plot_count', e.target.value)} /></label>
-              <label>ไร่ที่นายหน้ายืนยัน<input required type="number" min="0.0001" max="100000" step="0.0001" value={draft.confirmed_rai} onChange={e => field('confirmed_rai', e.target.value)} /></label></div>
+              <label>ไร่ที่นายหน้ายืนยัน (ทศนิยม)<input required type="number" min="0.0001" max="100000" step="0.0001" value={draft.confirmed_rai} onChange={e => field('confirmed_rai', e.target.value)} /><small>0.25 ไร่ = 1 งาน · 4 งาน = 1 ไร่</small>{draft.confirmed_rai !== '' && <small>{formatRaiNgan(draft.confirmed_rai)}</small>}</label></div>
             <label>ค่าเกี่ยว (บาท/ไร่)<input required type="number" min="0.01" max="100000" step="0.01" value={draft.price_per_rai} onChange={e => field('price_per_rai', e.target.value)} /></label>
             <fieldset className="ft-worker-picker"><legend>คนทำงานวันนี้</legend>{workerChoices.map(w => <label key={w.name}><input type="checkbox" checked={draft.worker_names.includes(w.name)} onChange={e => field('worker_names', e.target.checked ? [...draft.worker_names, w.name] : draft.worker_names.filter(n => n !== w.name))} /><span>{w.name}<small>{roles[w.role] || 'ยังไม่ตั้งระดับ'}</small></span></label>)}{!workerChoices.length && <p>ยังไม่มีทะเบียนคนงาน ให้ตั้งระดับค่าแรงในสมุดค่าแรงก่อน</p>}</fieldset>
             <p className="ft-help">ค่าแรงรวม 60 บาท/ไร่ แบ่งตามระดับคนงานเดิม</p>
@@ -221,7 +222,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
             <details className="ft-gps-picker" open={draft.gps_keys.length > 0 ? true : undefined}><summary>แปลง GPS อ้างอิง (เลือกได้)</summary>
               <p className="ft-help">ใช้เทียบกับผลงานวันนี้ ยอดคิดเงินใช้ไร่ที่นายหน้ายืนยัน</p>{gpsBusy && <p role="status">กำลังโหลดแปลง…</p>}{gpsError && <p className="ft-error">{gpsError} ยังลงยอดที่นายหน้าแจ้งโดยไม่เลือก GPS ได้</p>}
               {!gpsBusy && !gpsError && !draftPlots.length && <p>ยังไม่มีแปลง GPS ที่บันทึกไว้สำหรับรถและวันที่นี้</p>}
-              {draftPlots.map(p => <label className="ft-gps-option" key={p.key}><input type="checkbox" disabled={p.job_id != null} checked={draft.gps_keys.includes(p.key)} onChange={e => field('gps_keys', e.target.checked ? [...draft.gps_keys, p.key] : draft.gps_keys.filter(k => k !== p.key))} /><PlotShape plot={p}/><span>{p.name}<small>{amount(p.area_rai)} ไร่{p.job_id != null ? ' · อยู่ในคิวลูกค้าแล้ว' : ''}</small></span></label>)}
+              {draftPlots.map(p => <label className="ft-gps-option" key={p.key}><input type="checkbox" disabled={p.job_id != null} checked={draft.gps_keys.includes(p.key)} onChange={e => field('gps_keys', e.target.checked ? [...draft.gps_keys, p.key] : draft.gps_keys.filter(k => k !== p.key))} /><PlotShape plot={p}/><span>{p.name}<small>{formatRaiNgan(p.area_rai)}{p.job_id != null ? ' · อยู่ในคิวลูกค้าแล้ว' : ''}</small></span></label>)}
               {gps.invalid.length > 0 && <p className="ft-help">มี {gps.invalid.length} แปลงที่ขอบ GPS ยังไม่สมบูรณ์</p>}
             </details>
             <label>หมายเหตุ<textarea maxLength={2000} value={draft.note} onChange={e => field('note', e.target.value)} /></label>
