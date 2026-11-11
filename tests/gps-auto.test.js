@@ -168,3 +168,40 @@ test('HTTP endpoint executes the worker, validates scope and protects scheduled 
     assert.equal(store.state().writes,1);assert.ok(!('token' in data));
   } finally {handler.stop();await new Promise(resolve=>server.close(resolve));}
 });
+
+function returnAlongLockedEdge() {
+  const positions=field();for(let x=1;x<=120;x++)positions.push([x*5,57]);
+  const locked=measure(trace(positions));
+  for(let x=120;x>=0;x--)positions.push([x*5,-3]);
+  for(let x=0;x<=20;x++)positions.push([x*5,-6]);
+  for(let x=21;x<=140;x++)positions.push([x*5,-6]);
+  return {locked,rows:trace(positions)};
+}
+test('old harvesting cannot support two return-road passes as additional locked area',()=>{
+  const {locked,rows}=returnAlongLockedEdge();
+  const {finalizePlotLocks}=require('../lib/gps-plot-locks');
+  const legacy=finalizePlotLocks(measure(rows),locked);
+  assert.ok(legacy.estimated_rai>locked.estimated_rai+.2,'fixture reproduces the old false extension');
+  const guarded=analyzeGpsDay(rows,{...options,previous:locked});
+  assert.deepEqual(guarded.locked_plots,locked.locked_plots);
+  assert.equal(guarded.estimated_rai,locked.estimated_rai);
+  assert.equal(guarded.working_rai,0);
+  assert.equal(guarded.plots[0].state,'completed');
+  assert.deepEqual(new Set(guarded.accepted_edges),new Set(locked.accepted_edges));
+});
+test('legacy false extensions are repaired only before publication, never saved or linked receipts',()=>{
+  const {locked,rows}=returnAlongLockedEdge();
+  const {finalizePlotLocks}=require('../lib/gps-plot-locks');
+  const legacy=finalizePlotLocks(measure(rows),locked);
+  assert.equal(legacy.locked_plots.length,2);
+  const originalPublished=[`auto-${locked.locked_plots[0].id}-1`];
+  const repaired=analyzeGpsDay(rows,{...options,previous:legacy,publishedParts:originalPublished});
+  assert.deepEqual(repaired.locked_plots,locked.locked_plots);
+  assert.equal(repaired.estimated_rai,locked.estimated_rai);
+  const published=legacy.locked_plots.map(p=>`auto-${p.id}-1`);
+  const protectedResult=analyzeGpsDay(rows,{...options,previous:legacy,publishedParts:published});
+  assert.deepEqual(protectedResult.locked_plots,legacy.locked_plots);
+  const restarted=analyzeGpsDay(rows,{...options,previous:repaired,publishedParts:originalPublished});
+  assert.deepEqual(restarted.locked_plots,repaired.locked_plots);
+  assert.equal(restarted.estimated_rai,repaired.estimated_rai);
+});
