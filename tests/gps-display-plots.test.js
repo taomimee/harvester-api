@@ -72,3 +72,31 @@ test('field status shows measuring again after a partial lock, then locked only 
   const manual=await render([{id:'manual',name:'วาดเอง'}],[a],null);
   assert.equal(gpsPlotStatus(manual[0]).key,'saved');
 });
+
+test('the header uses the visible map area across a whole-ngan rounding boundary',async()=>{
+  const {gpsDisplayTotals}=await modulePromise;
+  const {formatGpsRaiNgan}=await import('../harvester-app/src/thai-area.mjs');
+  const source={...data,estimated_rai:19.2538};
+  const groups=[{areaRai:19.248,growing:true}];
+  const before=JSON.stringify({source,groups});
+  const total=gpsDisplayTotals(groups,source,9,origin.work_date);
+  assert.equal(total.source,source);
+  assert.equal(formatGpsRaiNgan(total.estimated_rai),formatGpsRaiNgan(groups[0].areaRai));
+  assert.notEqual(formatGpsRaiNgan(total.estimated_rai),formatGpsRaiNgan(source.estimated_rai));
+  assert.equal(total.plot_count,1);assert.equal(total.working_count,1);assert.equal(total.locked_count,0);
+  assert.equal(JSON.stringify({source,groups}),before);
+  assert.equal(gpsDisplayTotals(groups,source,10,origin.work_date),null);
+  assert.equal(gpsDisplayTotals(groups,source,9,'2026-11-10'),null);
+  assert.equal(gpsDisplayTotals(groups,null,9,origin.work_date),null);
+});
+
+test('header totals respect edited holes, deleted parts and manually saved status',async()=>{
+  const {gpsDisplayTotals}=await modulePromise;
+  const hole=box(.0002,.0004),edited=turf.difference(turf.featureCollection([a,hole]));
+  const groups=await render(saved,[edited]);
+  near(gpsDisplayTotals(groups,data,9,origin.work_date).estimated_rai,(turf.area(full)-turf.area(hole))/1600);
+  const deleted=await render([],[],data,2);
+  near(gpsDisplayTotals(deleted,data,9,origin.work_date).estimated_rai,turf.area(b)/1600);
+  const manual=gpsDisplayTotals([{areaRai:2,growing:false}],data,9,origin.work_date);
+  assert.equal(manual.locked_count,0);assert.equal(manual.working_count,0);
+});
