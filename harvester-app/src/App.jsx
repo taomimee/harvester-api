@@ -2425,7 +2425,6 @@ function TrackingMap({
     const labels = [];
     const connectors = L.layerGroup().addTo(plotsLayer.current);
     displayPlots.forEach((group, index) => {
-      const status = gpsPlotStatus(group);
       if (drawMode && group.indices.includes(editingPlotIndex)) return;
       if (!group.geometry) return;
       const boundaryColor = group.growing ? '#b45309' : ['#176147','#1d4ed8','#9d174d','#92400e','#6d28d9','#0e7490'][index % 6];
@@ -2451,7 +2450,7 @@ function TrackingMap({
       const center = plotCenter(group.geometry);
       if (center && !drawMode) {
         const label = L.marker([center.lat, center.lng], {
-          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong><small class="gps-plot-status is-${status.key}">${status.label}</small>${paid && !group.growing ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong>${group.growing ? '<small class="gps-plot-status is-measuring">⏳ กำลังวัด</small>' : ''}${paid && !group.growing ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
           bubblingMouseEvents: false
         }).on('click', () => selectPlotOnMap(group)).addTo(plotsLayer.current);
         labels.push({label,center,color:boundaryColor});
