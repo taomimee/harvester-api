@@ -133,3 +133,7 @@
 .gps-auto-detail { font-size:12px; color:#52665b; padding:8px 12px 12px; line-height:1.6; }
 .gps-manual-plots-heading { border-top:1px solid #d5e1dc; padding-top:14px; margin-top:16px; }
 @media (max-height:480px) { .gps-area-summary { position:absolute; top:calc(100% + 70px); right:12px; width:270px; padding:7px 10px; box-shadow:0 2px 10px #173a2526; } .gps-area-value strong { font-size:24px; } }
+
+.gps-boundary-label .gps-plot-status, .gps-plot-select .gps-plot-status { display:inline-flex; align-items:center; gap:4px; margin-top:6px; padding:4px 8px; border:1px solid #cbd5e1; border-radius:999px; font-size:12px; line-height:1.35; font-weight:700; color:#475569; background:#f1f5f9; white-space:nowrap; }
+.gps-boundary-label .gps-plot-status.is-locked, .gps-plot-select .gps-plot-status.is-locked { color:#14532d; background:#dcfce7; border-color:#86c99b; }
+.gps-boundary-label .gps-plot-status.is-measuring, .gps-plot-select .gps-plot-status.is-measuring { color:#854d0e; background:#fef3c7; border-color:#e8bb59; }
