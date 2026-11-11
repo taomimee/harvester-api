@@ -57,3 +57,7 @@
   .ft-overlay { padding:10px; }
   .ft-form-grid { gap:10px; }
 }
+
+/* Keep both area units visible in narrow plot cards and entry hints. */
+.ft-plots small { white-space:normal; text-overflow:clip; line-height:1.5; }
+.ft-dialog label > small { display:block; margin-top:4px; line-height:1.5; }

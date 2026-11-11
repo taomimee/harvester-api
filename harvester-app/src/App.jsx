@@ -1,6 +1,6 @@
 import {useBossSession} from './BossSession';
 import './boss-session.css';
-import { useEffect, useState, useRef, useMemo } from 'react'
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
@@ -11,6 +11,7 @@ import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
+import { formatRaiNgan } from './thai-area.mjs'
 
 // 🚜 Frontend-only GPS speed estimate: no extra requests, RPM sensor, or GPS writes.
 // Positions are straight-line samples; ignore implausible jumps, tiny jitter and long gaps.
@@ -409,16 +410,8 @@ const plotClip = (operation, a, b) => {
 const plotThaiArea = (sqMeters) => {
   const value = Math.max(0, Number(sqMeters) || 0);
 
-  // UI แสดงแค่ "ไร่ + งาน" ให้สะอาดและอ่านง่าย
-  // เก็บความละเอียดจริงไว้ใน rawRai / sqMeters เหมือนเดิม ไม่กระทบการคำนวณ
-  const roundedTotalNgan = Math.round((value / 400) * 10) / 10; // 0.1 งาน ≈ 40 ตร.ม.
-  const rai = Math.floor(roundedTotalNgan / 4);
-  const nganValue = Math.max(0, roundedTotalNgan - (rai * 4));
-  const ngan = Number(nganValue.toFixed(1));
-  return { text: `${rai} ไร่ ${ngan} งาน`, rawRai: value / 1600, sqMeters: value };
+  return { text: formatRaiNgan(value / 1600), rawRai: value / 1600, sqMeters: value };
 };
-
-const formatRaiNgan = (raiValue) => plotThaiArea(Math.max(0, Number(raiValue) || 0) * 1600).text;
 
 // วันทำงานต้องยึดวันที่ของรอบจริง ไม่ยึดสถานะคิวหรือวันที่ชำระเงิน
 const isInHomeDay = (value, dayStart, nextDayStart) => {
@@ -528,7 +521,7 @@ const cleanPhoneForUi = (phone) => {
 };
 
 // Audit/check รุ่นเก่าอาจเก็บข้อความเป็น "6.37 ไร่"
-// แปลงเฉพาะข้อความเก่าให้เป็น "6 ไร่ 1.5 งาน" โดยไม่แตะข้อความที่เป็น ไร่+งาน อยู่แล้ว
+// แปลงเฉพาะข้อความเก่าให้เป็น "6 ไร่ 1.48 งาน" โดยไม่แตะข้อความที่เป็น ไร่+งาน อยู่แล้ว
 const formatAreaText = (value) => String(value || '').replace(
   /(\d+(?:\.\d+)?)\s*ไร่(?!\s*\d+(?:\.\d+)?\s*งาน)/g,
   (_, rai) => formatRaiNgan(Number(rai))
@@ -1124,6 +1117,8 @@ function TrackingMap({
   const [sheetTab, setSheetTab] = useState('plots');
   const [selectedPlotId, setSelectedPlotId] = useState(null);
   const [plotActionsId, setPlotActionsId] = useState(null);
+  const historyPlotsFitted = useRef(null);
+  const loadedPlotScope = useRef(null);
   const sheetSwipeStart = useRef(null);
   const [exclusionPanelIndex, setExclusionPanelIndex] = useState(null);
   const [holeEditor, setHoleEditor] = useState(null);
@@ -1264,12 +1259,14 @@ function TrackingMap({
   };
   useEffect(() => {
     let active=true;
+    loadedPlotScope.current = null;
     setLinkReview(null);setPlotRevision(null);exitPlotEditor();setExclusionPanelIndex(null);setMobileToolsOpen(false);setPlots([]);setSelectedPlotId(null);setPlotActionsId(null);
     setIsSavingPlot(false);setPlotSyncStatus('กำลังโหลดแปลงล่าสุด…');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
     fetch(`https://harvester-api-server.onrender.com/api/plots-snapshot/${vehicleId}?date=${encodeURIComponent(workDate)}`,{signal:controller.signal})
       .then(async res => {const data=await res.json();if(!res.ok || !Array.isArray(data.plots_data))throw new Error(data.error || 'โหลดแปลงไม่สำเร็จ');return data;})
       .then(data => {if(!active)return;const loaded=hydratePlots(data.plots_data.map((p,i)=>({...p,id:p.id || `legacy-${vehicleId}-${workDate}-${i}`})));
+        loadedPlotScope.current = `${vehicleId}/${workDate}`;
         setPlots(loaded);setPlotRevision(data.revision);setPlotSyncStatus('✅ โหลดแปลงล่าสุดแล้ว');
         if(!readPlotBackup().pending)writePlotBackup(loaded,false);
       })
@@ -1455,6 +1452,27 @@ function TrackingMap({
       paddingTopLeft: [30, 120], paddingBottomRight: [60, 100], maxZoom: 19, animate: false
     });
   };
+
+  const showAllPlots = useCallback(() => {
+    const bounds = L.latLngBounds(plots.flatMap(p => (p.points || []).map(p => [Number(p.lat), Number(p.lng)])));
+    if (!bounds.isValid()) return;
+    setAutoFollow(false); setMobileToolsOpen(false);
+    mapInstance.current?.stop();
+    mapInstance.current?.fitBounds(bounds, {paddingTopLeft:[45,90],paddingBottomRight:[45,110],maxZoom:18,animate:false});
+  }, [plots]);
+
+  // A historical date opens on its fields, not where the machine parked later.
+  // Fit once per date so refreshes never pull the map away from the user.
+  useEffect(() => {
+    if (trackingMode !== 'history') { historyPlotsFitted.current = null; return; }
+    if (!plots.length || !mapInstance.current) return;
+    const scope = `${vehicleId}/${workDate}`;
+    if (loadedPlotScope.current !== scope) return;
+    if (focusPlot && String(focusPlot.vehicle_id) === String(vehicleId) && focusPlot.work_date === workDate) return;
+    if (historyPlotsFitted.current === scope) return;
+    historyPlotsFitted.current = scope;
+    showAllPlots();
+  }, [trackingMode, vehicleId, workDate, plots, focusPlot, showAllPlots]);
 
   // The same guard protects Back, vehicle changes and the history date picker.
   useEffect(() => {
@@ -1925,9 +1943,12 @@ function TrackingMap({
     const layer = L.layerGroup().addTo(map);
     for (const plot of autoArea.plots || []) {
       const locked = plot.state === 'completed' && plot.locked_at;
+      // Published/editable boundaries are authoritative on the map. Do not draw
+      // the original merged GPS footprint over separately corrected plots.
+      if (locked && autoArea.editable_ready) continue;
       if (plot.geometry) L.geoJSON(plot.geometry, {
         style: {color:locked?'#047857':'#d97706',weight:locked?3:2,fillColor:locked?'#10b981':'#fbbf24',fillOpacity:.16},interactive:true
-      }).bindTooltip(`${locked?'🔒':'🌾'} แปลงที่ ${plot.number || ''} · ${Number(plot.estimated_rai).toFixed(2)} ไร่${locked?' · ล็อกแล้ว':''}`)
+      }).bindTooltip(`แปลงที่ ${plot.number || ''}<br><strong>${formatRaiNgan(plot.estimated_rai)}</strong>${locked?'':'<br>กำลังวัด'}`, {permanent:true,direction:'center',className:'gps-measuring-label'})
         .on('click', () => {setSheetTab('plots');setMobileToolsOpen(true);setAutoFollow(false);}).addTo(layer);
     }
     return () => {map.removeLayer(layer);};
@@ -2298,7 +2319,7 @@ function TrackingMap({
   // 🎯 เมื่อผู้ใช้กด "ค้นหาเส้นทาง" ให้พาไปหารถล่าสุด 1 ครั้ง
   // Auto-refresh หลังจากนั้นจะอัปเดตข้อมูลอย่างเดียว ไม่แย่งกล้อง
   useEffect(() => {
-    if (trackingMode === 'history' && focusPlot && String(focusPlot.vehicle_id) === String(vehicleId) && focusPlot.work_date === workDate) return;
+    if (trackingMode === 'history') return;
     if (!focusRequest || pathData.length === 0 || !mapInstance.current) return;
 
     const lastPoint = pathData[pathData.length - 1];
@@ -2417,18 +2438,23 @@ function TrackingMap({
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
+    const map = mapInstance.current;
+    const labels = [];
+    const connectors = L.layerGroup().addTo(plotsLayer.current);
     plots.forEach((plot, index) => {
       if (drawMode && editingPlotIndex === index) return;
       const geometry = plotGeometries[index];
       if (!geometry?.net) return;
       // Receipt is authoritative for paid badge; do not edit GPS data on map.
       const linkedJob = jobs.find(j => String(j.id) === String(plot.job_id));
+      const displayName = linkedJob?.customers?.name || plot.name || `แปลงที่ ${index+1}`;
+      const boundaryColor = ['#176147','#1d4ed8','#9d174d','#92400e','#6d28d9','#0e7490'][index % 6];
       const paidKey = `${vehicleId}/${workDate}/${plot.id}`;
       const plotPaidOnMap = !!linkedJob && (
         (linkedJob.status === 'DONE' && linkedJob.payment_status === 'PAID') ||
         jobMergePaidItems(linkedJob).some(item => item.key === paidKey)
       );
-      L.geoJSON(geometry.net, { style: { color: selectedPlotId === plot.id ? '#2563eb' : plotPaidOnMap ? '#059669' : '#F59E0B', fillColor: plotPaidOnMap ? '#10B981' : '#FDE047', fillOpacity: selectedPlotId === plot.id ? 0.32 : 0.20, weight: selectedPlotId === plot.id ? 5 : 3, interactive: false } }).addTo(plotsLayer.current);
+      L.geoJSON(geometry.net, { style: { color: boundaryColor, fillColor: boundaryColor, fillOpacity: selectedPlotId === plot.id ? 0.25 : 0.12, weight: selectedPlotId === plot.id ? 5 : 3, interactive: false } }).addTo(plotsLayer.current);
       for (const hole of (plot.holes || [])) {
         try {
           const inside = plotClip('intersect', geometry.outer, plotRingFeature(hole.points));
@@ -2447,12 +2473,49 @@ function TrackingMap({
       }
       const center = plot.center || plotCenter(geometry.net);
       if (center && !drawMode) {
-        L.marker([center.lat, center.lng], {
-          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="text-white px-2 py-1 rounded-lg text-[10px] font-black shadow-lg border border-white whitespace-nowrap" style="background:${plotPaidOnMap ? '#047857' : '#d97706'};width:max-content;transform:translate(-50%,-50%)">${plotPaidOnMap ? '✓ จ่ายแล้ว · ' : '📍 '}${String(plot.name || `แปลงที่ ${index+1}`).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))} • ${plotThaiArea(geometry.netSqM).text}</div>`, iconSize: [0, 0] }),
+        const label = L.marker([center.lat, center.lng], {
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${plotThaiArea(geometry.netSqM).text}</strong>${plotPaidOnMap ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
           bubblingMouseEvents: false
-        }).bindTooltip('แตะเพื่อดูแปลงนี้').on('click', () => selectPlotOnMap(plot)).addTo(plotsLayer.current);
+        }).on('click', () => selectPlotOnMap(plot)).addTo(plotsLayer.current);
+        labels.push({label,center,color:boundaryColor});
       }
     });
+    // Nearby fields keep separate labels. Move only the label, with a coloured
+    // leader back to its own field, so zooming out never stacks the rai values.
+    const arrangeLabels = () => {
+      connectors.clearLayers();
+      const size = map.getSize(), frame = map.getContainer().getBoundingClientRect();
+      const occupied = [...(map.getContainer().parentElement?.querySelectorAll('.gps-mode-bar, .gps-map-actions, .leaflet-control-zoom, .gps-plot-launcher') || [])].map(el => {
+        const r=el.getBoundingClientRect();
+        return {left:r.left-frame.left-4,right:r.right-frame.left+4,top:r.top-frame.top-4,bottom:r.bottom-frame.top+4};
+      });
+      for (const {label,center,color} of labels) {
+        const anchor = map.latLngToContainerPoint([center.lat,center.lng]);
+        const element = label.getElement()?.querySelector('.gps-boundary-label');
+        if (!element) continue;
+        if (anchor.x < 0 || anchor.x > size.x || anchor.y < 0 || anchor.y > size.y) {
+          label.setLatLng([center.lat,center.lng]); continue;
+        }
+        const w=element.offsetWidth+8,h=element.offsetHeight+8;
+        let best=null;
+        for (let ring=0;ring<5;ring++) for (let step=0;step<(ring?8:1);step++) {
+          const angle=step*Math.PI/4;
+          const x=Math.max(w/2+4,Math.min(size.x-w/2-4,anchor.x+Math.cos(angle)*ring*(w*.55)));
+          const y=Math.max(h/2+8,Math.min(size.y-h/2-85,anchor.y+Math.sin(angle)*ring*(h+8)));
+          const rect={left:x-w/2,right:x+w/2,top:y-h/2,bottom:y+h/2};
+          const overlap=occupied.reduce((n,r)=>n+Math.max(0,Math.min(rect.right,r.right)-Math.max(rect.left,r.left))*Math.max(0,Math.min(rect.bottom,r.bottom)-Math.max(rect.top,r.top)),0);
+          const score=overlap*1000+Math.hypot(x-anchor.x,y-anchor.y);
+          if (!best || score<best.score) best={x,y,rect,score};
+        }
+        occupied.push(best.rect);
+        const position=map.containerPointToLatLng([best.x,best.y]);
+        label.setLatLng(position);
+        if (Math.hypot(best.x-anchor.x,best.y-anchor.y)>12) L.polyline([[center.lat,center.lng],position],{color,weight:2,dashArray:'3 4',interactive:false}).addTo(connectors);
+      }
+    };
+    arrangeLabels();
+    map.on('zoomend moveend resize',arrangeLabels);
+    return () => map.off('zoomend moveend resize',arrangeLabels);
   }, [plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, workspaceMode, selectedPlotId]);
 
   const totalPendingHoles = plots.reduce((sum, p) => sum + (p.holeSuggestions || []).filter(h => h.status === 'pending').length, 0);
@@ -2598,7 +2661,7 @@ function TrackingMap({
                           <span className="font-black text-sm text-gray-900">{j.customers?.name || 'ไม่ระบุ'} • คิว #{j.id}</span>
                           <span className="text-[10px] font-bold text-blue-700">{isAwaitingArea(j)?'รอยืนยันไร่':j.status==='IN_PROGRESS'?'กำลังเกี่ยว':j.status==='PAUSED'?'รอเกี่ยวต่อ':'รอคิว'}</span>
                         </div>
-                        <p className="text-[10px] text-gray-500 mt-0.5">{j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} • {gpsArea>0?`GPS ${plotThaiArea(gpsArea*1600).text}`:(j.area_size?`ประมาณ ~${formatRaiNgan(j.area_size)}`:'ยังไม่มีพื้นที่')} • ทำแล้ว {measuredArea.toFixed(2)} ไร่</p>
+                        <p className="text-[10px] text-gray-500 mt-0.5">{j.vehicles?.name || `รถ ${j.vehicle_id || '-'}`} • {gpsArea>0?`GPS ${plotThaiArea(gpsArea*1600).text}`:(j.area_size?`ประมาณ ~${formatRaiNgan(j.area_size)}`:'ยังไม่มีพื้นที่')} • ทำแล้ว {formatRaiNgan(measuredArea)}</p>
                       </button>
                     })}
                   </div>}
@@ -2710,7 +2773,8 @@ function TrackingMap({
       {!drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
         <>
           <div className="gps-map-actions">
-            {pathData.length > 0 && <button type="button" onClick={fitAllRoute}>🗺️ ดูเส้นทาง</button>}
+            {plots.length > 0 && workspaceMode === 'view' && <button type="button" onClick={showAllPlots}>🌾 ดูแปลงทั้งหมด</button>}
+            {pathData.length > 0 && (workspaceMode === 'manage' || !plots.length) && <button type="button" onClick={fitAllRoute}>🗺️ ดูเส้นทาง</button>}
             {pathData.length > 0 && trackingMode === 'realtime' && <button type="button" aria-pressed={autoFollow} onClick={() => {setMobileToolsOpen(false);setAutoFollow(v => !v);}}>{autoFollow ? '🎯 กำลังตามรถ' : '🎯 ตามรถ'}</button>}
             {workspaceMode === 'manage' && <button type="button" className="gps-primary" aria-expanded={mobileToolsOpen && sheetTab === 'tools'} onClick={() => {setSheetTab('tools');setMobileToolsOpen(v => sheetTab === 'tools' ? !v : true);}}>🛠 เครื่องมือแปลง</button>}
           </div>
@@ -2752,8 +2816,10 @@ function TrackingMap({
               {plots.map((plot,i) => {
                 const progress=plotProgressList[i] || {percent:0,coveredRai:0,totalRai:Number(plot.area?.rawRai||0)};
                 const center=plot.center || centerFromPoints(plot.points);
+                const ownerName=jobs.find(j=>String(j.id)===String(plot.job_id))?.customers?.name;
                 return <article key={plot.id || i} className={`gps-plot-card ${selectedPlotId === plot.id ? 'is-selected' : ''}`}>
-                  <button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(plot)} aria-label={`ดู ${plot.name || `แปลงที่ ${i+1}`} บนแผนที่`}><span><strong>{plot.name || `แปลงที่ ${i+1}`}</strong><small>แตะเพื่อซูมไปที่แปลง ↗</small></span><b>{plot.area?.text || formatThaiRai(progress.totalRai)}</b></button>
+                  <button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(plot)} aria-label={`ดู ${ownerName || plot.name || `แปลงที่ ${i+1}`} บนแผนที่`}><span><strong>{ownerName || plot.name || `แปลงที่ ${i+1}`}</strong><small>{ownerName ? plot.name : 'แตะดูบนแผนที่'}</small></span><b>{plot.area?.text || formatThaiRai(progress.totalRai)}</b></button>
+                  <details className="gps-plot-controls" open={workspaceMode === 'manage'}><summary>จัดการแปลง</summary>
                   <p className="gps-plot-progress">{plot.auto_origin ? '🔒 บันทึกอัตโนมัติเมื่อรถออกจากแปลง · แก้ไขได้' : `เกี่ยวประมาณ ${formatThaiRai(progress.coveredRai)} · ${progress.percent.toFixed(0)}%`}</p>
                   <div className="gps-plot-buttons">
                     {plot.auto_origin && <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>{setWorkspaceMode('manage');openLinkReview(plots,plots.flatMap((p,j)=>p.auto_origin?.plot_id===plot.auto_origin.plot_id?[j]:[]));}}>🔗 ผูกคิว / ยอด</button>}
@@ -2771,6 +2837,7 @@ function TrackingMap({
                     <button type="button" aria-expanded={plotActionsId === plot.id} onClick={() => setPlotActionsId(id => id === plot.id ? null : plot.id)}>เพิ่มเติม ⋯</button>
                     {plotActionsId === plot.id && <div className="gps-delete-zone"><p>ลบแปลงนี้ออกจากรายการ GPS ของวันที่เลือก</p><button type="button" disabled={isSavingPlot || plotRevision===null} onClick={async () => {if(!window.confirm(`ลบ ${plot.name || `แปลงที่ ${i+1}`} ใช่ไหม? พื้นที่ GPS ที่เชื่อมกับคิวจะเปลี่ยนตาม`))return;const ok=await savePlotsToServer(plots.filter((_,idx)=>idx!==i));if(ok){setPlotActionsId(null);if(selectedPlotId===plot.id)setSelectedPlotId(null);}}}>ลบแปลงนี้</button></div>}
                   </div>}
+                  </details>
                 </article>;
               })}
             </>}
@@ -5379,7 +5446,7 @@ function App() {
             <div className="space-y-4 pb-3">
               <button type="button" onClick={() => setActiveTab('field')} className="w-full rounded-xl border border-green-200 bg-green-50 p-4 text-left text-sm text-green-900">
                 <b>🌾 งานนอกพื้นที่ในช่วงที่เลือก ↗</b>
-                {fieldTrips ? <p className="mt-1 text-xs">ปิดงาน {fieldPeriod.days} วัน · {fieldPeriod.rai.toLocaleString()} ไร่ · ค่าเกี่ยว {fieldPeriod.earned.toLocaleString()} บาท · รับเงินจริง {fieldPeriod.received.toLocaleString()} บาท · ค้างรับ {fieldPeriod.outstanding.toLocaleString()} บาท (หักเงินรับตามลำดับวันงานแล้ว)</p> : <p className="mt-1 text-xs">ยังโหลดข้อมูลงานนอกพื้นที่ไม่ได้ ยอดสรุปนี้อาจยังไม่ครบ กดเปิดทริปเพื่อลองโหลดอีกครั้ง</p>}
+                {fieldTrips ? <p className="mt-1 text-xs">ปิดงาน {fieldPeriod.days} วัน · {formatRaiNgan(fieldPeriod.rai)} · ค่าเกี่ยว {fieldPeriod.earned.toLocaleString()} บาท · รับเงินจริง {fieldPeriod.received.toLocaleString()} บาท · ค้างรับ {fieldPeriod.outstanding.toLocaleString()} บาท (หักเงินรับตามลำดับวันงานแล้ว)</p> : <p className="mt-1 text-xs">ยังโหลดข้อมูลงานนอกพื้นที่ไม่ได้ ยอดสรุปนี้อาจยังไม่ครบ กดเปิดทริปเพื่อลองโหลดอีกครั้ง</p>}
               </button>
               {/* Header */}
               <div className="bg-gradient-to-br from-slate-950 via-indigo-950 to-purple-950 rounded-3xl p-5 text-white shadow-xl relative overflow-hidden">
