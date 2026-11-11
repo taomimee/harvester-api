@@ -11,7 +11,7 @@ import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
-import { formatRaiNgan } from './thai-area.mjs'
+import { formatRaiNgan, formatGpsRaiNgan } from './thai-area.mjs'
 
 // 🚜 Frontend-only GPS speed estimate: no extra requests, RPM sensor, or GPS writes.
 // Positions are straight-line samples; ignore implausible jumps, tiny jitter and long gaps.
@@ -175,7 +175,7 @@ function JobPlotPreviews({ plots, receipts = [], fullyPaid = false, onOpen, onAl
           {isPaid && <span className="pointer-events-none absolute right-1.5 top-2 -rotate-12 rounded-md border-[3px] border-double border-red-600 bg-white/95 px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-tight font-black whitespace-nowrap text-red-600 shadow-sm">✓ จ่ายแล้ว</span>}
         </div>
         <span className="block truncate px-1.5 pt-1 text-xs font-bold text-slate-800">{plot.name || `แปลง ${i+1}`}</span>
-        <span className="block px-1.5 pb-1 text-xs text-slate-600">{formatRaiNgan(plot.area_rai)}</span>
+        <span className="block px-1.5 pb-1 text-xs text-slate-600">{formatGpsRaiNgan(plot.area_rai)}</span>
       </button>;
     })}</div>
   </div>;
@@ -288,7 +288,7 @@ function JobPlotMergeReview({job, onClose}) {
         const label = `${paid?'✓ จ่ายแล้ว':'📍 ยังไม่จ่าย'} · ${escapeLabel(plot.name || `แปลง ${index + 1}`)}`;
         L.marker([center.lat,center.lng], {icon:L.divIcon({className:'bg-transparent border-0',
           html:`<span style="display:inline-block;width:max-content;transform:translate(-50%,-50%);border:2px solid white;border-radius:7px;padding:4px 6px;font:bold 11px sans-serif;color:white;background:${paid?'#047857':chosen?'#1d4ed8':'#64748b'};box-shadow:0 2px 8px #0005">${label}</span>`,iconSize:[0,0]})})
-          .bindPopup(`<b>${label}</b><br>GPS ${formatRaiNgan(plot.area_rai)}${paidItem?`<br>คิดเงินแล้ว ${formatRaiNgan(paidItem.area)}`:''}`)
+          .bindPopup(`<b>${label}</b><br>GPS ${formatGpsRaiNgan(plot.area_rai)}${paidItem?`<br>คิดเงินแล้ว ${formatRaiNgan(paidItem.area)}`:''}`)
           .addTo(layers);
       }
     });
@@ -348,7 +348,7 @@ function JobPlotMergeReview({job, onClose}) {
         <div className="space-y-2"><h3 className="text-sm font-black text-slate-900">เลือกแปลงที่จะรวม · แปลงจ่ายแล้วล็อกไว้</h3>
           {plots.map((plot,index) => {const key=plotPaymentKey(plot), paid=fullyPaid||paidKeys.has(key), selected=selectedKeys.includes(key);const isEditing=editKey===key;const paidItem=paidItems.find(item=>item.key===key);
             return <div key={key} className={`rounded-xl border p-2.5 ${paid?'border-emerald-200 bg-emerald-50':selected?'border-blue-200 bg-blue-50':'border-slate-200 bg-white'}`}>
-              <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" className="h-5 w-5 accent-blue-600" checked={paid?false:selected} disabled={paid||!plot.preview_geometry} onChange={e=>{setEditKey(null);setEditError('');setSelectedKeys(prev=>e.target.checked?[...prev,key]:prev.filter(k=>k!==key));}}/><span className="min-w-0 flex-1">{plot.name||`แปลง ${index+1}`}<span className="block text-[11px] font-normal text-slate-600">{plot.work_date} · GPS {formatRaiNgan(plot.area_rai)}</span></span><span className={`shrink-0 rounded-lg px-2 py-1 text-[11px] font-black ${paid?'bg-emerald-600 text-white':'bg-sky-100 text-sky-900'}`}>{paid?'✓ จ่ายแล้ว':selected?'✓ เลือกรวม':'ไม่รวม'}</span></label>
+              <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" className="h-5 w-5 accent-blue-600" checked={paid?false:selected} disabled={paid||!plot.preview_geometry} onChange={e=>{setEditKey(null);setEditError('');setSelectedKeys(prev=>e.target.checked?[...prev,key]:prev.filter(k=>k!==key));}}/><span className="min-w-0 flex-1">{plot.name||`แปลง ${index+1}`}<span className="block text-[11px] font-normal text-slate-600">{plot.work_date} · GPS {formatGpsRaiNgan(plot.area_rai)}</span></span><span className={`shrink-0 rounded-lg px-2 py-1 text-[11px] font-black ${paid?'bg-emerald-600 text-white':'bg-sky-100 text-sky-900'}`}>{paid?'✓ จ่ายแล้ว':selected?'✓ เลือกรวม':'ไม่รวม'}</span></label>
               {paid && <p className="mt-1 text-[11px] font-bold text-emerald-800">พื้นที่คิดเงินเดิม {paidItem?formatRaiNgan(paidItem.area):'ปิดยอดทั้งคิวแล้ว'} · ไม่ถูกแก้ไข</p>}
               {!paid && selected && <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={()=>{setEditKey(isEditing?null:key);setEditError('');}} className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold ${isEditing?'border-amber-500 bg-amber-200 text-amber-950':'border-blue-200 bg-white text-blue-800'}`}>{isEditing?'✅ จบการลากมุม':'✏️ แก้แนวขอบ (ร่าง)'}</button>{drafts[key] && <button type="button" onClick={()=>{setDrafts(prev=>{const d={...prev};delete d[key];return d;});setEditError('');}} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-bold">↶ คืนขอบเดิม</button>}</div>}
             </div>;
@@ -410,7 +410,7 @@ const plotClip = (operation, a, b) => {
 const plotThaiArea = (sqMeters) => {
   const value = Math.max(0, Number(sqMeters) || 0);
 
-  return { text: formatRaiNgan(value / 1600), rawRai: value / 1600, sqMeters: value };
+  return { text: formatGpsRaiNgan(value / 1600), rawRai: value / 1600, sqMeters: value };
 };
 
 // วันทำงานต้องยึดวันที่ของรอบจริง ไม่ยึดสถานะคิวหรือวันที่ชำระเงิน
@@ -1948,7 +1948,7 @@ function TrackingMap({
       if (locked && autoArea.editable_ready) continue;
       if (plot.geometry) L.geoJSON(plot.geometry, {
         style: {color:locked?'#047857':'#d97706',weight:locked?3:2,fillColor:locked?'#10b981':'#fbbf24',fillOpacity:.16},interactive:true
-      }).bindTooltip(`แปลงที่ ${plot.number || ''}<br><strong>${formatRaiNgan(plot.estimated_rai)}</strong>${locked?'':'<br>กำลังวัด'}`, {permanent:true,direction:'center',className:'gps-measuring-label'})
+      }).bindTooltip(`แปลงที่ ${plot.number || ''}<br><strong>${formatGpsRaiNgan(plot.estimated_rai)}</strong>${locked?'':'<br>กำลังวัด'}`, {permanent:true,direction:'center',className:'gps-measuring-label'})
         .on('click', () => {setSheetTab('plots');setMobileToolsOpen(true);setAutoFollow(false);}).addTo(layer);
     }
     return () => {map.removeLayer(layer);};
@@ -6289,7 +6289,7 @@ function App() {
                         <div>
                           <p className="text-xs font-black text-sky-800">🛰️ พื้นที่ GPS ที่ผูกกับ Job #{editingJob.id}</p>
                           <p className="text-lg font-black text-sky-950 mt-0.5">
-                            {Number(gps.plot_count || 0)} แปลง • {formatRaiNgan(gps.area_rai || 0)}
+                            {Number(gps.plot_count || 0)} แปลง • {formatGpsRaiNgan(gps.area_rai || 0)}
                           </p>
                           <p className="text-[10px] text-sky-700 mt-1">พื้นที่จริงจัดการจากหน้า GPS เท่านั้น</p>
                         </div>
@@ -6580,7 +6580,7 @@ function App() {
                   : <>
                     <div className="flex justify-between items-center"><span className="font-black">สรุปยอดงาน</span><span className={`px-3 py-1 rounded-full text-xs font-black ${badge}`}>{d?.health === 'OK' ? 'ข้อมูลตรงกัน' : 'ต้องตรวจสอบ'}</span></div>
                     <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3"><span className="block text-gray-500">🛰️ GPS</span><b>{formatRaiNgan(d?.summary?.gps_area || 0)}</b></div>
+                      <div className="bg-sky-50 border border-sky-200 rounded-xl p-3"><span className="block text-gray-500">🛰️ GPS</span><b>{formatGpsRaiNgan(d?.summary?.gps_area || 0)}</b></div>
                       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3"><span className="block text-gray-500">✅ ทำจริง</span><b>{formatRaiNgan(d?.summary?.measured_area || 0)}</b></div>
                       <div className="bg-green-50 border border-green-200 rounded-xl p-3">
                         <span className="block text-gray-500">🤝 คิดเงิน</span>
@@ -6629,7 +6629,7 @@ function App() {
                             return <div key={key} className={`rounded-xl border p-3 ${paid ? 'border-emerald-200 bg-emerald-50/50' : selected ? 'border-indigo-300 bg-indigo-50/50' : 'border-slate-200'}`}>
                               <label className="flex items-start gap-3 cursor-pointer">
                                 <input type="checkbox" className="mt-1 h-4 w-4" checked={selected} disabled={blocked || paid || !!paymentRequest.current} onChange={e => { const checked = e.target.checked; setPlotSelection(prev => { const next = {...prev}; if (checked) next[key] = normalizeRaiNganValue(plot.area_rai); else delete next[key]; return next; }); }} />
-                                <span className="min-w-0 flex-1"><b className="block text-sm text-slate-900">{plot.name}</b><span className="block text-xs text-slate-500 mt-1">{plot.work_date} · GPS {formatRaiNgan(plot.area_rai)}</span></span>
+                                <span className="min-w-0 flex-1"><b className="block text-sm text-slate-900">{plot.name}</b><span className="block text-xs text-slate-500 mt-1">{plot.work_date} · GPS {formatGpsRaiNgan(plot.area_rai)}</span></span>
                                 {paid && <b className="text-xs text-emerald-700 shrink-0">จ่ายแล้ว<br/>คิด {formatRaiNgan(paidItem.area)}</b>}
                               </label>
                               {selected && <div className="mt-3 border-t border-indigo-100 pt-2"><span className="block text-xs font-bold mb-2">ไร่ที่ตกลงคิดเงินแปลงนี้ · {Number(payment.rate).toLocaleString()} บาท/ไร่</span><RaiNganInput value={plotSelection[key]} disabled={savingPlotPayment || !!paymentRequest.current} onChange={value => setPlotSelection(prev => ({...prev, [key]:value}))} /><p className="mt-2 text-right font-black text-indigo-800">{(Math.round(Number(plotSelection[key] || 0) * Number(payment.rate || 0) * 100) / 100).toLocaleString()} บาท</p></div>}
@@ -6795,7 +6795,7 @@ function App() {
                     <div className="grid grid-cols-2 gap-2">
                       <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-center">
                         <p className="text-[10px] text-sky-700 font-bold">🛰️ GPS รวม</p>
-                        <p className="font-black text-sky-950">{formatRaiNgan(getJobGpsArea(job))}</p>
+                        <p className="font-black text-sky-950">{formatGpsRaiNgan(getJobGpsArea(job))}</p>
                       </div>
                       <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center">
                         <p className="text-[10px] text-blue-700 font-bold">✅ ทำจริงแล้ว</p>
@@ -6825,9 +6825,9 @@ function App() {
                     {Number(job.gps_summary?.plot_count || 0) > 0 && !job.gps_summary_error && (
                       <div className="bg-sky-50 border-2 border-sky-200 rounded-2xl p-3">
                         <div className="app-round-metrics grid grid-cols-3 gap-2 text-center text-[10px]">
-                          <div><span className="block text-sky-700 font-bold">🛰️ GPS รวม</span><b className="text-sky-950">{formatRaiNgan(getJobGpsArea(job))}</b></div>
+                          <div><span className="block text-sky-700 font-bold">🛰️ GPS รวม</span><b className="text-sky-950">{formatGpsRaiNgan(getJobGpsArea(job))}</b></div>
                           <div className="border-x border-sky-200"><span className="block text-sky-700 font-bold">✅ ลงรอบแล้ว</span><b className="text-sky-950">{formatRaiNgan(ws.measuredArea)}</b></div>
-                          <div><span className="block text-sky-700 font-bold">✨ ยังไม่ลงรอบ</span><b className="text-sky-950">{formatRaiNgan(Math.max(0,getJobGpsArea(job)-ws.measuredArea))}</b></div>
+                          <div><span className="block text-sky-700 font-bold">✨ ยังไม่ลงรอบ</span><b className="text-sky-950">{formatGpsRaiNgan(Math.max(0,getJobGpsArea(job)-ws.measuredArea))}</b></div>
                         </div>
                         <div className="grid grid-cols-2 gap-2 mt-3">
                           <button type="button" disabled={Math.max(0,getJobGpsArea(job)-ws.measuredArea)<=0}
@@ -6870,7 +6870,7 @@ function App() {
                   {isFinal && (
                     <div className="bg-green-50 border-2 border-green-300 rounded-2xl p-3">
                       <label className="block text-green-900 font-black mb-2 text-sm">{settlement.managed ? '🤝 คิดเงินเฉพาะแปลงที่ยังไม่รับเงินกี่ไร่?' : '🤝 สุดท้ายตกลงคิดเงินลูกค้าเท่าไร?'}</label>
-                      {settlement.managed && <div className="mb-3 rounded-xl border border-emerald-200 bg-white p-3 text-sm"><p className="font-bold text-emerald-800">✅ รับเงินแล้ว {settlement.received.toLocaleString()} บาท · คิดแล้ว {formatRaiNgan(settlement.paidBillingArea)}</p>{settlement.paidItems.map(item => <p key={item.key} className="mt-1 text-xs text-slate-600">{item.name} · GPS {item.gps_area == null ? 'ไม่ระบุ' : formatRaiNgan(item.gps_area)} → คิดจริง {formatRaiNgan(item.area)}</p>)}<p className="mt-2 text-xs text-emerald-800">แปลงเหล่านี้ไม่คิดเงินซ้ำ แต่รวมในค่าแรงตอนปิดงาน</p></div>}
+                      {settlement.managed && <div className="mb-3 rounded-xl border border-emerald-200 bg-white p-3 text-sm"><p className="font-bold text-emerald-800">✅ รับเงินแล้ว {settlement.received.toLocaleString()} บาท · คิดแล้ว {formatRaiNgan(settlement.paidBillingArea)}</p>{settlement.paidItems.map(item => <p key={item.key} className="mt-1 text-xs text-slate-600">{item.name} · GPS {item.gps_area == null ? 'ไม่ระบุ' : formatGpsRaiNgan(item.gps_area)} → คิดจริง {formatRaiNgan(item.area)}</p>)}<p className="mt-2 text-xs text-emerald-800">แปลงเหล่านี้ไม่คิดเงินซ้ำ แต่รวมในค่าแรงตอนปิดงาน</p></div>}
                       <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
                         <RaiNganInput
                           value={workRoundData.billingArea}
