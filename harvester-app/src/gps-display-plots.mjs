@@ -19,6 +19,15 @@ export function gpsPlotStatus(group) {
     : { key: 'saved', label: 'บันทึกขอบแล้ว' };
 }
 
+// The header and map must summarize the same visible, edited boundaries.
+// Keep the source reference so a previous vehicle/day/refresh cannot leak in.
+export function gpsDisplayTotals(groups, source, vehicle, date) {
+  if (!source?.enabled || String(source.vehicle_id) !== String(vehicle) || source.work_date !== date) return null;
+  return { source, estimated_rai: groups.reduce((sum, group) => sum + group.areaRai, 0),
+    plot_count: groups.length, working_count: groups.filter(group => group.growing).length,
+    locked_count: groups.filter(group => gpsPlotStatus(group).key === 'locked').length };
+}
+
 // Lock receipts are storage parts, not separate fields. Combine their display
 // by the existing field identity; never infer ownership from a shared border.
 // This projection does not change saved boundaries, IDs, links, or accounting.
