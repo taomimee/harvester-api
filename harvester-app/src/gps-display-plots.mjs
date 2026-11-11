@@ -7,6 +7,18 @@ const subtract = (shape, covered) => shape && covered
   ? difference(featureCollection([shape, covered].map(s => truncate(s, { precision: 7, coordinates: 2 }))))
   : shape;
 
+// A previous partial lock does not mean continued work is finished. Missing
+// GPS status and manually saved boundaries must not look automatically locked.
+export function gpsPlotStatus(group) {
+  if (group.growing) return { key: 'measuring', label: '⏳ กำลังวัด' };
+  const lockedAt = group.autoPlot?.locked_at;
+  if (group.autoPlot?.state === 'completed' && Number.isFinite(Date.parse(lockedAt))) {
+    return { key: 'locked', label: '🔒 ล็อกแล้ว', lockedAt };
+  }
+  return group.sourceId ? { key: 'checking', label: 'รอสถานะ GPS' }
+    : { key: 'saved', label: 'บันทึกขอบแล้ว' };
+}
+
 // Lock receipts are storage parts, not separate fields. Combine their display
 // by the existing field identity; never infer ownership from a shared border.
 // This projection does not change saved boundaries, IDs, links, or accounting.

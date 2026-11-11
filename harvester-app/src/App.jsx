@@ -6,7 +6,7 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
-import { gpsDisplayPlots } from './gps-display-plots.mjs'
+import { gpsDisplayPlots, gpsPlotStatus } from './gps-display-plots.mjs'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
@@ -2425,6 +2425,7 @@ function TrackingMap({
     const labels = [];
     const connectors = L.layerGroup().addTo(plotsLayer.current);
     displayPlots.forEach((group, index) => {
+      const status = gpsPlotStatus(group);
       if (drawMode && group.indices.includes(editingPlotIndex)) return;
       if (!group.geometry) return;
       const boundaryColor = group.growing ? '#b45309' : ['#176147','#1d4ed8','#9d174d','#92400e','#6d28d9','#0e7490'][index % 6];
@@ -2450,7 +2451,7 @@ function TrackingMap({
       const center = plotCenter(group.geometry);
       if (center && !drawMode) {
         const label = L.marker([center.lat, center.lng], {
-          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong>${group.growing ? '<small>กำลังวัดต่อ</small>' : paid ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong><small class="gps-plot-status is-${status.key}">${status.label}</small>${paid && !group.growing ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
           bubblingMouseEvents: false
         }).on('click', () => selectPlotOnMap(group)).addTo(plotsLayer.current);
         labels.push({label,center,color:boundaryColor});
@@ -2787,9 +2788,10 @@ function TrackingMap({
               {autoArea?.editable_error && <p role="status">{autoArea.editable_error}</p>}
               {!displayPlots.length && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : 'รอแนวเกี่ยวชัดเจน แล้วระบบจะเก็บแปลงให้อัตโนมัติ'}{workspaceMode === 'manage' && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
               {displayPlots.map(group => {
+                const status = gpsPlotStatus(group);
                 const linkedJobs = [...new Set(group.indices.map(i => plots[i].job_id).filter(Boolean))];
                 return <article key={group.key} className={`gps-plot-card ${selectedPlotId === group.id ? 'is-selected' : ''}`}>
-                  <button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(group)} aria-label={`ดู ${displayName(group)} บนแผนที่`}><span><strong>{displayName(group)}</strong><small>{group.growing ? 'กำลังวัดต่อในแปลงเดิม' : 'แตะดูบนแผนที่'}</small></span><b>{formatGpsRaiNgan(group.areaRai)}</b></button>
+                  <button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(group)} aria-label={`ดู ${displayName(group)} บนแผนที่`}><span><strong>{displayName(group)}</strong><span className={`gps-plot-status is-${status.key}`}>{status.label}</span>{status.lockedAt && <small>ล็อกเมื่อ {new Date(status.lockedAt).toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'})} น.</small>}</span><b>{formatGpsRaiNgan(group.areaRai)}</b></button>
                   <details className="gps-plot-controls" open={workspaceMode === 'manage'}><summary>จัดการแปลง</summary>
                     {group.growing && <p className="gps-auto-detail">ยอดรวมยังเพิ่มได้{group.savedRai > 0 ? ` · ส่วนที่ล็อกแล้ว ${formatGpsRaiNgan(group.savedRai)} นำไปใช้ได้` : ' · รอรถออกห่างเพื่อล็อกยอด'}</p>}
                     {!!group.indices.length && <div className="gps-plot-buttons">

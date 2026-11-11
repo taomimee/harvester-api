@@ -59,3 +59,16 @@ test('unrelated vehicle/day data cannot be combined into this field',async()=>{
   const s=[saved[0],{...saved[0],id:'other',auto_origin:{...origin,work_date:'2026-11-10'}}];
   assert.equal((await render(s,[a,b],null)).length,2);
 });
+
+test('field status shows measuring again after a partial lock, then locked only after completion',async()=>{
+  const {gpsPlotStatus}=await modulePromise;
+  const lockedAt='2026-11-11T04:48:23Z';
+  const growing=await render(saved,[a],{...data,plots:[{...data.plots[0],locked_at:lockedAt}]});
+  assert.equal(gpsPlotStatus(growing[0]).key,'measuring');
+  const finished=await render(saved,[a],{...data,plots:[{...data.plots[0],state:'completed',locked_at:lockedAt}]});
+  assert.deepEqual(gpsPlotStatus(finished[0]),{key:'locked',label:'🔒 ล็อกแล้ว',lockedAt});
+  const loading=await render(saved,[a],null);
+  assert.equal(gpsPlotStatus(loading[0]).key,'checking');
+  const manual=await render([{id:'manual',name:'วาดเอง'}],[a],null);
+  assert.equal(gpsPlotStatus(manual[0]).key,'saved');
+});
