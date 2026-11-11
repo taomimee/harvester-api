@@ -1,5 +1,5 @@
 import { usedAutoPlotParts } from './gps-auto-import.mjs'
-import { formatRaiNgan } from './thai-area.mjs'
+import { formatGpsRaiNgan } from './thai-area.mjs'
 const time = value => value ? new Date(value).toLocaleTimeString('th-TH', {timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'}) : '—'
 
 export default function GpsAutoPlots({data, onSelect, savedPlots=[], onUse, onEdit, onOpenJob, onField, busy=false, canPostWork=false}) {
@@ -15,11 +15,11 @@ export default function GpsAutoPlots({data, onSelect, savedPlots=[], onUse, onEd
       const status = locked ? `🔒 ล็อกแล้ว ${time(plot.locked_at)} น.` : plot.state === 'waiting' ? 'รอรถออกห่าง · ยังไม่ล็อก' : plot.locked_at ? 'กำลังเกี่ยวเพิ่มในแปลงเดิม' : 'กำลังเกี่ยว · ยังไม่ล็อก'
       return <article key={plot.id} className="gps-plot-card">
         <button type="button" className="gps-plot-select" onClick={() => onSelect(plot)} aria-label={`ดูแปลงอัตโนมัติที่ ${plot.number} บนแผนที่`}>
-          <span><strong>แปลงที่ {plot.number}</strong><small>{status}</small></span><b>{formatRaiNgan(plot.estimated_rai)}</b>
+          <span><strong>แปลงที่ {plot.number}</strong><small>{status}</small></span><b>{formatGpsRaiNgan(plot.estimated_rai)}</b>
         </button>
-        <p className="gps-auto-detail">{locked ? 'บันทึกยอดและขอบแปลงแล้ว' : plot.locked_at ? `ล็อกไว้แล้ว ${formatRaiNgan(plot.locked_rai)} · ส่วนเพิ่ม ${formatRaiNgan(plot.additional_rai)}` : 'หยุดพักหรือสัญญาณหายอย่างเดียวจะไม่ปิดแปลง'}<br/>ประมาณจาก GPS · แตะเพื่อดูแปลง</p>
+        <p className="gps-auto-detail">{locked ? 'บันทึกยอดและขอบแปลงแล้ว' : plot.locked_at ? `ล็อกไว้แล้ว ${formatGpsRaiNgan(plot.locked_rai)} · ส่วนเพิ่ม ${formatGpsRaiNgan(plot.additional_rai)}` : 'หยุดพักหรือสัญญาณหายอย่างเดียวจะไม่ปิดแปลง'}<br/>ประมาณจาก GPS · แตะเพื่อดูแปลง</p>
         {plot.locked_at && <>
-          {used.length > 0 && <p className="gps-auto-detail">นำไปใช้แล้ว {used.length} ส่วน · ยอดที่นำไปใช้ {formatRaiNgan(used.reduce((sum,p)=>sum+Number(p.area?.rawRai || 0),0))}</p>}
+          {used.length > 0 && <p className="gps-auto-detail">นำไปใช้แล้ว {used.length} ส่วน · ยอดที่นำไปใช้ {formatGpsRaiNgan(used.reduce((sum,p)=>sum+Number(p.area?.rawRai || 0),0))}</p>}
           <div className="gps-plot-buttons">
             <button type="button" disabled={busy} onClick={()=>onUse(plot,'link')}>🔗 ผูกคิว / ยอด</button>
             {!used.length && <button type="button" disabled={busy} onClick={()=>onUse(plot,'edit')}>✏️ นำไปแก้ไข</button>}
