@@ -6,7 +6,7 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
-import { gpsDisplayPlots, gpsPlotStatus } from './gps-display-plots.mjs'
+import { gpsDisplayPlots, gpsPlotStatus, gpsDisplayTotals } from './gps-display-plots.mjs'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
@@ -859,7 +859,7 @@ const gpsEdgeInBox = (a, b, bounds) => {
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
 function TrackingMap({
   pathData, vehicleId, workDate, trackingMode, focusRequest,
-  leaveGuardRef, onRouteStats, isFetchingGps, autoArea,
+  leaveGuardRef, onRouteStats, onDisplayTotals, isFetchingGps, autoArea,
   jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot, onOpenField, canPostWork,
   fleetPaths = {}, fleetVehicles = [], vehicleColors = {},
   fleetFitRequest = 0, onSelectVehicle
@@ -1403,6 +1403,10 @@ function TrackingMap({
     try { return { plots: gpsDisplayPlots(plots, plotGeometries, autoArea, vehicleId, workDate, plotRevision), error: '' }; }
     catch (_) { return { plots: [], error: 'ยังรวมขอบแปลงไม่ได้ กรุณาโหลดแปลงล่าสุดอีกครั้ง' }; }
   }, [plots, plotGeometries, autoArea, vehicleId, workDate, plotRevision]);
+  useEffect(() => {
+    onDisplayTotals?.(plotRevision !== null && !displayProjection.error
+      ? gpsDisplayTotals(displayProjection.plots, autoArea, vehicleId, workDate) : null);
+  }, [displayProjection, plotRevision, autoArea, vehicleId, workDate, onDisplayTotals]);
   const displayPlots = displayProjection.plots;
   const displayWorking = displayPlots.filter(p => p.growing).length;
   const displayName = group => {
@@ -3057,6 +3061,7 @@ function App() {
     ? getLocalDateString()
     : (trackingDate || getLocalDateString());
   const gpsAutoArea = useGpsArea(trackingVehicleId, effectiveTrackingDate, activeTab === 'gps');
+  const [gpsDisplayTotal, setGpsDisplayTotal] = useState(null);
 
   const gpsViewScope = `${trackingVehicleId}/${effectiveTrackingDate}`;
   const gpsViewScopeRef = useRef(gpsViewScope);
@@ -4705,7 +4710,7 @@ function App() {
                 <div className="gps-time-mode" role="group" aria-label="ช่วงเวลาพิกัด"><button type="button" aria-pressed={trackingMode === 'realtime'} onClick={() => changeGpsMode('realtime')}>สดวันนี้</button><button type="button" aria-pressed={trackingMode === 'history'} onClick={() => changeGpsMode('history')}>ย้อนหลัง</button></div>
                 <span className="gps-signal" role="status">{isFetchingGps || isFetchingFleetGps ? 'กำลังอัปเดต…' : trackingMode === 'history' ? `${visibleGpsPath.length.toLocaleString()} จุด` : Date.now()-gpsLastPointTime(visibleGpsPath) <= 60000 ? '● สด' : gpsAgeText(visibleGpsPath)}</span>
               </div>
-              <GpsAreaSummary data={gpsAutoArea.data} error={gpsAutoArea.error} history={trackingMode === 'history'} />
+              <GpsAreaSummary data={gpsAutoArea.data} displayTotals={gpsDisplayTotal} error={gpsAutoArea.error} history={trackingMode === 'history'} />
               {trackingMode === 'history' && <div className="gps-date-row">
                 <button type="button" aria-label="วันก่อนหน้า" onClick={() => shiftTrackingDate(-1)}>‹</button>
                 <input type="date" aria-label="วันที่ดูพิกัด" value={trackingDate || getLocalDateString()} onChange={e => {if(e.target.value && gpsLeaveGuard.current?.() !== false)setTrackingDate(e.target.value);}} />
@@ -4741,6 +4746,7 @@ function App() {
                 focusRequest={gpsFocusRequest}
                 leaveGuardRef={gpsLeaveGuard}
                 onRouteStats={setGpsRouteStats}
+                onDisplayTotals={setGpsDisplayTotal}
                 autoArea={gpsAutoArea.data}
                 isFetchingGps={isFetchingGps || isFetchingFleetGps}
                 fleetPaths={trackingMode === 'realtime' ? gpsFleetPaths : {}}
