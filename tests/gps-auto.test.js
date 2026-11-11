@@ -85,17 +85,19 @@ test('new fields get stable numbers while locked boundaries and rai stay unchang
   assert.deepEqual(third.locked_plots[0],first.locked_plots[0]);
   assert.ok(Math.abs(third.estimated_rai-third.completed_rai)<.000001);
 });
-test('harvesting additional land on return adds only new area to the original field',()=>{
+test('harvesting new land after a lock gets a new field and never reopens the locked job',()=>{
   const positions=field();for(let i=1;i<=120;i++)positions.push([i*5,57]);
   const first=measure(trace(positions));
   const more=[...positions,...field(60,0)];
   const active=analyzeGpsDay(trace(more),{...options,previous:first});
   assert.deepEqual(active.locked_plots,first.locked_plots);
-  assert.equal(active.plots.length,1);assert.equal(active.plots[0].number,1);
+  assert.equal(active.plots.length,2);assert.deepEqual(active.plots.map(p=>p.number),[1,2]);
+  assert.deepEqual(active.plots[0],first.plots[0]);
+  assert.equal(active.plots[1].state,'working');
   assert.ok(active.working_rai>1 && active.working_rai<3);
   for(let i=1;i<=120;i++)more.push([60+i*5,57]);
   const done=analyzeGpsDay(trace(more),{...options,previous:active});
-  assert.equal(done.locked_count,1);assert.equal(done.locked_plots.length,2);
+  assert.equal(done.locked_count,2);assert.equal(done.locked_plots.length,2);
   assert.deepEqual(done.locked_plots[0],first.locked_plots[0]);
   assert.ok(done.estimated_rai>5 && done.estimated_rai<7);
 });
@@ -179,9 +181,6 @@ function returnAlongLockedEdge() {
 }
 test('old harvesting cannot support two return-road passes as additional locked area',()=>{
   const {locked,rows}=returnAlongLockedEdge();
-  const {finalizePlotLocks}=require('../lib/gps-plot-locks');
-  const legacy=finalizePlotLocks(measure(rows),locked);
-  assert.ok(legacy.estimated_rai>locked.estimated_rai+.2,'fixture reproduces the old false extension');
   const guarded=analyzeGpsDay(rows,{...options,previous:locked});
   assert.deepEqual(guarded.locked_plots,locked.locked_plots);
   assert.equal(guarded.estimated_rai,locked.estimated_rai);
@@ -191,8 +190,14 @@ test('old harvesting cannot support two return-road passes as additional locked 
 });
 test('legacy false extensions are repaired only before publication, never saved or linked receipts',()=>{
   const {locked,rows}=returnAlongLockedEdge();
-  const {finalizePlotLocks}=require('../lib/gps-plot-locks');
-  const legacy=finalizePlotLocks(measure(rows),locked);
+  // An old snapshot may already contain a false road extension. Construct the
+  // persisted receipt independently of today's classifier and lock policy.
+  const turf=require('@turf/turf');
+  const coordinates=trace([[0,-8],[100,-8],[100,-3],[0,-3],[0,-8]]).map(p=>[p.longitude,p.latitude]);
+  const geometry=turf.polygon([coordinates]),area=turf.area(geometry);
+  const extra={...locked.locked_plots[0],id:`${locked.plots[0].id}@${rows.at(-1).created_at}`,
+    geometry,area_sqm:area,estimated_rai:area/1600,last_work_at:rows.at(-1).created_at,locked_at:rows.at(-1).created_at};
+  const legacy={...locked,locked_plots:[...locked.locked_plots,extra]};
   assert.equal(legacy.locked_plots.length,2);
   const originalPublished=[`auto-${locked.locked_plots[0].id}-1`];
   const repaired=analyzeGpsDay(rows,{...options,previous:legacy,publishedParts:originalPublished});
@@ -204,4 +209,53 @@ test('legacy false extensions are repaired only before publication, never saved 
   const restarted=analyzeGpsDay(rows,{...options,previous:repaired,publishedParts:originalPublished});
   assert.deepEqual(restarted.locked_plots,repaired.locked_plots);
   assert.equal(restarted.estimated_rai,repaired.estimated_rai);
+});
+
+test('three transit passes cannot bridge a locked field and a new harvesting field',()=>{
+  const positions=field();for(let x=1;x<=120;x++)positions.push([x*5,57]);
+  const locked=measure(trace(positions));
+  positions.push(...field(600,0));
+  const working=analyzeGpsDay(trace(positions),{...options,previous:locked});
+  assert.equal(working.plots.length,2);
+  for(let x=120;x>=0;x--)positions.push([x*5,60]);
+  for(let x=0;x<=120;x++)positions.push([x*5,63]);
+  const rows=trace(positions),result=analyzeGpsDay(rows,{...options,previous:working});
+  assert.equal(result.plots.length,2);
+  assert.deepEqual(result.plots[0],locked.plots[0]);
+  assert.equal(result.plots[1].id,working.plots[1].id);
+  const accepted=new Set(result.accepted_edges);
+  for(let i=1;i<rows.length;i++){
+    const x=positions[i][0];
+    if(x>150&&x<550)assert.ok(!accepted.has(`${rows[i-1].id}>${rows[i].id}`),'connecting road is excluded');
+  }
+  assert.ok(result.estimated_rai<locked.estimated_rai*2.1,'no corridor area');
+  // Recover a legacy snapshot whose pending geometry swallowed the next field.
+  const merged={...working,plots:[{...working.plots[0],state:'working',edge_keys:result.accepted_edges}]};
+  const repaired=analyzeGpsDay(rows,{...options,previous:merged});
+  assert.equal(repaired.plots.length,2);
+  assert.deepEqual(repaired.plots[0],locked.plots[0]);
+  assert.deepEqual(repaired.plots.map(p=>p.number),[1,2]);
+});
+
+test('the next field keeps work done during the five-minute departure confirmation',()=>{
+  const firstRows=trace(field());
+  const nextRows=trace(field(250,0),{start:Date.parse(firstRows.at(-1).created_at)+6000,offset:1000});
+  const rows=[...firstRows,...nextRows];
+  const initial=measure(rows.slice(0,firstRows.length+60));
+  assert.equal(initial.locked_count,1);
+  const next=analyzeGpsDay(rows,{...options,previous:initial});
+  const independent=measure(nextRows);
+  assert.equal(next.plots.length,2);
+  assert.equal(next.plots[1].started_at,independent.plots[0].started_at);
+  assert.deepEqual(next.plots[1].edge_keys,independent.plots[0].edge_keys);
+  // Subtracting saved coverage uses the display outline, simplified within 1%.
+  assert.ok(Math.abs(next.plots[1].estimated_rai-independent.estimated_rai)<independent.estimated_rai*.01);
+});
+
+test('returning inside a locked field does not consume the next field number',()=>{
+  const positions=field();for(let x=1;x<=120;x++)positions.push([x*5,57]);
+  const locked=measure(trace(positions));
+  const result=analyzeGpsDay(trace([...positions,...field(),...field(600,0)]),{...options,previous:locked});
+  assert.deepEqual(result.plots.map(p=>p.number),[1,2]);
+  assert.deepEqual(result.plots[0],locked.plots[0]);
 });
