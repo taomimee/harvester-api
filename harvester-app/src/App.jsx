@@ -6,7 +6,10 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
-import { gpsDisplayPlots, gpsPlotStatus, gpsDisplayTotals } from './gps-display-plots.mjs'
+import { gpsPlotStatus, gpsDisplayTotals } from './gps-display-plots.mjs'
+import { useGpsMapGeometry, runGpsGeometry } from './useGpsMapGeometry'
+import { gpsRouteLines } from './gps-route-lines.mjs'
+import { groupJobPlots, fieldPaymentStatus } from './gps-field-groups.mjs'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
@@ -150,7 +153,8 @@ const plotPreviewPaths = geometry => {
   const x0 = (104 - width * scale) / 2, y0 = (68 - height * scale) / 2;
   return polygons.map(rings => rings.map(ring => ring.map((p, i) => `${i ? 'L' : 'M'}${(x0 + (p[0] - minX) * correction * scale).toFixed(2)},${(y0 + (maxY - p[1]) * scale).toFixed(2)}`).join(' ') + ' Z').join(' '));
 };
-function JobPlotPreviews({ plots, receipts = [], fullyPaid = false, onOpen, onAll }) {
+function JobPlotPreviews({ plots: rawPlots, receipts = [], fullyPaid = false, onOpen, onAll }) {
+  const plots=useMemo(()=>groupJobPlots(rawPlots || []),[rawPlots]);
   const stripRef = useRef(null);
   const paidPlotKeys = new Set((Array.isArray(receipts) ? receipts : [])
     .filter(receipt => receipt.mode === 'PLOTS')
@@ -168,7 +172,7 @@ function JobPlotPreviews({ plots, receipts = [], fullyPaid = false, onOpen, onAl
     </div>}
     <div ref={stripRef} className="app-job-plot-strip flex gap-2 overflow-x-auto overscroll-x-contain snap-x snap-mandatory touch-pan-x pb-2">{plots.map((plot, i) => {
       const paths = plotPreviewPaths(plot.preview_geometry);
-      const isPaid = fullyPaid || paidPlotKeys.has(plotPaymentKey(plot));
+      const isPaid = fieldPaymentStatus(plot,paidPlotKeys,fullyPaid)==='paid';
       return <button type="button" key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} onClick={() => onOpen(plot)} style={{flex: '0 0 calc((100% - 1rem) / 3)'}} className="min-w-0 snap-start overflow-hidden rounded-lg border border-sky-200 bg-white text-left" aria-label={`เปิดแผนที่ ${plot.name || `แปลง ${i+1}`}${isPaid ? ' · จ่ายแล้ว' : ''}`}>
         <div className="relative h-16">
         {paths.length ? <svg viewBox="0 0 104 68" className="w-full h-16 bg-slate-50" role="img" aria-label="รูปขอบแปลงจริงจาก GPS"><path d="M0 17H104 M0 34H104 M0 51H104 M26 0V68 M52 0V68 M78 0V68" stroke="#e2e8f0" strokeWidth="0.5" />{paths.map((d, n) => <path key={n} d={d} fill="#bbf7d0" fillRule="evenodd" stroke="#15803d" strokeWidth="1.5" />)}</svg> : <div className="h-16 flex items-center justify-center text-xs text-slate-600">📍 เปิดแผนที่</div>}
@@ -235,6 +239,8 @@ const jobMergeCompute = (job, selectedKeys, drafts) => {
 
 function JobPlotMergeReview({job, onClose}) {
   const plots = Array.isArray(job.gps_summary?.plots) ? job.gps_summary.plots : [];
+  const fieldGroups=useMemo(()=>groupJobPlots(plots),[plots]);
+  const [reviewEditGroup,setReviewEditGroup]=useState(null);
   const paidItems = jobMergePaidItems(job);
   const paidKeys = new Set(paidItems.map(item => item.key));
   const fullyPaid = job.status === 'DONE' && job.payment_status === 'PAID';
@@ -282,13 +288,17 @@ function JobPlotMergeReview({job, onClose}) {
         fillColor:paid?'#10b981':chosen?'#60a5fa':'#cbd5e1',fillOpacity:paid?0.25:0.10,
         dashArray:paid?null:chosen?'6 4':'3 6'}}).addTo(layers);
       bounds.extend(layer.getBounds());
-      const center = plotCenter(feature);
+      const field=fieldGroups.find(g=>g.members.some(p=>plotPaymentKey(p)===key));
+      if(!paid && field?.group_id===reviewEditGroup)layer.on('click',()=>{setEditKey(key);setEditError('');});
+      if(field?.members[0]!==plot)return;
+      const status=fieldPaymentStatus(field,paidKeys,fullyPaid);
+      const center = plotCenter(jobMergeFeature(field.preview_geometry));
       if (center) {
         const paidItem = paidItems.find(item => item.key === key);
-        const label = `${paid?'✓ จ่ายแล้ว':'📍 ยังไม่จ่าย'} · ${escapeLabel(plot.name || `แปลง ${index + 1}`)}`;
+        const label = `${status==='paid'?'✓ จ่ายแล้ว':status==='partial'?'รับเงินบางส่วน':'📍 ยังไม่จ่าย'} · ${escapeLabel(field.name || `แปลง ${index + 1}`)}`;
         L.marker([center.lat,center.lng], {icon:L.divIcon({className:'bg-transparent border-0',
           html:`<span style="display:inline-block;width:max-content;transform:translate(-50%,-50%);border:2px solid white;border-radius:7px;padding:4px 6px;font:bold 11px sans-serif;color:white;background:${paid?'#047857':chosen?'#1d4ed8':'#64748b'};box-shadow:0 2px 8px #0005">${label}</span>`,iconSize:[0,0]})})
-          .bindPopup(`<b>${label}</b><br>GPS ${formatGpsRaiNgan(plot.area_rai)}${paidItem?`<br>คิดเงินแล้ว ${formatRaiNgan(paidItem.area)}`:''}`)
+          .bindPopup(`<b>${label}</b><br>GPS ${formatGpsRaiNgan(field.area_rai)}${paidItem?`<br>คิดเงินแล้ว ${formatRaiNgan(paidItem.area)}`:''}`)
           .addTo(layers);
       }
     });
@@ -327,9 +337,9 @@ function JobPlotMergeReview({job, onClose}) {
     }
     allBoundsRef.current = bounds.isValid() ? bounds : null;
     if (!fitRef.current && bounds.isValid()) {map.fitBounds(bounds.pad(0.18),{maxZoom:18});fitRef.current=true;}
-  }, [plots, paidItems, fullyPaid, selectedKeys, drafts, editKey, merge]);
+  }, [plots, fieldGroups, paidItems, fullyPaid, selectedKeys, drafts, editKey, reviewEditGroup, merge]);
 
-  const paidCount = plots.filter(plot => fullyPaid || paidKeys.has(plotPaymentKey(plot))).length;
+  const paidCount = fieldGroups.filter(g=>fieldPaymentStatus(g,paidKeys,fullyPaid)==='paid').length;
   const paidMissingGeometry = plots.some(plot => (fullyPaid || paidKeys.has(plotPaymentKey(plot))) && !plot.preview_geometry);
   return <div className="fixed inset-0 z-[10010] bg-black/70 flex items-center justify-center p-1.5 sm:p-3">
     <div role="dialog" aria-modal="true" aria-label="ทดลองรวมแปลง GPS เพื่อเจรจาคิดเงิน" className="flex h-[97dvh] max-h-[97dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -339,18 +349,21 @@ function JobPlotMergeReview({job, onClose}) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-2.5 text-xs font-bold text-amber-950">🔒 โหมดตรวจสอบเท่านั้น: การเลือกหรือลากขอบเป็นร่างในหน้านี้ ไม่เปลี่ยน GPS เดิม ใบเสร็จ ค่าแรง หรือยอดลูกหนี้</div>
-        <div className="flex flex-wrap gap-2 text-[11px] font-bold"><span className="rounded-lg bg-emerald-100 px-2 py-1 text-emerald-800">🟢 จ่ายแล้ว {paidCount} แปลง · ห้ามรวมซ้ำ</span><span className="rounded-lg bg-blue-100 px-2 py-1 text-blue-800">🔵 ยังไม่จ่าย {unpaidPlots.length} แปลง</span><span className="rounded-lg bg-amber-100 px-2 py-1 text-amber-900">🟠 แนวพื้นที่รวมที่ยังไม่จ่าย</span></div>
+        <div className="flex flex-wrap gap-2 text-[11px] font-bold"><span className="rounded-lg bg-emerald-100 px-2 py-1 text-emerald-800">🟢 จ่ายแล้ว {paidCount} แปลง · ห้ามรวมซ้ำ</span><span className="rounded-lg bg-blue-100 px-2 py-1 text-blue-800">🔵 ยังไม่จ่าย {fieldGroups.length-paidCount} แปลง</span><span className="rounded-lg bg-amber-100 px-2 py-1 text-amber-900">🟠 แนวพื้นที่รวมที่ยังไม่จ่าย</span></div>
         {paidMissingGeometry && <p className="rounded-lg border border-red-300 bg-red-50 p-2 text-xs font-bold text-red-800">⚠️ แปลงที่จ่ายแล้วบางแปลงไม่มีขอบ GPS ตรวจพื้นที่ซ้อนทับไม่ได้ ไม่ควรใช้ยอดนี้คิดเงินจริง</p>}
         <div className="relative overflow-hidden rounded-xl border border-sky-200 bg-slate-100">
           <div ref={mapDivRef} className="h-[43dvh] min-h-[310px] w-full" aria-label="แผนที่ดาวเทียมขอบแปลง GPS" />
           <button type="button" onClick={()=>{const map=mapRef.current; const bounds=allBoundsRef.current; if (map && bounds?.isValid()) map.fitBounds(bounds.pad(0.18),{maxZoom:18});}} className="absolute right-2 top-2 z-[450] rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-[11px] font-bold text-blue-800 shadow">🎯 ดูทุกแปลง</button>
         </div>
         <div className="space-y-2"><h3 className="text-sm font-black text-slate-900">เลือกแปลงที่จะรวม · แปลงจ่ายแล้วล็อกไว้</h3>
-          {plots.map((plot,index) => {const key=plotPaymentKey(plot), paid=fullyPaid||paidKeys.has(key), selected=selectedKeys.includes(key);const isEditing=editKey===key;const paidItem=paidItems.find(item=>item.key===key);
-            return <div key={key} className={`rounded-xl border p-2.5 ${paid?'border-emerald-200 bg-emerald-50':selected?'border-blue-200 bg-blue-50':'border-slate-200 bg-white'}`}>
-              <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" className="h-5 w-5 accent-blue-600" checked={paid?false:selected} disabled={paid||!plot.preview_geometry} onChange={e=>{setEditKey(null);setEditError('');setSelectedKeys(prev=>e.target.checked?[...prev,key]:prev.filter(k=>k!==key));}}/><span className="min-w-0 flex-1">{plot.name||`แปลง ${index+1}`}<span className="block text-[11px] font-normal text-slate-600">{plot.work_date} · GPS {formatGpsRaiNgan(plot.area_rai)}</span></span><span className={`shrink-0 rounded-lg px-2 py-1 text-[11px] font-black ${paid?'bg-emerald-600 text-white':'bg-sky-100 text-sky-900'}`}>{paid?'✓ จ่ายแล้ว':selected?'✓ เลือกรวม':'ไม่รวม'}</span></label>
-              {paid && <p className="mt-1 text-[11px] font-bold text-emerald-800">พื้นที่คิดเงินเดิม {paidItem?formatRaiNgan(paidItem.area):'ปิดยอดทั้งคิวแล้ว'} · ไม่ถูกแก้ไข</p>}
-              {!paid && selected && <div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={()=>{setEditKey(isEditing?null:key);setEditError('');}} className={`rounded-lg border px-2 py-1.5 text-[11px] font-bold ${isEditing?'border-amber-500 bg-amber-200 text-amber-950':'border-blue-200 bg-white text-blue-800'}`}>{isEditing?'✅ จบการลากมุม':'✏️ แก้แนวขอบ (ร่าง)'}</button>{drafts[key] && <button type="button" onClick={()=>{setDrafts(prev=>{const d={...prev};delete d[key];return d;});setEditError('');}} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-bold">↶ คืนขอบเดิม</button>}</div>}
+          {fieldGroups.map((plot,index)=>{
+            const status=fieldPaymentStatus(plot,paidKeys,fullyPaid),paid=status==='paid';
+            const keys=plot.members.filter(p=>!fullyPaid&&!paidKeys.has(plotPaymentKey(p))).map(plotPaymentKey);
+            const selected=keys.length>0&&keys.every(k=>selectedKeys.includes(k)),isEditing=reviewEditGroup===plot.group_id;
+            return <div key={plot.group_id} className={`rounded-xl border p-2.5 ${paid?'border-emerald-200 bg-emerald-50':selected?'border-blue-200 bg-blue-50':'border-slate-200 bg-white'}`}>
+              <label className="flex items-center gap-2 text-sm font-bold"><input type="checkbox" className="h-5 w-5 accent-blue-600" checked={!paid&&selected} disabled={paid||!plot.preview_geometry} onChange={e=>{setReviewEditGroup(null);setEditKey(null);setEditError('');setSelectedKeys(prev=>e.target.checked?[...new Set([...prev,...keys])]:prev.filter(k=>!keys.includes(k)));}}/><span className="min-w-0 flex-1">{plot.name||`แปลง ${index+1}`}<span className="block text-[11px] font-normal text-slate-600">{plot.work_date} · GPS {formatGpsRaiNgan(plot.area_rai)}</span></span><span className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-black">{paid?'✓ จ่ายแล้ว':status==='partial'?'รับเงินบางส่วน':selected?'✓ เลือกรวม':'ไม่รวม'}</span></label>
+              {!paid&&selected&&<div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={()=>{setReviewEditGroup(isEditing?null:plot.group_id);setEditKey(null);setEditError('');}} className="rounded-lg border border-blue-200 bg-white px-2 py-1.5 text-[11px] font-bold">{isEditing?'✅ จบการลากมุม':'✏️ แก้แนวขอบ (ร่าง)'}</button>{keys.some(k=>drafts[k])&&<button type="button" onClick={()=>{setDrafts(prev=>{const d={...prev};keys.forEach(k=>delete d[k]);return d;});setEditError('');}} className="rounded-lg border bg-white px-2 py-1.5 text-[11px] font-bold">↶ คืนขอบเดิม</button>}</div>}
+              {isEditing&&!editKey&&<p className="mt-2 text-xs text-orange-900">แตะบริเวณในแปลงบนแผนที่เพื่อลากแก้ขอบ</p>}
             </div>;
           })}
         </div>
@@ -358,11 +371,11 @@ function JobPlotMergeReview({job, onClose}) {
         {editError && <p role="alert" className="rounded-lg bg-red-50 p-2 text-xs font-bold text-red-800">❌ {editError}</p>}
         {merge.error || paidMissingGeometry ? <p role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm font-bold text-red-800">❌ {merge.error || 'ขอบ GPS ของแปลงชำระแล้วไม่ครบ'}</p> : <div className="rounded-xl border border-orange-300 bg-orange-50 p-3 space-y-2">
           <h3 className="text-sm font-black text-orange-950">📐 ผลรวมพื้นที่ที่ยังไม่รับเงิน (ร่าง)</h3>
-          <div className="flex justify-between text-xs"><span>บวกพื้นที่ GPS {merge.selected.length} แปลง</span><b>{plotThaiArea(merge.areaSum).text}</b></div>
+          <div className="flex justify-between text-xs"><span>บวกพื้นที่ GPS {groupJobPlots(merge.selected).length} แปลง</span><b>{plotThaiArea(merge.areaSum).text}</b></div>
           <div className="flex justify-between text-xs"><span>หักส่วนทับซ้อนกันเอง</span><b>− {plotThaiArea(merge.overlap).text}</b></div>
           {merge.paidOverlap>0.01 && <div className="flex justify-between text-xs text-emerald-900"><span>หักส่วนทับกับแปลงจ่ายแล้ว</span><b>− {plotThaiArea(merge.paidOverlap).text}</b></div>}
           <div className="flex justify-between items-center border-t border-orange-300 pt-2"><b className="text-sm">พื้นที่ไม่ซ้ำและยังไม่จ่าย</b><b className="text-xl text-orange-900">{plotThaiArea(merge.unpaidArea).text}</b></div>
-          <p className="text-xs font-bold text-slate-700">{jobMergeParts(merge.unpaid)===1?'✅ แนวขอบเชื่อมเป็นพื้นที่เดียวกันตาม GPS':jobMergeParts(merge.unpaid)===0?'⚠️ ไม่เหลือพื้นที่หลังหักแปลงที่จ่ายแล้ว':'⚠️ ยังแยกเป็น '+jobMergeParts(merge.unpaid)+' พื้นที่จริง ไม่ลากเส้นปิดช่องว่างหรืออ้างว่าเป็นแปลงเดียวโดยอัตโนมัติ'}</p>
+          <p className="text-xs font-bold text-slate-700">{jobMergeParts(merge.unpaid)===1?'✅ แนวขอบเชื่อมเป็นพื้นที่เดียวกันตาม GPS':jobMergeParts(merge.unpaid)===0?'⚠️ ไม่เหลือพื้นที่หลังหักแปลงที่จ่ายแล้ว':'ขอบแปลงมีช่องว่างตาม GPS ระบบรวมยอดโดยไม่เติมพื้นที่ในช่องว่าง'}</p>
         </div>}
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 space-y-2">
           <h3 className="text-sm font-black text-emerald-950">🤝 ทดลองไร่ที่ตกลงคิดเงินจริง — เฉพาะส่วนยังไม่จ่าย</h3>
@@ -373,7 +386,7 @@ function JobPlotMergeReview({job, onClose}) {
           <p className="text-[11px] font-bold text-amber-900">⚠️ ตัวเลขนี้ยังไม่บันทึกและไม่ใช่ใบแจ้งหนี้ โปรดยืนยันไร่/ส่วนลดในหน้าตรวจยอดหรือจบงานตามขั้นตอนเดิม</p>
         </div>
       </div>
-      <div className="shrink-0 border-t bg-white p-3 flex gap-2"><button type="button" onClick={()=>{setDrafts({});setSelectedKeys(unpaidPlots.map(plotPaymentKey));setEditKey(null);setAgreedRai('');setEditError('');}} className="flex-1 rounded-xl border border-slate-300 px-3 py-3 text-xs font-black text-slate-700">↶ ล้างร่าง</button><button type="button" onClick={onClose} className="flex-[1.6] rounded-xl bg-blue-700 px-3 py-3 text-xs font-black text-white">ปิดหน้าตรวจแปลง (ไม่บันทึก)</button></div>
+      <div className="shrink-0 border-t bg-white p-3 flex gap-2"><button type="button" onClick={()=>{setReviewEditGroup(null);setDrafts({});setSelectedKeys(unpaidPlots.map(plotPaymentKey));setEditKey(null);setAgreedRai('');setEditError('');}} className="flex-1 rounded-xl border border-slate-300 px-3 py-3 text-xs font-black text-slate-700">↶ ล้างร่าง</button><button type="button" onClick={onClose} className="flex-[1.6] rounded-xl bg-blue-700 px-3 py-3 text-xs font-black text-white">ปิดหน้าตรวจแปลง (ไม่บันทึก)</button></div>
     </div>
   </div>;
 }
@@ -587,7 +600,7 @@ function RaiNganInput({ value, onChange, disabled = false, autoFocus = false, cl
   );
 }
 
-const plotRingFeature = (points) => {
+const plotRingFeature = (points, minimumSqM = 1) => {
   if (!Array.isArray(points) || points.length < 3) throw new Error('ต้องมีอย่างน้อย 3 จุด');
   const coords = [];
   for (const p of points) {
@@ -601,7 +614,9 @@ const plotRingFeature = (points) => {
   if (coords.length < 3) throw new Error('ต้องมีอย่างน้อย 3 มุมที่ไม่ซ้ำกัน');
   const feature = turf.polygon([[...coords, coords[0]]]);
   if (turf.kinks(feature).features.length) throw new Error('เส้นตัดกันเอง กรุณาลากจุดแก้ให้เป็นวง');
-  if (turf.area(feature) < 1) throw new Error('พื้นที่ต้องมีอย่างน้อย 1 ตร.ม.');
+  // Small interior GPS gaps are valid exclusions, not separate sub-metre fields.
+  const ringArea=turf.area(feature);
+  if (ringArea <= 0 || ringArea < minimumSqM) throw new Error('พื้นที่ต้องมีอย่างน้อย 1 ตร.ม.');
   return feature;
 };
 
@@ -611,7 +626,7 @@ const plotGeometry = (plot) => {
   const outer = plotRingFeature(plot.points);
   let net = outer;
   for (const hole of (plot.holes || [])) {
-    const cut = plotRingFeature(hole.points);
+    const cut = plotRingFeature(hole.points, 0);
     net = plotClip('difference', net, cut);
     if (!net) break;
   }
@@ -657,7 +672,7 @@ const detectPlotHoles = (plot, coverage, headWidth) => {
   if (!coverage) return plot.holeSuggestions || [];
   const { outer } = plotGeometry(plot);
   const suggestions = [...(plot.holeSuggestions || [])];
-  const known = [...(plot.holes || []), ...suggestions].map(h => plotRingFeature(h.points));
+  const known = [...(plot.holes || []), ...suggestions].map(h => plotRingFeature(h.points, 0));
   const width = Math.max(1, Number(headWidth) || 3);
   const minSqM = Math.max(80, width * width * 6);
   for (const poly of plotPolygonParts(coverage)) {
@@ -868,6 +883,8 @@ function TrackingMap({
   const [linkNewQueueDrafts, setLinkNewQueueDrafts] = useState({});
   const [linkCreatingQueue, setLinkCreatingQueue] = useState(false);
   const [plotRevision, setPlotRevision] = useState(null);
+  const [fieldEditGroup,setFieldEditGroup]=useState(null);
+  const [fieldEditAction,setFieldEditAction]=useState('boundary');
   const [plotReload, setPlotReload] = useState(0);
   const autoHarvestEdges = useMemo(() => autoArea?.enabled && Array.isArray(autoArea.accepted_edges)
     ? new Set(autoArea.accepted_edges) : null, [autoArea]);
@@ -880,13 +897,14 @@ function TrackingMap({
 
   const openLinkReview = (all, indices, after = null) => {
     setLinkNewQueueDrafts({}); setAutoFollow(false); setMobileToolsOpen(false);
-    const overlaps = new Set();
+    const overlaps = new Set(), geometryCache=new Map();
+    const geometryAt=i=>{if(!geometryCache.has(i))geometryCache.set(i,all===plots?plotGeometries[i]:plotGeometry(all[i]));return geometryCache.get(i);};
     for (const i of indices) {
       if (!all[i].auto_origin) continue;
       for (const [j,other] of all.entries()) {
         if (indices.includes(j) || other.auto_origin?.plot_id === all[i].auto_origin.plot_id) continue;
         try {
-          const a=plotGeometry(all[i]), b=plotGeometry(other);
+          const a=geometryAt(i), b=geometryAt(j);
           const overlap=a.net && b.net ? plotClip('intersect',a.net,b.net) : null;
           if (overlap && turf.area(overlap)>Math.max(80,Math.min(a.netSqM,b.netSqM)*.3)) overlaps.add(other.name || `แปลงที่ ${j+1}`);
         } catch { /* Invalid older plots remain available for their existing repair flow. */ }
@@ -1143,6 +1161,7 @@ function TrackingMap({
 
   const exitPlotEditor = () => {
     setDrawMode(false);
+    setFieldEditGroup(null);
     setPoints([]);
     setEditingPlotIndex(null);
     setDraftKind('manual');
@@ -1366,47 +1385,24 @@ function TrackingMap({
   // 2) ขยายเส้นออกตามครึ่งหนึ่งของความกว้างหัวเกี่ยว
   // 3) ตัดเฉพาะพื้นที่ที่อยู่ภายในขอบแปลงที่บันทึก
   // ผลที่ได้จึงเป็นค่าประมาณพื้นที่ที่หัวเกี่ยวผ่านแล้วจริง
-  const harvestCoverage = useMemo(() => {
+  const getHarvestCoverage = async () => {
     if (!routeReady) return null;
-    try {
-      const segments = [];
-      for (let i = 1; i < pathData.length; i++) {
-        const a = pathData[i - 1];
-        const b = pathData[i];
-      if (excludedEdges.has(gpsEdgeKey(a, b))) continue;
-        const info = getSegmentInfo(a, b);
-        if (!info.harvesting || info.km <= 0 || info.km > 0.25) continue;
-
-        const aLat = Number(a.latitude), aLng = Number(a.longitude);
-        const bLat = Number(b.latitude), bLng = Number(b.longitude);
-        if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
-        segments.push([[aLng, aLat], [bLng, bLat]]);
-      }
-
-      if (segments.length === 0) return null;
-      return turf.buffer(
-        turf.multiLineString(segments),
-        Math.max(0.5, Number(headWidthMeters) / 2),
-        { units: 'meters', steps: 5 }
-      );
-    } catch (err) {
-      console.warn('คำนวณพื้นที่เกี่ยวไม่ได้:', err);
-      return null;
+    const segments=[];
+    for(let i=1;i<pathData.length;i++){
+      const a=pathData[i-1],b=pathData[i],info=getSegmentInfo(a,b);
+      if(excludedEdges.has(gpsEdgeKey(a,b)) || !info.harvesting || info.km<=0 || info.km>.25)continue;
+      const line=[[Number(a.longitude),Number(a.latitude)],[Number(b.longitude),Number(b.latitude)]];
+      if(line.flat().every(Number.isFinite))segments.push(line);
     }
-  }, [pathData, headWidthMeters, excludedEdges, routeReady, autoHarvestEdges]);
+    return runGpsGeometry('coverage',{segments,headWidth:headWidthMeters}).result;
+  };
 
-  const plotGeometries = useMemo(() => plots.map(plot => {
-    try { return plotGeometry(plot); } catch (_) { return null; }
-  }), [plots]);
-
-  const displayProjection = useMemo(() => {
-    try { return { plots: gpsDisplayPlots(plots, plotGeometries, autoArea, vehicleId, workDate, plotRevision), error: '' }; }
-    catch (_) { return { plots: [], error: 'ยังรวมขอบแปลงไม่ได้ กรุณาโหลดแปลงล่าสุดอีกครั้ง' }; }
-  }, [plots, plotGeometries, autoArea, vehicleId, workDate, plotRevision]);
+  const displayProjection=useGpsMapGeometry(plots,autoArea,vehicleId,workDate,plotRevision);
+  const plotGeometries=displayProjection.geometries;
   useEffect(() => {
     onDisplayTotals?.(plotRevision !== null && !displayProjection.error
-      ? gpsDisplayTotals(displayProjection.plots, autoArea, vehicleId, workDate) : null);
-  }, [displayProjection, plotRevision, autoArea, vehicleId, workDate, onDisplayTotals]);
+      ? gpsDisplayTotals(displayProjection.plots, displayProjection.source, vehicleId, workDate) : null);
+  }, [displayProjection, plotRevision, vehicleId, workDate, onDisplayTotals]);
   const displayPlots = displayProjection.plots;
   const displayWorking = displayPlots.filter(p => p.growing).length;
   const displayName = group => {
@@ -1414,37 +1410,9 @@ function TrackingMap({
     return names.join(' / ') || group.name || 'แปลงที่บันทึก';
   };
 
-  const plotProgressList = useMemo(() => plotGeometries.map((geometry, index) => {
-    const totalSqM = geometry?.netSqM || 0;
-    let coveredSqM = 0;
-    try {
-      const clipped = plotClip('intersect', geometry?.net, harvestCoverage);
-      if (clipped) coveredSqM = Math.min(totalSqM, Math.max(0, turf.area(clipped)));
-    } catch (_) {}
-    const percent = totalSqM > 0 ? Math.min(100, coveredSqM / totalSqM * 100) : 0;
-    return {
-      index, totalSqM, coveredSqM, percent,
-      totalRai: totalSqM / 1600, coveredRai: coveredSqM / 1600,
-      remainingRai: Math.max(0, totalSqM - coveredSqM) / 1600, remainingPercent: 100 - percent
-    };
-  }), [plotGeometries, harvestCoverage]);
-
-  const overallProgress = (() => {
-    const totalSqM = plotProgressList.reduce((sum, p) => sum + p.totalSqM, 0);
-    const coveredSqM = plotProgressList.reduce((sum, p) => sum + p.coveredSqM, 0);
-    const percent = totalSqM > 0 ? Math.min(100, Math.max(0, (coveredSqM / totalSqM) * 100)) : 0;
-    return {
-      totalRai: totalSqM / 1600,
-      coveredRai: coveredSqM / 1600,
-      remainingRai: Math.max(0, (totalSqM - coveredSqM) / 1600),
-      percent,
-      remainingPercent: Math.max(0, 100 - percent)
-    };
-  })();
-
   useEffect(() => {
-    onRouteStats?.({totalKm:gpsStats.totalKm,harvestKm:gpsStats.harvestKm,durationMin:gpsStats.durationMin,points:gpsStats.points,percent:overallProgress.percent,plotCount:displayPlots.length});
-  }, [onRouteStats, gpsStats.totalKm, gpsStats.harvestKm, gpsStats.durationMin, gpsStats.points, overallProgress.percent, displayPlots.length]);
+    onRouteStats?.({totalKm:gpsStats.totalKm,harvestKm:gpsStats.harvestKm,durationMin:gpsStats.durationMin,points:gpsStats.points,plotCount:displayPlots.length});
+  }, [onRouteStats, gpsStats.totalKm, gpsStats.harvestKm, gpsStats.durationMin, gpsStats.points, displayPlots.length]);
 
   const selectPlotOnMap = (plot) => {
     if (!plot?.points?.length) return;
@@ -1625,12 +1593,14 @@ function TrackingMap({
 
   const scanPlotHoles = async (plotIndex) => {
     if (isSavingPlot || isAutoPlotting) return;
-    if (!harvestCoverage) { alert('ยังไม่มีแนวเกี่ยวพอสำหรับค้นหาพื้นที่ว่าง ใช้วาดพื้นที่หักเองได้ครับ'); return; }
     const scope = plotStorageKey;
     setIsAutoPlotting(true);
     try {
       await new Promise(resolve => setTimeout(resolve, 0));
       if (plotScopeRef.current !== scope) return;
+      const harvestCoverage = await getHarvestCoverage();
+      if (plotScopeRef.current !== scope) return;
+      if (!harvestCoverage) throw new Error('ยังไม่มีแนวเกี่ยวพอ ใช้วาดพื้นที่หักเองได้ครับ');
       const plot = plots[plotIndex];
       const holeSuggestions = detectPlotHoles(plot, harvestCoverage, headWidthMeters);
       await savePlotsToServer(plots.map((p, i) => i === plotIndex ? { ...p, holeSuggestions } : p));
@@ -1657,6 +1627,8 @@ function TrackingMap({
 
     try {
       await new Promise(resolve => setTimeout(resolve, 0));
+      if (plotScopeRef.current !== autoScope) return;
+      const harvestCoverage = await getHarvestCoverage();
       if (plotScopeRef.current !== autoScope) return;
       // 1) เก็บเฉพาะ segment ที่ระบบประเมินว่า "กำลังเกี่ยว"
       const candidates = [];
@@ -1918,7 +1890,7 @@ function TrackingMap({
     const zoom = pathData.length > 0 ? 17 : 6;
 
     if (!mapInstance.current) {
-      mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(center, zoom);
+      mapInstance.current = L.map(mapRef.current, { zoomControl: false, preferCanvas: true }).setView(center, zoom);
       L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
         attribution: 'Google Maps', maxZoom: 20
       }).addTo(mapInstance.current);
@@ -1973,29 +1945,8 @@ function TrackingMap({
       const routeGroup = L.layerGroup().addTo(mapInstance.current);
       const markerGroup = L.layerGroup().addTo(mapInstance.current);
 
-      for (let i = 1; i < pathData.length; i++) {
-        const a = pathData[i - 1];
-        const b = pathData[i];
-        const edgeKey = gpsEdgeKey(a, b);
-        const excluded = excludedEdges.has(edgeKey);
-        const selected = selectedEdges.has(edgeKey);
-        if (excluded && !routeEdit && !showExcluded) continue;
-        const aLat = Number(a.latitude), aLng = Number(a.longitude);
-        const bLat = Number(b.latitude), bLng = Number(b.longitude);
-        if (![aLat, aLng, bLat, bLng].every(Number.isFinite)) continue;
-        const segment = getSegmentInfo(a, b);
-        const harvesting = segment.harvesting;
-        L.polyline([[aLat, aLng], [bLat, bLng]], {
-          // กำลังเกี่ยวให้เด่นชัด ส่วนวิ่งทั่วไปทำบาง/โปร่งเพื่อลดตาลาย
-          // โหมดยางลบ: สีส้ม = กำลังจะลบ, สีเขียว = กำลังจะคืน, สีเทา = ตัดไว้แล้ว
-          color: selected ? (cutMode === 'restore' ? '#22C55E' : '#F97316') : excluded ? '#94A3B8' : harvesting ? '#2563EB' : '#D946EF',
-          weight: selected ? 9 : harvesting ? 4 : 2,
-          dashArray: excluded && !selected ? '5 7' : undefined,
-          opacity: selected ? 1 : excluded ? 0.45 : 0.8,
-          bubblingMouseEvents: false
-        }).addTo(routeGroup);
-
-      }
+      const lines=gpsRouteLines(pathData,{excluded:excludedEdges,selected:selectedEdges,showExcluded,editing:routeEdit,restore:cutMode==='restore',harvesting:(a,b)=>getSegmentInfo(a,b).harvesting});
+      for(const {lines:segments,...style} of lines) L.polyline(segments,{...style,interactive:false,bubblingMouseEvents:false}).addTo(routeGroup);
 
       const firstPoint = pathData[0];
       const lastPoint = pathData[pathData.length - 1];
@@ -2429,7 +2380,10 @@ function TrackingMap({
     const labels = [];
     const connectors = L.layerGroup().addTo(plotsLayer.current);
     displayPlots.forEach((group, index) => {
-      if (drawMode && group.indices.includes(editingPlotIndex)) return;
+      if (drawMode && group.indices.includes(editingPlotIndex)) {
+        L.geoJSON(group.geometry,{style:{color:'#176147',weight:2,fillOpacity:.08,interactive:false}}).addTo(plotsLayer.current);
+        return;
+      }
       if (!group.geometry) return;
       const boundaryColor = group.growing ? '#b45309' : ['#176147','#1d4ed8','#9d174d','#92400e','#6d28d9','#0e7490'][index % 6];
       const selected = selectedPlotId === group.id || group.indices.some(i => plots[i].id === selectedPlotId);
@@ -2444,7 +2398,7 @@ function TrackingMap({
         for (const hole of [...(part.holes || []), ...(part.holeSuggestions || []).filter(h => h.status === 'pending')]) {
           try {
             const pending = hole.status === 'pending';
-            const inside = plotClip('intersect', geometry?.outer, plotRingFeature(hole.points));
+            const inside = plotClip('intersect', geometry?.outer, plotRingFeature(hole.points, 0));
             if (inside) L.geoJSON(inside, { style: { color: '#DC2626', weight: 2, fill: pending, fillOpacity: .27, dashArray: '6 5' }, bubblingMouseEvents: false, interactive: !drawMode && workspaceMode === 'manage' })
               .bindTooltip(pending ? 'เสนอให้หัก • แตะเพื่อตรวจแก้' : 'พื้นที่หักแล้ว • แตะเพื่อลากแก้')
               .on('click', () => openHoleEditor(partIndex, pending ? 'suggestion' : 'existing', hole.id)).addTo(plotsLayer.current);
@@ -2519,16 +2473,29 @@ function TrackingMap({
 
   useEffect(()=>{
     if(!focusPlot || String(focusPlot.vehicle_id)!==String(vehicleId) || focusPlot.work_date!==workDate) return;
-    const plot=plots.find(p=>String(p.id)===String(focusPlot.id));
-    if(plot){selectPlotOnMap(plot);}
-  },[focusPlot,plots,vehicleId,workDate]);
+    const group=displayPlots.find(g=>g.indices.some(i=>String(plots[i]?.id)===String(focusPlot.id)));
+    if(group)selectPlotOnMap(group);
+  },[focusPlot,plots,displayPlots,vehicleId,workDate]);
+  useEffect(()=>{
+    const map=mapInstance.current;
+    if(!map || !fieldEditGroup || drawMode || exclusionPanelIndex!==null)return;
+    const layer=L.layerGroup().addTo(map);
+    for(const i of fieldEditGroup.indices){
+      const net=plotGeometries[i]?.net;if(!net)continue;
+      L.geoJSON(net,{style:{color:'#f59e0b',weight:2,fillColor:'#fbbf24',fillOpacity:.3},onEachFeature:(_f,l)=>l.on('click',e=>{
+        L.DomEvent.stopPropagation(e);
+        if(fieldEditAction==='holes')openExclusionPanel(i);else openPlotEditor(i);
+      })}).addTo(layer);
+    }
+    return()=>layer.remove();
+  },[fieldEditGroup,fieldEditAction,plotGeometries,drawMode,exclusionPanelIndex]);
   const panelPlot = exclusionPanelIndex === null ? null : plots[exclusionPanelIndex];
   const panelPendingHoles = (panelPlot?.holeSuggestions || []).filter(h => h.status === 'pending');
 
   return (
     <div className={`gps-workspace relative w-full h-full flex flex-col ${routeEdit ? 'gps-cutting' : ''}`}>
 
-      {!drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
+      {!fieldEditGroup && !drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
         <div className="gps-mode-bar" role="group" aria-label="รูปแบบใช้งานแผนที่">
           <button type="button" aria-pressed={workspaceMode === 'view'} onClick={() => {setWorkspaceMode('view');setSheetTab('plots');setMobileToolsOpen(false);setPlotActionsId(null);}}>🚜 ดูรถ</button>
           <button type="button" aria-pressed={workspaceMode === 'manage'} onClick={() => {setWorkspaceMode('manage');setAutoFollow(false);setMobileToolsOpen(false);}}>🌾 จัดการแปลง</button>
@@ -2578,12 +2545,14 @@ function TrackingMap({
           <div className="p-4 border-b">
             <h3 className="text-lg font-black text-slate-900">🌾 แปลงนี้เป็นของใคร?</h3>
             <p className="text-xs text-slate-500">ค้นหาคิวเดิมที่ยังไม่เสร็จ หรือสร้างคิวใหม่จากแปลงนี้</p>
-            {linkReview.indices.some(i=>linkReview.all[i].auto_origin) && <p className="text-xs text-slate-600 mt-2">เลือกคิวครั้งเดียว จะผูกทุกส่วนของแปลงออโต้เดียวกัน ยอด GPS ใช้ประกอบการลงยอดในคิว</p>}
+            {linkReview.indices.some(i=>linkReview.all[i].auto_origin) && <p className="text-xs text-slate-600 mt-2">เลือกคิวครั้งเดียวเพื่อผูกทั้งแปลง ยอด GPS ใช้ประกอบการลงยอดในคิว</p>}
             {linkReview.overlaps?.length>0 && <p role="alert" className="text-xs text-amber-800 bg-amber-50 p-2 mt-2 rounded-lg">ขอบซ้อนกับแปลงที่บันทึกไว้: {linkReview.overlaps.join(' / ')} หากเป็นงานเดียวกัน ให้เลือกใช้เพียงชุดเดียวเพื่อไม่ให้ยอดซ้ำ</p>}
           </div>
           <div className="p-3 space-y-3 overflow-y-auto">
-            {linkReview.indices.map(index=>{
+            {linkReview.indices.filter(index=>linkedPartIndices(index)[0]===index).map((index,fieldIndex)=>{
               const plot=linkReview.all[index];
+              const fieldArea=linkedPartIndices(index).reduce((sum,i)=>sum+(Number(linkReview.all[i].area?.rawRai)||0),0);
+              const fieldName=String(plot.name || `แปลงที่ ${fieldIndex+1}`).replace(/\s*·\s*ส่วน\s*\d+$/,'');
               const draft=linkNewQueueDrafts[plot.id] || {query:'',customer_name:'',phone:'',create_new:false};
               const query=String(draft.query || '').trim();
               const q=query.toLowerCase();
@@ -2607,16 +2576,15 @@ function TrackingMap({
               return <div key={plot.id} className="bg-slate-50 border rounded-2xl p-3">
                 <div className="flex justify-between gap-2 items-start">
                   <div>
-                    <strong>แปลงที่ {index+1}</strong>
-                    <p className="text-[10px] text-slate-500">{plot.name || `แปลงที่ ${index+1}`}</p>
+                    <strong>{fieldName}</strong>
                   </div>
-                  <span className="text-sm font-black text-emerald-700 text-right">{formatThaiRai(plot.area?.rawRai)}</span>
+                  <span className="text-sm font-black text-emerald-700 text-right">{formatThaiRai(fieldArea)}</span>
                 </div>
 
                 <div className="mt-3">
                   <label className="block text-xs font-black text-slate-800 mb-1">🔎 พิมพ์ชื่อลูกค้า / เบอร์ / เลขคิว</label>
                   <input
-                    aria-label={`ค้นหาคิวหรือสร้างคิวสำหรับแปลงที่ ${index+1}`}
+                    aria-label={`ค้นหาคิวหรือสร้างคิวสำหรับ ${fieldName}`}
                     disabled={isSavingPlot || linkCreatingQueue}
                     placeholder="เช่น น้าเดต / 081... / 123"
                     value={draft.query || ''}
@@ -2750,23 +2718,23 @@ function TrackingMap({
       )}
 
 
-      {!drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
+      {!fieldEditGroup && !drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
         <>
           <div className="gps-map-actions">
-            {displayPlots.length > 0 && workspaceMode === 'view' && <button type="button" onClick={showAllPlots}>🌾 ดูแปลงทั้งหมด</button>}
-            {pathData.length > 0 && (workspaceMode === 'manage' || !plots.length) && <button type="button" onClick={fitAllRoute}>🗺️ ดูเส้นทาง</button>}
-            {pathData.length > 0 && trackingMode === 'realtime' && <button type="button" aria-pressed={autoFollow} onClick={() => {setMobileToolsOpen(false);setAutoFollow(v => !v);}}>{autoFollow ? '🎯 กำลังตามรถ' : '🎯 ตามรถ'}</button>}
-            {workspaceMode === 'manage' && <button type="button" className="gps-primary" aria-expanded={mobileToolsOpen && sheetTab === 'tools'} onClick={() => {setSheetTab('tools');setMobileToolsOpen(v => sheetTab === 'tools' ? !v : true);}}>🛠 เครื่องมือแปลง</button>}
+            {displayPlots.length > 0 && workspaceMode === 'view' && <button type="button" aria-label="ดูแปลงทั้งหมด" title="ดูแปลงทั้งหมด" onClick={showAllPlots}>🌾 <span className="gps-action-label">ดูแปลงทั้งหมด</span></button>}
+            {pathData.length > 0 && (workspaceMode === 'manage' || !plots.length) && <button type="button" aria-label="ดูเส้นทาง" title="ดูเส้นทาง" onClick={fitAllRoute}>🗺️ <span className="gps-action-label">ดูเส้นทาง</span></button>}
+            {pathData.length > 0 && trackingMode === 'realtime' && <button type="button" aria-pressed={autoFollow} aria-label={autoFollow ? 'หยุดตามรถ' : 'ตามรถ'} title="ตามรถ" onClick={() => {setMobileToolsOpen(false);setAutoFollow(v => !v);}}><span aria-hidden="true">🎯</span><span className="gps-action-label">{autoFollow ? 'กำลังตามรถ' : 'ตามรถ'}</span></button>}
+            {workspaceMode === 'manage' && <button type="button" className="gps-primary" aria-label="เครื่องมือแปลง" title="เครื่องมือแปลง" aria-expanded={mobileToolsOpen && sheetTab === 'tools'} onClick={() => {setSheetTab('tools');setMobileToolsOpen(v => sheetTab === 'tools' ? !v : true);}}>🛠 <span className="gps-action-label">เครื่องมือแปลง</span></button>}
           </div>
 
           <button type="button" className="gps-plot-launcher" aria-expanded={mobileToolsOpen && sheetTab === 'plots'} aria-controls="gps-plot-sheet" onClick={() => {setSheetTab('plots');setMobileToolsOpen(v => sheetTab === 'plots' ? !v : true);}}>
-            <span><strong>{`🌾 แปลง${plotDateLabel} ${displayPlots.length} แปลง${displayWorking ? ' · กำลังวัดต่อ' : ''}`}</strong><small>แตะดูยอดแต่ละแปลง</small></span>
+            <span><strong>{displayProjection.pending && !displayPlots.length ? 'กำลังโหลดแปลง…' : `🌾 แปลง${plotDateLabel} ${displayPlots.length} แปลง${displayWorking ? ' · กำลังวัดต่อ' : ''}`}</strong><small>แตะดูยอดแต่ละแปลง</small></span>
             <span aria-hidden="true">{mobileToolsOpen ? '⌄' : '⌃'}</span>
           </button>
         </>
       )}
 
-      {mobileToolsOpen && !drawMode && !routeEdit && !linkReview && (
+      {mobileToolsOpen && !fieldEditGroup && !drawMode && !routeEdit && !linkReview && (
         <section id="gps-plot-sheet" className="gps-sheet" aria-label={sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : 'รายการแปลง'}>
           <div className="gps-sheet-header" onTouchStart={e => {sheetSwipeStart.current = e.touches[0].clientY;}} onTouchEnd={e => {if (sheetSwipeStart.current !== null && e.changedTouches[0].clientY - sheetSwipeStart.current > 55) setMobileToolsOpen(false);sheetSwipeStart.current = null;}}>
             <span className="gps-sheet-handle" aria-hidden="true" />
@@ -2788,6 +2756,7 @@ function TrackingMap({
               </div></details>
             </> : <>
               {displayProjection.error && <p role="alert">{displayProjection.error}</p>}
+              {displayProjection.pending && <p role="status">กำลังอัปเดตขอบแปลง…</p>}
               {autoArea?.editable_error && <p role="status">{autoArea.editable_error}</p>}
               {!displayPlots.length && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : 'รอแนวเกี่ยวชัดเจน แล้วระบบจะเก็บแปลงให้อัตโนมัติ'}{workspaceMode === 'manage' && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
               {displayPlots.map(group => {
@@ -2804,16 +2773,12 @@ function TrackingMap({
                       <button type="button" onClick={()=>copyPlotCenter(plotCenter(group.geometry))}>📍 คัดลอกพิกัด</button>
                     </div>}
                     {!group.indices.length && group.autoPlot?.locked_at && !autoArea?.editable_ready && <button className="gps-primary" type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>useAutoPlot(group.autoPlot,'edit')}>นำส่วนที่ล็อกแล้วมาใช้</button>}
-                    {group.indices.map((i,part) => {const plot=plots[i];return <div key={plot.id} className="gps-saved-part">
-                      {group.indices.length > 1 && <p className="gps-auto-detail">ส่วนที่บันทึก {part+1} ของแปลงนี้</p>}
-                      <div className="gps-plot-buttons"><button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');openPlotEditor(i);}}>✏️ แก้ขอบ{group.indices.length > 1 ? `ส่วน ${part+1}` : 'แปลง'}</button>
-                        {workspaceMode === 'manage' && <button type="button" disabled={isSavingPlot || isAutoPlotting} onClick={() => openExclusionPanel(i)}>พื้นที่หัก {(plot.holes || []).length} วง</button>}
-                      </div>
-                      {workspaceMode === 'manage' && <div className="gps-plot-more">
-                        <button type="button" aria-expanded={plotActionsId === plot.id} onClick={() => setPlotActionsId(id => id === plot.id ? null : plot.id)}>เพิ่มเติม ⋯</button>
-                        {plotActionsId === plot.id && <div className="gps-delete-zone"><p>ลบส่วนที่บันทึกนี้ออกจากแปลง</p><button type="button" disabled={isSavingPlot || plotRevision===null} onClick={async () => {if(!window.confirm(`ลบ ${plot.name || 'ส่วนที่เลือก'} ใช่ไหม? พื้นที่ GPS ที่เชื่อมกับคิวจะเปลี่ยนตาม`))return;const ok=await savePlotsToServer(plots.filter((_,idx)=>idx!==i));if(ok){setPlotActionsId(null);if(selectedPlotId===plot.id)setSelectedPlotId(null);}}}>ลบส่วนนี้</button></div>}
-                      </div>}
-                    </div>;})}
+                    {!!group.indices.length && <div className="gps-plot-buttons">
+                      <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');selectPlotOnMap(group);setFieldEditAction('boundary');setFieldEditGroup(group);}}>✏️ แก้ขอบแปลง</button>
+                      <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');selectPlotOnMap(group);setFieldEditAction('holes');setFieldEditGroup(group);}}>หักพื้นที่</button>
+                      <button type="button" aria-expanded={plotActionsId===group.id} onClick={()=>setPlotActionsId(id=>id===group.id?null:group.id)}>เพิ่มเติม ⋯</button>
+                      {plotActionsId===group.id && <div className="gps-delete-zone"><p>ลบขอบแปลงนี้ออกจากรายการ พื้นที่ GPS ที่ผูกคิวจะเปลี่ยนตาม</p><button type="button" disabled={isSavingPlot || plotRevision===null} onClick={async()=>{if(!window.confirm(`ลบ ${displayName(group)} ทั้งแปลงใช่ไหม? พื้นที่ GPS ที่เชื่อมกับคิวจะเปลี่ยนตาม`))return;const indices=new Set(group.indices);const ok=await savePlotsToServer(plots.filter((_,i)=>!indices.has(i)));if(ok){setPlotActionsId(null);setSelectedPlotId(null);}}}>ลบแปลงนี้</button></div>}
+                    </div>}
                   </details>
                 </article>;
               })}
@@ -2829,12 +2794,13 @@ function TrackingMap({
         <div role="status" className="gps-route-warning">เครื่องมือตัดเส้นยังไม่พร้อม <button type="button" onClick={() => setReloadRoute(n => n+1)}>ลองใหม่</button></div>
       )}
 
+      {fieldEditGroup && !drawMode && exclusionPanelIndex===null && <div className="gps-field-pick" role="status"><div><strong>{displayName(fieldEditGroup)} · {formatGpsRaiNgan(fieldEditGroup.areaRai)}</strong><p>แตะบริเวณในแปลงที่ต้องการ{fieldEditAction==='holes'?'หักพื้นที่':'แก้ขอบ'}</p></div><button type="button" onClick={()=>setFieldEditGroup(null)}>กลับ</button></div>}
       {/* Compact editor: real-time net area, movable vertices, undo and cancel. */}
       {drawMode && (
         <>
           <div className="absolute top-3 left-3 right-16 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-[430] bg-white/95 backdrop-blur px-3 py-2 rounded-xl shadow-lg border border-orange-300 pointer-events-none sm:min-w-72 sm:max-w-[75%]">
-            <p className="font-black text-xs text-orange-800">{isHoleDraft ? '✂️ พื้นที่หัก' : '📏 ขอบแปลง'}{editingPlotIndex !== null ? ` • แปลง ${editingPlotIndex + 1}` : ''}</p>
-            <p aria-live="polite" className="text-xs font-bold text-green-800">สุทธิ: {currentArea.text}</p>
+            <p className="font-black text-xs text-orange-800">{isHoleDraft ? '✂️ พื้นที่หัก' : '📏 ขอบแปลง'}{fieldEditGroup ? ` • ${displayName(fieldEditGroup)}` : editingPlotIndex !== null ? ` • ${plots[editingPlotIndex]?.name || 'แปลงที่เลือก'}` : ''}</p>
+            <p aria-live="polite" className="text-xs font-bold text-green-800">{fieldEditGroup ? 'บริเวณที่กำลังแก้' : 'สุทธิ'}: {currentArea.text}</p>
             {currentArea.excludedText && <p className="text-[10px] text-red-700">หักรวม: {currentArea.excludedText}</p>}
             <p className="text-[10px] text-gray-500">{canAddDraftPoints ? 'แตะรอบพื้นที่ • ลากจุดเพื่อปรับวง' : 'ลากจุดเพื่อปรับวง • แตะ + บนเส้นเพื่อเพิ่มมุม'}</p>
             {draftError && <p role="alert" className="text-[10px] font-bold text-red-700">{draftError}</p>}
@@ -4722,7 +4688,7 @@ function App() {
                 <div className="gps-speed-main"><span>{trackingMode === 'realtime' ? 'ความเร็วประมาณ' : 'ความเร็วช่วงท้าย'}</span><strong>{(trackingMode === 'realtime' ? gpsSpeed.currentKmh : gpsSpeed.lastKmh) === null ? '—' : (trackingMode === 'realtime' ? gpsSpeed.currentKmh : gpsSpeed.lastKmh).toFixed(1)}</strong><span>กม./ชม.</span></div>
                 <p>{trackingMode === 'realtime' && (gpsSpeed.ageSec === null || gpsSpeed.ageSec > 60) ? `ข้อมูลไม่สด (${gpsAgeText(visibleGpsPath)}) จึงไม่แสดงความเร็วเก่าเป็นค่าปัจจุบัน` : trackingMode === 'history' ? 'ค่าจากข้อมูลย้อนหลัง' : 'คำนวณจากพิกัดช่วงล่าสุดประมาณ 30 วินาที'}</p>
                 <div className="gps-speed-grid">{[['เฉลี่ย 10 นาทีท้าย',gpsSpeed.recentAvgKmh],['เฉลี่ยทั้งวันขณะวิ่ง',gpsSpeed.movingAvgKmh],['เฉลี่ยขณะเกี่ยว',gpsSpeed.harvestAvgKmh],['สูงสุดที่กรองแล้ว',gpsSpeed.maxKmh]].map(([label,value]) => <div key={label}><span>{label}</span><b>{value === null ? '—' : value.toFixed(1)} กม./ชม.</b></div>)}</div>
-                {gpsRouteStats && <div className="gps-speed-grid"><div><span>ระยะทางทั้งหมด</span><b>{gpsRouteStats.totalKm.toFixed(2)} กม.</b></div><div><span>ระยะทางเกี่ยวโดยประมาณ</span><b>{gpsRouteStats.harvestKm.toFixed(2)} กม.</b></div><div><span>ช่วงเวลาที่มีพิกัด</span><b>{Math.floor(gpsRouteStats.durationMin/60)} ชม. {gpsRouteStats.durationMin%60} นาที</b></div><div><span>ความคืบหน้าจาก GPS</span><b>{gpsRouteStats.plotCount ? `${gpsRouteStats.percent.toFixed(0)}%` : 'ยังไม่มีแปลง'}</b></div></div>}
+                {gpsRouteStats && <div className="gps-speed-grid"><div><span>ระยะทางทั้งหมด</span><b>{gpsRouteStats.totalKm.toFixed(2)} กม.</b></div><div><span>ระยะทางเกี่ยวโดยประมาณ</span><b>{gpsRouteStats.harvestKm.toFixed(2)} กม.</b></div><div><span>ช่วงเวลาที่มีพิกัด</span><b>{Math.floor(gpsRouteStats.durationMin/60)} ชม. {gpsRouteStats.durationMin%60} นาที</b></div><div><span>แปลงวันนี้</span><b>{gpsRouteStats.plotCount} แปลง</b></div></div>}
                 <p>เส้นสีน้ำเงิน = เกี่ยว/ประเมิน · สีม่วง = วิ่งทั่วไป</p>
                 <p>ใช้ {gpsSpeed.validIntervals.toLocaleString()} ช่วงที่พิกัดผ่านการกรอง · เป็นความเร็วประมาณจาก GPS</p>
               </section>}
@@ -6428,23 +6394,25 @@ function App() {
             .flatMap(receipt => Array.isArray(receipt.items) ? receipt.items : [])
             .map(item => item.key).filter(Boolean));
           const fullyPaid = job.status === 'DONE' && job.payment_status === 'PAID';
-          const paidCount = (summary?.plots || []).filter(plot => fullyPaid || paidPlotKeys.has(plotPaymentKey(plot))).length;
+          const groupedPlots=groupJobPlots(summary?.plots || []);
+          const paidCount = groupedPlots.filter(plot => fieldPaymentStatus(plot,paidPlotKeys,fullyPaid)==='paid').length;
           return <div className="fixed inset-0 z-[9999] bg-black/50 flex items-center justify-center p-3">
         <div role="dialog" aria-modal="true" aria-label="แปลงของคิวงาน" className="bg-white rounded-2xl w-full max-w-lg max-h-[90dvh] overflow-y-auto p-4">
           <div className="flex justify-between"><h3 className="text-lg font-black">🌾 {job.customers?.name} • คิว #{job.id}</h3><button aria-label="ปิดแปลงของคิว" onClick={()=>setGpsJobDetail(null)} className="p-2">✕</button></div>
           <p className="text-xs text-gray-500">ลูกค้า 1 คน • {summary?.plot_count || 0} แปลง • ทุกแปลงอ้างอิง Job ID #{job.id}</p>
-          <p className="mt-1 text-xs font-black text-emerald-700">✓ จ่ายแล้ว {paidCount} / {(summary?.plots || []).length} แปลง</p>
+          <p className="mt-1 text-xs font-black text-emerald-700">✓ จ่ายแล้ว {paidCount} / {groupedPlots.length} แปลง</p>
           <p className="mt-3 text-lg font-black text-blue-800">🛰️ GPS: {summary ? plotThaiArea(summary.area_rai*1600).text : 'โหลดไม่สำเร็จ'}</p>
           <p className="text-sm text-gray-600">✅ ทำจริงที่ปิดรอบแล้ว: {formatRaiNgan(getJobWorkSummary(job).measuredArea)}</p>
           {job.status==='DONE'
             ? <p className="text-sm font-black text-green-800">🤝 พื้นที่คิดเงินสุดท้าย: {formatRaiNgan(job.billing_area ?? 0)}</p>
             : <p className="text-sm text-amber-700">🗣️ ลูกค้าแจ้งประมาณ: {job.area_size ? `~${formatRaiNgan(job.area_size)}` : 'ไม่ระบุ'}</p>}
           {!!summary?.invalid_count && <p className="text-red-700 text-sm">ต้องตรวจขอบแปลง {summary.invalid_count} แปลงก่อนใช้ยอด</p>}
-          {summary?.plots?.length > 0 && <button type="button" onClick={()=>{setGpsJobDetail(null);setGpsMergeJobId(job.id);}} className="mt-3 w-full rounded-xl bg-indigo-700 py-3 text-sm font-black text-white shadow-sm">🧩 รวมแปลงบนแผนที่ · แยกแปลงจ่ายแล้ว · ตรวจไร่</button>}
-          <div className="space-y-2 my-3">{(summary?.plots || []).map(plot=>{
-            const isPaid = fullyPaid || paidPlotKeys.has(plotPaymentKey(plot));
+          {summary?.plots?.length > 0 && <button type="button" onClick={()=>{setGpsJobDetail(null);setGpsMergeJobId(job.id);}} className="mt-3 w-full rounded-xl bg-indigo-700 py-3 text-sm font-black text-white shadow-sm">🧩 ดูภาพรวมและตรวจยอดแปลง</button>}
+          <div className="space-y-2 my-3">{groupedPlots.map(plot=>{
+            const paymentStatus=fieldPaymentStatus(plot,paidPlotKeys,fullyPaid);
+            const isPaid=paymentStatus==='paid';
             return <button key={`${plot.vehicle_id}/${plot.work_date}/${plot.id}`} className={`block w-full text-left border rounded-xl p-3 ${isPaid ? 'border-emerald-300 bg-emerald-50' : 'bg-sky-50'}`} onClick={()=>openGpsPlot(plot)}>
-              <span className="flex items-center justify-between gap-2"><strong>{plot.name}</strong><span className={`shrink-0 rounded-md px-2 py-1 text-xs font-black ${isPaid ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>{isPaid ? '✓ จ่ายแล้ว' : 'ยังไม่รับเงิน'}</span></span>
+              <span className="flex items-center justify-between gap-2"><strong>{plot.name}</strong><span className={`shrink-0 rounded-md px-2 py-1 text-xs font-black ${isPaid ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>{isPaid ? '✓ จ่ายแล้ว' : paymentStatus==='partial' ? 'รับเงินบางส่วน' : 'ยังไม่รับเงิน'}</span></span>
               <p className="text-sm">{plotThaiArea(plot.area_rai*1600).text}</p><p className="text-xs text-gray-500">{plot.work_date} • รถ {plot.vehicle_id} • เปิดบนแผนที่ ↗</p>
             </button>;
           })}</div>

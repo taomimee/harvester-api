@@ -16,7 +16,10 @@ export function useGpsArea(vehicle, date, enabled) {
         const data = await response.json()
         if (!response.ok) throw new Error(data.error || 'โหลดพื้นที่ไม่ได้')
         if (Number(data.vehicle_id) !== Number(vehicle) || data.work_date !== date) throw new Error('ขอบเขตข้อมูลไม่ตรง')
-        if (active) { setSnapshot({scope, data}); setFailure(null) }
+        if (active) {
+          setSnapshot(previous => previous?.scope===scope && JSON.stringify(previous.data)===JSON.stringify(data) ? previous : {scope,data})
+          setFailure(null)
+        }
       } catch (error) {
         if (active) setFailure({scope, message: error.name === 'AbortError' ? 'รอการเชื่อมต่อ ระบบจะลองใหม่' : 'อัปเดตไม่สำเร็จ ระบบจะลองใหม่'})
       } finally {

@@ -254,7 +254,7 @@ const plotThaiArea = (sqMeters) => {
   return { text: `${rai} ไร่ ${ngan} งาน ${wah} ตร.ว.`, rawRai: value / 1600, sqMeters: value };
 };
 
-const plotRingFeature = (points) => {
+const plotRingFeature = (points, minimumSqM = 1) => {
   if (!Array.isArray(points) || points.length < 3) throw new Error('ต้องมีอย่างน้อย 3 จุด');
   const coords = [];
   for (const p of points) {
@@ -268,7 +268,9 @@ const plotRingFeature = (points) => {
   if (coords.length < 3) throw new Error('ต้องมีอย่างน้อย 3 มุมที่ไม่ซ้ำกัน');
   const feature = turf.polygon([[...coords, coords[0]]]);
   if (turf.kinks(feature).features.length) throw new Error('เส้นตัดกันเอง กรุณาลากจุดแก้ให้เป็นวง');
-  if (turf.area(feature) < 1) throw new Error('พื้นที่ต้องมีอย่างน้อย 1 ตร.ม.');
+  // Small interior GPS gaps are valid exclusions, not separate sub-metre fields.
+  const ringArea=turf.area(feature);
+  if (ringArea <= 0 || ringArea < minimumSqM) throw new Error('พื้นที่ต้องมีอย่างน้อย 1 ตร.ม.');
   return feature;
 };
 
@@ -278,7 +280,7 @@ const plotGeometry = (plot) => {
   const outer = plotRingFeature(plot.points);
   let net = outer;
   for (const hole of (plot.holes || [])) {
-    const cut = plotRingFeature(hole.points);
+    const cut = plotRingFeature(hole.points, 0);
     net = plotClip('difference', net, cut);
     if (!net) break;
   }
