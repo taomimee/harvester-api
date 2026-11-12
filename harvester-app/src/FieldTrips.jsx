@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './field-trips.css';
+import { groupJobPlots } from './gps-field-groups.mjs';
 import { prepareFieldGpsDay } from './gps-auto-import.mjs';
 import { formatRaiNgan, formatGpsRaiNgan } from './thai-area.mjs';
 
@@ -182,7 +183,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
         <div className="ft-day-total"><strong>{d.plot_count} แปลง · {formatRaiNgan(d.confirmed_rai)}</strong><span>ค่าเกี่ยว {amount(d.harvest_amount)} บาท</span></div>
         <p>ค่าเกี่ยว {amount(d.price_per_rai)} บาท/ไร่ · ค่าแรง {amount(d.wage_amount)} บาท</p>
         <div className="ft-crew">{d.crew.map(w => <button key={w.name} onClick={() => onOpenWages(w.name)}>{w.name} · {amount(w.amount)} ฿ ↗</button>)}</div>
-        {!!d.gps_plots.length && <><p className="ft-gps-caption">GPS อ้างอิง {new Set(d.gps_plots.map(p=>p.group_key || p.key)).size} แปลง · {formatGpsRaiNgan(d.gps_rai)}</p><div className="ft-plots">{d.gps_plots.map(p => <button key={p.key} onClick={() => onOpenMap(p)}><PlotShape plot={p}/><span>{p.name}</span><small>{formatGpsRaiNgan(p.area_rai)}</small></button>)}</div></>}
+        {!!d.gps_plots.length && <><p className="ft-gps-caption">GPS อ้างอิง {new Set(d.gps_plots.map(p=>p.group_key || p.key)).size} แปลง · {formatGpsRaiNgan(d.gps_rai)}</p><div className="ft-plots">{groupJobPlots(d.gps_plots).map(p => <button key={p.group_id} onClick={() => onOpenMap(p)}><PlotShape plot={p}/><span>{p.name}</span><small>{formatGpsRaiNgan(p.area_rai)}</small></button>)}</div></>}
         {d.note && <p className="ft-day-note">{d.note}</p>}
       </article>)}</div>
       <div className="ft-section-heading"><h3>เงินรับจากนายหน้า</h3><span>เบิกบางส่วนหรือตัดยอดที่ค้างทั้งหมดได้</span></div>
@@ -222,7 +223,7 @@ export default function FieldTrips({ api, visible, vehicles, profiles, userRole,
             <details className="ft-gps-picker" open={draft.gps_keys.length > 0 ? true : undefined}><summary>แปลง GPS อ้างอิง (เลือกได้)</summary>
               <p className="ft-help">ใช้เทียบกับผลงานวันนี้ ยอดคิดเงินใช้ไร่ที่นายหน้ายืนยัน</p>{gpsBusy && <p role="status">กำลังโหลดแปลง…</p>}{gpsError && <p className="ft-error">{gpsError} ยังลงยอดที่นายหน้าแจ้งโดยไม่เลือก GPS ได้</p>}
               {!gpsBusy && !gpsError && !draftPlots.length && <p>ยังไม่มีแปลง GPS ที่บันทึกไว้สำหรับรถและวันที่นี้</p>}
-              {draftPlots.map(p => <label className="ft-gps-option" key={p.key}><input type="checkbox" disabled={p.job_id != null} checked={draft.gps_keys.includes(p.key)} onChange={e => field('gps_keys', e.target.checked ? [...draft.gps_keys, p.key] : draft.gps_keys.filter(k => k !== p.key))} /><PlotShape plot={p}/><span>{p.name}<small>{formatGpsRaiNgan(p.area_rai)}{p.job_id != null ? ' · อยู่ในคิวลูกค้าแล้ว' : ''}</small></span></label>)}
+              {groupJobPlots(draftPlots).map(p => {const keys=p.members.map(m=>m.key), linked=p.members.some(m=>m.job_id != null);return <label className="ft-gps-option" key={p.group_id}><input type="checkbox" disabled={linked} checked={keys.every(k=>draft.gps_keys.includes(k))} onChange={e => field('gps_keys', e.target.checked ? [...new Set([...draft.gps_keys,...keys])] : draft.gps_keys.filter(k => !keys.includes(k)))} /><PlotShape plot={p}/><span>{p.name}<small>{formatGpsRaiNgan(p.area_rai)}{linked ? ' · อยู่ในคิวลูกค้าแล้ว' : ''}</small></span></label>;})}
               {gps.invalid.length > 0 && <p className="ft-help">มี {gps.invalid.length} แปลงที่ขอบ GPS ยังไม่สมบูรณ์</p>}
             </details>
             <label>หมายเหตุ<textarea maxLength={2000} value={draft.note} onChange={e => field('note', e.target.value)} /></label>

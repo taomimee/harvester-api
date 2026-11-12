@@ -137,3 +137,68 @@
 .gps-boundary-label .gps-plot-status, .gps-plot-select .gps-plot-status { display:inline-flex; align-items:center; gap:4px; margin-top:6px; padding:4px 8px; border:1px solid #cbd5e1; border-radius:999px; font-size:12px; line-height:1.35; font-weight:700; color:#475569; background:#f1f5f9; white-space:nowrap; }
 .gps-boundary-label .gps-plot-status.is-locked, .gps-plot-select .gps-plot-status.is-locked { color:#14532d; background:#dcfce7; border-color:#86c99b; }
 .gps-boundary-label .gps-plot-status.is-measuring, .gps-plot-select .gps-plot-status.is-measuring { color:#854d0e; background:#fef3c7; border-color:#e8bb59; }
+
+.gps-field-pick { position:absolute; z-index:450; top:10px; left:10px; right:10px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; border-radius:12px; background:#fff8e8; border:1px solid #edbc60; box-shadow:0 2px 8px #0002; }
+.gps-field-pick p { font-size:13px; margin:3px 0 0; }
+.gps-field-pick button { padding:8px 12px; border:1px solid #d7c498; border-radius:8px; background:white; }
+@media (max-width:700px) {
+  .gps-header { padding:5px 8px; }
+  .gps-header-main { margin-bottom:4px; }
+  .gps-header-controls { flex-wrap:nowrap; }
+  .gps-title { font-size:15px; }
+  .gps-header button { font-size:13px; padding:5px 7px; }
+  .gps-time-mode button { padding:5px 8px; }
+  .gps-signal { display:none; }
+  .gps-vehicle-select { flex:1; }
+  .gps-vehicle-select select { font-size:13px; }
+  .gps-area-summary { margin-top:5px; padding:6px 9px; gap:7px; align-items:center; }
+  .gps-area-caption { min-width:0; }
+  .gps-area-caption > strong { font-size:13px; }
+  .gps-area-caption small { font-size:11px; line-height:1.3; }
+  .gps-area-value { flex-shrink:0; }
+  .gps-area-value > small { font-size:10px; }
+  .gps-area-value > small:last-child { display:none; }
+  .gps-area-units { flex-direction:row; flex-wrap:nowrap; gap:5px; }
+  .gps-area-units > span { font-size:12px; }
+  .gps-area-value strong { font-size:23px; }
+  .gps-mode-bar { top:8px; left:8px; padding:3px; }
+  .gps-mode-bar button { padding:7px 9px; font-size:13px; }
+  .gps-map-actions { top:8px; right:8px; left:auto; gap:5px; }
+  .gps-map-actions button { padding:5px; width:44px; height:44px; min-height:44px; font-size:18px; }
+  .gps-map-actions .gps-action-label { display:none; }
+  .gps-sheet { max-height:min(44%,300px); }
+  .gps-sheet-header { padding:6px 10px; }
+  .gps-sheet-handle { margin-bottom:5px; }
+  .gps-sheet-heading strong { font-size:15px; }
+  .gps-sheet-heading small { font-size:12px; margin:0; }
+  .gps-sheet-body { padding:8px; }
+  .gps-sheet-tabs { margin-top:4px; gap:5px; }
+  .gps-sheet-tabs button { padding:4px 8px; }
+  .gps-plot-buttons { padding:8px; gap:6px; }
+  .gps-plot-buttons button { font-size:13px; padding:6px 8px; }
+  .gps-boundary-label { padding:5px 7px; max-width:160px; }
+  .gps-boundary-label > span { font-size:12px; max-width:140px; }
+  .gps-boundary-label > strong { font-size:16px; }
+  .gps-boundary-label .gps-plot-status { font-size:11px; padding:3px 5px; margin-top:3px; }
+}
+
+/* Short landscape screens keep the summary in the header and the map exposed. */
+@media (max-height:480px) {
+  .gps-header { padding:4px 8px; }
+  .gps-header-main { margin-bottom:3px; }
+  .gps-header button, .gps-vehicle-select select { min-height:36px; }
+  .gps-area-summary { position:static; width:auto; margin-top:3px; padding:4px 8px; box-shadow:none; }
+  .gps-area-caption small, .gps-area-value > small { display:none; }
+  .gps-area-caption > strong { font-size:12px; }
+  .gps-area-value strong { font-size:20px; }
+  .gps-area-units { flex-direction:row; }
+  .gps-area-units > span { font-size:12px; }
+  .gps-sheet { max-height:60%; width:min(48%,400px); }
+  .gps-sheet-header { padding:5px 8px; }
+  .gps-sheet-handle { display:none; }
+}
+@media (max-width:360px) {
+  .gps-mode-bar button { font-size:12px; padding:6px; }
+  .gps-map-actions { top:62px; }
+  .gps-area-caption small { font-size:10px; }
+}
