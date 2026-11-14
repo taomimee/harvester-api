@@ -1,4 +1,5 @@
 import { area, difference, featureCollection, truncate, union } from '@turf/turf';
+import { gpsFieldAliases, gpsOriginFieldId } from './gps-field-identity.mjs';
 
 const merge = shapes => shapes.length > 1
   ? union(featureCollection(shapes.map(s => truncate(s, { precision: 7, coordinates: 2 }))))
@@ -29,15 +30,15 @@ export function gpsDisplayTotals(groups, source, vehicle, date) {
 }
 
 // Lock receipts are storage parts, not separate fields. Combine their display
-// by the existing field identity; never infer ownership from a shared border.
+// by field identity, including absorbed work components; never by a shared border.
 // This projection does not change saved boundaries, IDs, links, or accounting.
 export function gpsDisplayPlots(saved, geometries, data, vehicle, date, revision) {
   const current = data?.enabled && String(data.vehicle_id) === String(vehicle) && data.work_date === date ? data : null;
   const ready = current?.editable_ready && Number.isInteger(revision) && revision >= current.editable_revision;
+  const aliases = gpsFieldAliases(current?.plots);
   const groups = new Map();
   saved.forEach((plot, index) => {
-    const origin = plot.auto_origin;
-    const sourceId = origin?.plot_id && String(origin.vehicle_id) === String(vehicle) && origin.work_date === date ? origin.plot_id : null;
+    const sourceId = gpsOriginFieldId(plot, aliases, vehicle, date);
     const key = sourceId ? `auto:${sourceId}` : `saved:${plot.id}`;
     if (!groups.has(key)) groups.set(key, { key, id: plot.id, sourceId, name: plot.name, indices: [], shapes: [] });
     const group = groups.get(key);
@@ -50,7 +51,8 @@ export function gpsDisplayPlots(saved, geometries, data, vehicle, date, revision
   }
   const savedCoverage = merge([...groups.values()].map(g => g.geometry).filter(Boolean));
   for (const plot of current?.plots || []) {
-    const key = `auto:${plot.id}`;
+    const canonicalId = aliases[plot.id] || plot.id;
+    const key = `auto:${canonicalId}`;
     let group = groups.get(key);
     const knownReceipts = new Set((group?.indices || []).map(i => saved[i].auto_origin?.receipt_id));
     // Remove original locked coverage before adding work in progress. This
@@ -61,15 +63,22 @@ export function gpsDisplayPlots(saved, geometries, data, vehicle, date, revision
     if (extra && area(extra) < 1) extra = null;
     if (!group && !extra) continue;
     if (!group) {
-      group = { key, id: key, sourceId: plot.id, indices: [], shapes: [], savedRai: 0 };
+      group = { key, id: key, sourceId: canonicalId, indices: [], shapes: [], savedRai: 0 };
       groups.set(key, group);
     }
-    group.autoPlot = plot;
-    group.growing = plot.state !== 'completed';
-    if (!group.name || /^แปลงออโต้ \d+( · ส่วน \d+)?$/.test(group.name)) group.name = `แปลงที่ ${plot.number}`;
+    (group.autoPlots ||= []).push(plot);
+    group.growing ||= plot.state !== 'completed';
     group.geometry = merge([group.geometry, extra].filter(Boolean));
   }
   return [...groups.values()].map(group => {
+    if (group.autoPlots?.length) {
+      const members = group.autoPlots;
+      const first = [...members].sort((a,b) => a.number-b.number)[0];
+      const lockedAt = members.map(p => p.locked_at).filter(Boolean).sort((a,b) => Date.parse(a)-Date.parse(b)).at(-1);
+      group.autoPlot = {...first, id:group.sourceId, source_ids:members.map(p => p.id),
+        state:group.growing ? (members.some(p => p.state === 'working') ? 'working' : 'waiting') : 'completed', locked_at:lockedAt};
+      if (!group.name || /^แปลงออโต้ \d+( · ส่วน \d+)?$/.test(group.name)) group.name = `แปลงที่ ${first.number}`;
+    }
     // Flatten outer rings only for camera fitting, not for area calculations.
     const geometry = group.geometry?.geometry;
     const rings = geometry?.type === 'Polygon' ? [geometry.coordinates[0]]
