@@ -1,4 +1,5 @@
 import {useEffect,useMemo,useState} from 'react';
+import {gpsAreaMatches,selectGpsProjection} from './gps-projection-state.mjs';
 
 export function runGpsGeometry(type,input) {
   let worker,timer;
@@ -16,14 +17,15 @@ export function useGpsMapGeometry(saved,data,vehicle,date,revision) {
   const [snapshot,setSnapshot]=useState(null);
   const scope=`${vehicle}/${date}`;
   useEffect(()=>{
-    if(!vehicle || revision===null)return;
+    if(!vehicle || !Number.isInteger(revision) || !gpsAreaMatches(data,vehicle,date))return;
     let active=true;
     const task=runGpsGeometry('project',{saved,data,vehicle,date,revision});
     task.result.then(result=>{if(active)setSnapshot({...result,scope,saved,source:data,error:''});})
-      .catch(error=>{if(active)setSnapshot({scope,saved,source:data,plots:[],geometries:[],error:error.message});});
+      .catch(error=>{if(active)setSnapshot(previous=>previous?.scope===scope && previous.saved===saved
+        ? {...previous,error:error.message}
+        : {scope,saved,source:null,plots:[],geometries:[],error:error.message});});
     return ()=>{active=false;task.cancel();};
   },[saved,data,vehicle,date,revision,scope]);
-  return useMemo(()=>snapshot?.scope===scope && snapshot.saved===saved
-    ? {...snapshot,pending:snapshot.source!==data}
-    : {plots:[],geometries:[],source:null,pending:revision!==null,error:''},[snapshot,scope,saved,data,revision]);
+  return useMemo(()=>selectGpsProjection(snapshot,saved,data,vehicle,date,revision),
+    [snapshot,saved,data,vehicle,date,revision]);
 }

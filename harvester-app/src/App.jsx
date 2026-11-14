@@ -1284,7 +1284,7 @@ function TrackingMap({
     setLinkReview(null);setPlotRevision(null);exitPlotEditor();setExclusionPanelIndex(null);setMobileToolsOpen(false);setPlots([]);setSelectedPlotId(null);setPlotActionsId(null);
     setIsSavingPlot(false);setPlotSyncStatus('กำลังโหลดแปลงล่าสุด…');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
-    fetch(`https://harvester-api-server.onrender.com/api/plots-snapshot/${vehicleId}?date=${encodeURIComponent(workDate)}`,{signal:controller.signal})
+    fetch(`https://harvester-api-server.onrender.com/api/plots-snapshot/${vehicleId}?date=${encodeURIComponent(workDate)}`,{signal:controller.signal,cache:'no-store'})
       .then(async res => {const data=await res.json();if(!res.ok || !Array.isArray(data.plots_data))throw new Error(data.error || 'โหลดแปลงไม่สำเร็จ');return data;})
       .then(data => {if(!active)return;const loaded=hydratePlots(data.plots_data.map((p,i)=>({...p,id:p.id || `legacy-${vehicleId}-${workDate}-${i}`})));
         loadedPlotScope.current = `${vehicleId}/${workDate}`;
@@ -1412,7 +1412,7 @@ function TrackingMap({
   const displayProjection=useGpsMapGeometry(plots,autoArea,vehicleId,workDate,plotRevision);
   const plotGeometries=displayProjection.geometries;
   useEffect(() => {
-    onDisplayTotals?.(plotRevision !== null && !displayProjection.error
+    onDisplayTotals?.(plotRevision !== null && displayProjection.source
       ? gpsDisplayTotals(displayProjection.plots, displayProjection.source, vehicleId, workDate) : null);
   }, [displayProjection, plotRevision, vehicleId, workDate, onDisplayTotals]);
   const displayPlots = displayProjection.plots;
@@ -2750,7 +2750,7 @@ function TrackingMap({
         <section id="gps-plot-sheet" className="gps-sheet" aria-label={sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : 'รายการแปลง'}>
           <div className="gps-sheet-header" onTouchStart={e => {sheetSwipeStart.current = e.touches[0].clientY;}} onTouchEnd={e => {if (sheetSwipeStart.current !== null && e.changedTouches[0].clientY - sheetSwipeStart.current > 55) setMobileToolsOpen(false);sheetSwipeStart.current = null;}}>
             <span className="gps-sheet-handle" aria-hidden="true" />
-            <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel}`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : `รวม ${displayPlots.length} แปลง${displayWorking ? ' · กำลังวัดต่อ' : ''}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
+            <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel}`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : displayProjection.pending && !displayPlots.length ? 'กำลังโหลดแปลงล่าสุด…' : `รวม ${displayPlots.length} แปลง${displayWorking ? ' · กำลังวัดต่อ' : ''}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
             {workspaceMode === 'manage' && <div className="gps-sheet-tabs" role="group" aria-label="เนื้อหาแผงแปลง"><button type="button" aria-pressed={sheetTab === 'plots'} onClick={() => setSheetTab('plots')}>รายการแปลง</button><button type="button" aria-pressed={sheetTab === 'tools'} onClick={() => setSheetTab('tools')}>เครื่องมือ</button></div>}
           </div>
           <div className="gps-sheet-body">
@@ -2770,7 +2770,7 @@ function TrackingMap({
               {displayProjection.error && <p role="alert">{displayProjection.error}</p>}
               {displayProjection.pending && <p role="status">กำลังอัปเดตขอบแปลง…</p>}
               {autoArea?.editable_error && <p role="status">{autoArea.editable_error}</p>}
-              {!displayPlots.length && <p className="gps-empty">{plotRevision === null ? 'กำลังรอข้อมูลแปลง' : 'รอแนวเกี่ยวชัดเจน แล้วระบบจะเก็บแปลงให้อัตโนมัติ'}{workspaceMode === 'manage' && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
+              {!displayPlots.length && <p className="gps-empty">{plotRevision === null || displayProjection.pending ? 'กำลังรอข้อมูลแปลงและผล GPS ล่าสุด' : 'รอแนวเกี่ยวชัดเจน แล้วระบบจะเก็บแปลงให้อัตโนมัติ'}{workspaceMode === 'manage' && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
               {displayPlots.map(group => {
                 const status = gpsPlotStatus(group);
                 const linkedJobs = [...new Set(group.indices.map(i => plots[i].job_id).filter(Boolean))];
