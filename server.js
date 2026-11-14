@@ -239,6 +239,8 @@ app.get('/', (req, res) => {
 
 const turf = require('@turf/turf');
 const plotNewId = () => require('crypto').randomUUID();
+const { createGpsFieldIdentityReader } = require('./lib/gps-field-identities');
+const readGpsFieldAliases = createGpsFieldIdentityReader(supabase);
 const plotClip = (operation, a, b) => {
   if (!a || !b) return operation === 'difference' ? a : null;
   try { return turf[operation](turf.featureCollection([a, b])); }
@@ -331,6 +333,8 @@ const loadGpsJobSummary = async () => {
       const scope = `${row.vehicle_id}/${row.work_date}`;
       if(scopes.has(scope)) continue;
       scopes.add(scope);
+      const rowPlots = Array.isArray(row.plots_data) ? row.plots_data : [];
+      const aliases = rowPlots.some(p => p.job_id) ? await readGpsFieldAliases(row.vehicle_id,row.work_date,rowPlots) : {};
       const ids = new Set();
       for(const [index,plot] of (Array.isArray(row.plots_data) ? row.plots_data : []).entries()) {
         if(!plot.job_id) continue;
@@ -343,9 +347,10 @@ const loadGpsJobSummary = async () => {
         try {
           const geometry=plotGeometry(plot), area=geometry.netSqM/1600;
           if (!counted.has(jobId)) counted.set(jobId,new Set());
-          counted.get(jobId).add(gpsPlotGroupKey({...plot,id},row.vehicle_id,row.work_date));
+          const groupKey=gpsPlotGroupKey({...plot,id},row.vehicle_id,row.work_date,aliases);
+          counted.get(jobId).add(groupKey);
           group.plot_count=counted.get(jobId).size;group.area_rai+=area;
-          group.plots.push({id,name:plot.name || `แปลงที่ ${index+1}`,area_rai:area,vehicle_id:row.vehicle_id,work_date:row.work_date,center:plotCenter(geometry.net || geometry.outer),preview_geometry:geometry.net?.geometry || null});
+          group.plots.push({id,group_key:groupKey,name:plot.name || `แปลงที่ ${index+1}`,area_rai:area,vehicle_id:row.vehicle_id,work_date:row.work_date,center:plotCenter(geometry.net || geometry.outer),preview_geometry:geometry.net?.geometry || null});
         } catch (_) { group.invalid_count++; }
       }
     }
@@ -356,7 +361,7 @@ const loadGpsJobSummary = async () => {
 const { registerFieldTrips, supabaseStore } = require('./lib/field-trip-routes');
 const fieldTripStore = supabaseStore(supabase);
 registerFieldTrips(app, { store: fieldTripStore, isBoss: bossSessionValid,
-    normalizePlots: normalizeJobPlots, geometry: plotGeometry, center: plotCenter });
+    normalizePlots: normalizeJobPlots, geometry: plotGeometry, center: plotCenter, fieldAliases: readGpsFieldAliases });
 const { registerGpsArea, gpsAreaStore, createAreaService } = require('./lib/gps-auto-routes');
 const {createAutoPublisher,autoPublishStore}=require('./lib/gps-auto-publish');
 const areaStore=gpsAreaStore(supabase);

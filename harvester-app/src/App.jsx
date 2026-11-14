@@ -11,6 +11,7 @@ import { useGpsMapGeometry, runGpsGeometry } from './useGpsMapGeometry'
 import { gpsRouteLines } from './gps-route-lines.mjs'
 import { groupJobPlots, fieldPaymentStatus } from './gps-field-groups.mjs'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
+import { gpsFieldAliases, gpsOriginFieldId } from './gps-field-identity.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
@@ -913,9 +914,11 @@ function TrackingMap({
     setLinkReview({all:all.map(p => ({...p,id:p.id || plotNewId()})),indices,after,scope:plotScopeRef.current,overlaps:[...overlaps]});
   };
 
+  const fieldAliases = useMemo(() => String(autoArea?.vehicle_id) === String(vehicleId) && autoArea?.work_date === workDate
+    ? gpsFieldAliases(autoArea.plots) : {}, [autoArea,vehicleId,workDate]);
   const linkedPartIndices = index => {
-    const group=linkReview?.all[index]?.auto_origin?.plot_id;
-    return group ? linkReview.indices.filter(i=>linkReview.all[i].auto_origin?.plot_id===group) : [index];
+    const group=gpsOriginFieldId(linkReview?.all[index],fieldAliases,vehicleId,workDate);
+    return group ? linkReview.indices.filter(i=>gpsOriginFieldId(linkReview.all[i],fieldAliases,vehicleId,workDate)===group) : [index];
   };
 
   const setPlotJob = (index, value) => {
@@ -1250,10 +1253,19 @@ function TrackingMap({
     try {
       let plan;
       if(autoArea?.editable_ready) {
-        const ids=plots.filter(p=>p.auto_origin?.plot_id===autoPlot.id).map(p=>p.id);
+        const ids=plots.filter(p=>gpsOriginFieldId(p,fieldAliases,vehicleId,workDate)===autoPlot.id).map(p=>p.id);
         if(!ids.length)throw new Error('พื้นที่นี้มีอยู่ในแปลงที่บันทึกไว้แล้ว หรือเคยลบออก ให้เลือกจากรายการแปลงด้านล่าง');
         plan={plots,ids,added:[],skipped:[],indices:plots.flatMap((p,i)=>ids.includes(p.id)?[i]:[])};
-      } else plan = prepareAutoPlotUse(autoArea, autoPlot.id, plots, vehicleId, workDate);
+      } else {
+        let combined=plots, ids=[], skipped=[], added=[];
+        for(const sourceId of autoPlot.source_ids || [autoPlot.id]) {
+          if(!autoArea.locked_plots?.some(p=>p.plot_id===sourceId))continue;
+          const part=prepareAutoPlotUse(autoArea,sourceId,combined,vehicleId,workDate,{allowEmpty:true});
+          combined=part.plots;ids.push(...part.ids);skipped.push(...part.skipped);added.push(...part.added);
+        }
+        if(!ids.length)throw new Error('แปลงนี้ยังไม่มีส่วนที่ล็อกแล้ว');
+        plan={plots:combined,ids,skipped,added,indices:combined.flatMap((p,i)=>ids.includes(p.id)?[i]:[])};
+      }
       const prepared = hydratePlots(plan.plots);
       const invalid = prepared.find(p=>p.geometryError);
       if (invalid) throw new Error(invalid.geometryError);
