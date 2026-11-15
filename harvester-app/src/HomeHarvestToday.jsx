@@ -5,7 +5,7 @@ import {homeHarvestSummary, loadHomeVehicle, thaiWorkDate} from './home-harvest.
 
 const API = 'https://harvester-api-server.onrender.com/api';
 
-export default function HomeHarvestToday({vehicles, recordedRai, onOpenGps}) {
+export default function HomeHarvestToday({vehicles, recordedDate, recordedRai, onOpenGps}) {
   const [date, setDate] = useState(thaiWorkDate);
   const [rows, setRows] = useState({});
   const [reload, setReload] = useState(0);
@@ -43,7 +43,7 @@ export default function HomeHarvestToday({vehicles, recordedRai, onOpenGps}) {
     return () => {active = false; clearTimeout(timer); controller?.abort(); task?.cancel();};
   }, [ids, date, reload]);
 
-  const summary = homeHarvestSummary(vehicles, rows, date, recordedRai);
+  const summary = homeHarvestSummary(vehicles, rows, date, recordedDate === date ? recordedRai : 0);
   const time = summary.observedAt && new Date(summary.observedAt).toLocaleTimeString('th-TH',
     {timeZone:'Asia/Bangkok', hour:'2-digit', minute:'2-digit'});
   return <section aria-label="เกี่ยวจริงวันนี้" className="flex min-w-0 min-h-[122px] flex-col rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3.5 shadow-sm">

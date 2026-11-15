@@ -4528,7 +4528,7 @@ function App() {
                 <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">ปิดแล้ว {todayCompletedCount + todayFieldDays.length} · ยังไม่ปิด {todaySummaryJobs.length - todayCompletedCount}{todayFieldDays.length > 0 && ` · นอกพื้นที่ ${todayFieldDays.length} รอบรายวัน`}</p>
               </div>
 
-              <HomeHarvestToday vehicles={vehicles} recordedRai={todayMeasuredArea} onOpenGps={() => {
+              <HomeHarvestToday vehicles={vehicles} recordedDate={getLocalDateString()} recordedRai={todayMeasuredArea} onOpenGps={() => {
                 setTrackingMode('realtime');
                 if (!trackingVehicleId && vehicles[0]) setTrackingVehicleId(String(vehicles[0].id));
                 setActiveTab('gps');
