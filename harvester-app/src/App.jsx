@@ -6,6 +6,7 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsManualLock from './GpsManualLock.jsx'
+import HomeHarvestToday from './HomeHarvestToday.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
 import { gpsPlotStatus, gpsDisplayTotals } from './gps-display-plots.mjs'
 import { useGpsMapGeometry, runGpsGeometry } from './useGpsMapGeometry'
@@ -3568,8 +3569,6 @@ function App() {
   }));
   const todayFieldDays = (fieldTrips || []).flatMap(t => t.days).filter(d => isInHomeDay(`${d.work_date}T12:00:00+07:00`, todayStart, tomorrowStart));
   const todayMeasuredArea = todayAreaInfo.reduce((sum, item) => sum + item.area.measuredToday, 0) + todayFieldDays.reduce((sum,d) => sum + d.confirmed_rai, 0);
-  const todayPendingArea = todayAreaInfo.reduce((sum, item) => sum + item.area.notRecordedYet, 0);
-  const todayUnknownAreaCount = todayAreaInfo.filter(item => item.area.needsArea).length;
   // ยอดงานที่ปิดวันนี้เป็นยอดบิลก่อนส่วนลด/มัดจำ ไม่ใช่เงินสดรับวันนี้
   const todayBilledValue = completedTodayJobs.reduce((sum, job) =>
     sum + Math.max(0, Number(job.billing_area ?? job.area_size) || 0) *
@@ -4529,15 +4528,11 @@ function App() {
                 <p className="mt-auto pt-2 text-[11px] font-semibold text-slate-600">ปิดแล้ว {todayCompletedCount + todayFieldDays.length} · ยังไม่ปิด {todaySummaryJobs.length - todayCompletedCount}{todayFieldDays.length > 0 && ` · นอกพื้นที่ ${todayFieldDays.length} รอบรายวัน`}</p>
               </div>
 
-              <div className="flex min-h-[122px] flex-col rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3.5 shadow-sm">
-                <p className="text-xs font-bold text-emerald-900">🌾 เกี่ยวจริงวันนี้</p>
-                <p className="mt-2 text-xl font-black leading-tight text-emerald-800 sm:text-2xl">{formatRaiNgan(todayMeasuredArea)}</p>
-                <div className="mt-auto pt-2 text-[11px] font-semibold text-emerald-900">
-                  {todayPendingArea > 0.0125 && <span className="block">รอลงรอบ {formatRaiNgan(todayPendingArea)}</span>}
-                  {todayUnknownAreaCount > 0 && <span className="block">รอระบุพื้นที่ {todayUnknownAreaCount} คิว</span>}
-                  {todayPendingArea <= 0.0125 && todayUnknownAreaCount === 0 && <span>ตามรอบงานที่บันทึกแล้ว</span>}
-                </div>
-              </div>
+              <HomeHarvestToday vehicles={vehicles} recordedRai={todayMeasuredArea} onOpenGps={() => {
+                setTrackingMode('realtime');
+                if (!trackingVehicleId && vehicles[0]) setTrackingVehicleId(String(vehicles[0].id));
+                setActiveTab('gps');
+              }} />
 
               {userRole === 'BOSS' && (
                 <div className="flex min-h-[118px] flex-col rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
