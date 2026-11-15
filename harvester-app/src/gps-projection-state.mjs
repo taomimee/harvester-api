@@ -20,3 +20,10 @@ export function gpsVisibleTotals(totals, data) {
   return data?.enabled && totals?.source?.enabled
     && gpsAreaMatches(totals.source, data.vehicle_id, data.work_date) ? totals : null;
 }
+
+// A delayed GET cannot undo an acknowledged manual command.
+export function retainNewestGpsArea(previous, data, scope) {
+  if (previous?.scope === scope && Number(previous.data?.snapshot_revision || 0) > Number(data?.snapshot_revision || 0)) return previous;
+  if (previous?.scope === scope && JSON.stringify(previous.data) === JSON.stringify(data)) return previous;
+  return {scope,data};
+}

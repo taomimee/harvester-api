@@ -1,11 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { splitGpsThaiArea } from './thai-area.mjs'
-import { gpsVisibleTotals } from './gps-projection-state.mjs'
+import { gpsVisibleTotals, retainNewestGpsArea } from './gps-projection-state.mjs'
 
 export function useGpsArea(vehicle, date, enabled) {
   const scope = `${vehicle}/${date}`
   const [snapshot, setSnapshot] = useState(null)
   const [failure, setFailure] = useState(null)
+  const [reload,setReload]=useState(0)
+  const scopeRef=useRef(scope);scopeRef.current=scope
+  const accept=useCallback(data=>{
+    const incoming=`${data.vehicle_id}/${data.work_date}`
+    if(incoming!==scopeRef.current)return
+    setSnapshot(previous=>retainNewestGpsArea(previous,data,incoming));setFailure(null)
+  },[])
+  const refresh=useCallback(()=>setReload(n=>n+1),[])
   useEffect(() => {
     if (!enabled || !vehicle || !date) return
     let active = true, timer, controller, liveArrived = false
@@ -30,7 +38,7 @@ export function useGpsArea(vehicle, date, enabled) {
         if (Number(data.vehicle_id) !== Number(vehicle) || data.work_date !== date) throw new Error('ขอบเขตข้อมูลไม่ตรง')
         if (active) {
           liveArrived = true
-          setSnapshot(previous => previous?.scope===scope && JSON.stringify(previous.data)===JSON.stringify(data) ? previous : {scope,data})
+          setSnapshot(previous => retainNewestGpsArea(previous,data,scope))
           setFailure(null)
         }
       } catch (error) {
@@ -43,8 +51,8 @@ export function useGpsArea(vehicle, date, enabled) {
     }
     refresh()
     return () => { active = false; clearTimeout(timer); clearTimeout(cachedTimeout); cachedController.abort(); controller?.abort() }
-  }, [vehicle, date, enabled, scope])
-  return {data: snapshot?.scope === scope ? snapshot.data : null, error: failure?.scope === scope ? failure.message : null}
+  }, [vehicle, date, enabled, scope, reload])
+  return {accept,refresh,data: snapshot?.scope === scope ? snapshot.data : null, error: failure?.scope === scope ? failure.message : null}
 }
 
 export default function GpsAreaSummary({ data, displayTotals, error, history }) {
