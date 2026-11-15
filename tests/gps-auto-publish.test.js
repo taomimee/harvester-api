@@ -50,3 +50,31 @@ test('mostly matching manual boundaries retain their corrections rather than rec
   const plan=await planAutoPublish(result,{plots_data:[old],published_parts:[]});
   assert.equal(plan.plots.length,0);assert.equal(plan.handled.length,1);
 });
+
+test('generated pinched rings publish without changing area, saved edits, or part identity',async()=>{
+  const {cleanGeneratedGeometry}=require('../lib/gps-auto-publish');
+  const pinched=turf.polygon([[[100,15],[100.001,15],[100.001,15.001],[100.0005,15.001],[100.0005,15.0015],[100.0005,15.001],[100,15.001],[100,15]],
+    [[100.0001,15.0001],[100.0002,15.0001],[100.0002,15.0002],[100.0001,15.0002],[100.0001,15.0001]]]);
+  const before=JSON.stringify(pinched);assert.ok(turf.kinks(pinched).features.length);
+  const fixed=cleanGeneratedGeometry(pinched);
+  assert.equal(turf.kinks(fixed).features.length,0);assert.equal(fixed.geometry.coordinates.length,2);
+  assert.ok(Math.abs(turf.area(fixed)-turf.area(pinched))<.01);assert.equal(JSON.stringify(pinched),before);
+  const plan=await planAutoPublish({...result,locked_plots:[{...receipt,geometry:pinched}]},{plots_data:[],published_parts:[]});
+  assert.equal(plan.plots.length,1);assert.equal(plan.plots[0].id,`auto-${receipt.id}-1`);
+  assert.equal(turf.kinks(geometry(plan.plots[0])).features.length,0);
+  const unchanged=turf.polygon([ring()]);assert.equal(cleanGeneratedGeometry(unchanged),unchanged);
+});
+
+test('a true crossed boundary is rejected when repairing it would change its area',()=>{
+  const {cleanGeneratedGeometry}=require('../lib/gps-auto-publish');
+  const bowtie=turf.polygon([[[100,15],[100.002,15.002],[100,15.002],[100.002,15],[100,15]]]);
+  assert.throws(()=>cleanGeneratedGeometry(bowtie),/GPS_GENERATED_BOUNDARY_NEEDS_REVIEW/);
+});
+
+test('two generated lobes touching at one point retain unique storage IDs and a single field identity',async()=>{
+  const pinched=turf.polygon([[[100,15],[100.001,15],[100.001,15.001],[100.002,15.001],[100.002,15.002],[100.001,15.002],[100.001,15.001],[100,15.001],[100,15]]]);
+  const plan=await planAutoPublish({...result,locked_plots:[{...receipt,geometry:pinched}]},{plots_data:[],published_parts:[]});
+  assert.equal(plan.plots.length,2);assert.equal(new Set(plan.plots.map(p=>p.id)).size,2);
+  assert.ok(plan.plots.every(p=>p.auto_origin.plot_id===receipt.plot_id && turf.kinks(geometry(p)).features.length===0));
+  assert.ok(Math.abs(plan.plots.reduce((sum,p)=>sum+turf.area(geometry(p)),0)-turf.area(pinched))<.01);
+});
