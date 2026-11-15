@@ -5,6 +5,7 @@ import L from 'leaflet'
 import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
+import GpsManualLock from './GpsManualLock.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
 import { gpsPlotStatus, gpsDisplayTotals } from './gps-display-plots.mjs'
 import { useGpsMapGeometry, runGpsGeometry } from './useGpsMapGeometry'
@@ -875,11 +876,12 @@ const gpsEdgeInBox = (a, b, bounds) => {
 // 🗺️ แผนที่ติดตามรถเกี่ยว + วาดแปลง + บันทึกถาวร + Auto Follow แบบควบคุมได้
 function TrackingMap({
   pathData, vehicleId, workDate, trackingMode, focusRequest,
-  leaveGuardRef, onRouteStats, onDisplayTotals, isFetchingGps, autoArea,
+  leaveGuardRef, onRouteStats, onDisplayTotals, isFetchingGps, autoArea, onManualLocked, onRefreshArea,
   jobs = [], customers = [], onPlotsSaved, onOpenJob, onQueueCreated, focusPlot, onOpenField, canPostWork,
   fleetPaths = {}, fleetVehicles = [], vehicleColors = {},
   fleetFitRequest = 0, onSelectVehicle
 }) {
+  const [manualLock,setManualLock]=useState(null);
   const [linkReview, setLinkReview] = useState(null);
   const [linkNewQueueDrafts, setLinkNewQueueDrafts] = useState({});
   const [linkCreatingQueue, setLinkCreatingQueue] = useState(false);
@@ -2385,6 +2387,14 @@ function TrackingMap({
   }, [points, drawMode, draftKind, editingPlotIndex, holeEditor, plotGeometries, isSavingPlot]);
 
   // GeoJSON preserves inner rings and split polygons (Leaflet renders real holes).
+  const canLockPlot=Boolean(Number.isSafeInteger(autoArea?.snapshot_revision) && !displayProjection.pending && !isSavingPlot && !drawMode && !routeEdit);
+  const openManualLock=useCallback(group=>{
+    if(!canLockPlot || !group.growing || !group.sourceId)return;
+    setManualLock({vehicle:Number(vehicleId),date:workDate,plotId:group.sourceId,name:displayName(group),areaRai:group.areaRai,
+      revision:autoArea.snapshot_revision,observedAt:autoArea.observed_at,requestId:crypto.randomUUID()});
+  },[canLockPlot,vehicleId,workDate,autoArea,jobs,plots]);
+  useEffect(()=>setManualLock(null),[vehicleId,workDate]);
+
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
@@ -2420,9 +2430,9 @@ function TrackingMap({
       const center = plotCenter(group.geometry);
       if (center && !drawMode) {
         const label = L.marker([center.lat, center.lng], {
-          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong>${group.growing ? '<small class="gps-plot-status is-measuring">⏳ กำลังวัด</small>' : ''}${paid && !group.growing ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
-          bubblingMouseEvents: false
-        }).on('click', () => selectPlotOnMap(group)).addTo(plotsLayer.current);
+          icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong>${group.growing ? `<button type="button" data-gps-lock class="gps-plot-status is-measuring gps-lock-trigger" ${canLockPlot ? '' : 'disabled'} aria-label="กำลังวัด — ล็อกแปลงนี้">⏳ กำลังวัด</button>` : ''}${paid && !group.growing ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
+          bubblingMouseEvents: false, keyboard:false
+        }).on('click', event => {if(event.originalEvent?.target?.closest?.('[data-gps-lock]')) {if(canLockPlot)openManualLock(group);} else selectPlotOnMap(group);}).addTo(plotsLayer.current);
         labels.push({label,center,color:boundaryColor});
       }
     });
@@ -2462,7 +2472,7 @@ function TrackingMap({
     arrangeLabels();
     map.on('zoomend moveend resize',arrangeLabels);
     return () => map.off('zoomend moveend resize',arrangeLabels);
-  }, [displayPlots, plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, workspaceMode, selectedPlotId]);
+  }, [displayPlots, plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, workspaceMode, selectedPlotId, canLockPlot, openManualLock]);
 
   const totalPendingHoles = plots.reduce((sum, p) => sum + (p.holeSuggestions || []).filter(h => h.status === 'pending').length, 0);
   useEffect(() => {
@@ -2775,7 +2785,7 @@ function TrackingMap({
                 const status = gpsPlotStatus(group);
                 const linkedJobs = [...new Set(group.indices.map(i => plots[i].job_id).filter(Boolean))];
                 return <article key={group.key} className={`gps-plot-card ${selectedPlotId === group.id ? 'is-selected' : ''}`}>
-                  <button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(group)} aria-label={`ดู ${displayName(group)} บนแผนที่`}><span><strong>{displayName(group)}</strong><span className={`gps-plot-status is-${status.key}`}>{status.label}</span>{status.lockedAt && <small>ล็อกเมื่อ {new Date(status.lockedAt).toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'})} น.</small>}</span><b>{formatGpsRaiNgan(group.areaRai)}</b></button>
+                  <div className="gps-plot-heading"><button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(group)} aria-label={`ดู ${displayName(group)} บนแผนที่`}><strong>{displayName(group)}</strong><b>{formatGpsRaiNgan(group.areaRai)}</b></button><div className="gps-plot-status-row">{group.growing ? <button type="button" className="gps-plot-status is-measuring gps-lock-trigger" disabled={!canLockPlot} onClick={()=>openManualLock(group)} aria-label={`กำลังวัด — ล็อก ${displayName(group)}`}>{status.label} · แตะเพื่อล็อก</button> : <span className={`gps-plot-status is-${status.key}`}>{status.label}</span>}{status.lockedAt && <small>ล็อกเมื่อ {new Date(status.lockedAt).toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'})} น.</small>}</div></div>
                   <details className="gps-plot-controls" open={workspaceMode === 'manage'}><summary>จัดการแปลง</summary>
                     {group.growing && <p className="gps-auto-detail">ยอดรวมยังเพิ่มได้{group.savedRai > 0 ? ` · ส่วนที่ล็อกแล้ว ${formatGpsRaiNgan(group.savedRai)} นำไปใช้ได้` : ' · รอรถออกห่างเพื่อล็อกยอด'}</p>}
                     {!!group.indices.length && <div className="gps-plot-buttons">
@@ -2806,6 +2816,7 @@ function TrackingMap({
         <div role="status" className="gps-route-warning">เครื่องมือตัดเส้นยังไม่พร้อม <button type="button" onClick={() => setReloadRoute(n => n+1)}>ลองใหม่</button></div>
       )}
 
+      {manualLock && <GpsManualLock key={manualLock.requestId} selection={manualLock} onClose={()=>setManualLock(null)} onRefresh={onRefreshArea} onLocked={data=>{onManualLocked?.(data);setPlotReload(n=>n+1);setPlotSyncStatus(data.editable_error || '🔒 ล็อกแปลงแล้ว งานที่เกี่ยวต่อจะเริ่มแปลงใหม่');}} />}
       {fieldEditGroup && !drawMode && exclusionPanelIndex===null && <div className="gps-field-pick" role="status"><div><strong>{displayName(fieldEditGroup)} · {formatGpsRaiNgan(fieldEditGroup.areaRai)}</strong><p>แตะบริเวณในแปลงที่ต้องการ{fieldEditAction==='holes'?'หักพื้นที่':'แก้ขอบ'}</p></div><button type="button" onClick={()=>setFieldEditGroup(null)}>กลับ</button></div>}
       {/* Compact editor: real-time net area, movable vertices, undo and cancel. */}
       {drawMode && (
@@ -4726,6 +4737,8 @@ function App() {
                 onRouteStats={setGpsRouteStats}
                 onDisplayTotals={setGpsDisplayTotal}
                 autoArea={gpsAutoArea.data}
+                onManualLocked={gpsAutoArea.accept}
+                onRefreshArea={gpsAutoArea.refresh}
                 isFetchingGps={isFetchingGps || isFetchingFleetGps}
                 fleetPaths={trackingMode === 'realtime' ? gpsFleetPaths : {}}
                 fleetVehicles={vehicles}

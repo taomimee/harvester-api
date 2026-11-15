@@ -6,6 +6,10 @@ export function gpsFieldAliases(plots = []) {
   const parents = plots.map((_, i) => i);
   const find = i => { while (parents[i] !== i) { parents[i] = parents[parents[i]]; i = parents[i]; } return i; };
   for (let i = 0; i < plots.length; i++) for (let j = i + 1; j < plots.length; j++) {
+    // A user seal overrides spatial/edge containment. Its existing receipt IDs
+    // may still form one group, but later work must retain a new identity.
+    if ((plots[i].manual_seal || plots[j].manual_seal) && plots[i].manual_seal!==plots[j].manual_seal) continue;
+    if (plots[i].manual_seal && plots[i].manual_seal===plots[j].manual_seal) { parents[find(j)]=find(i); continue; }
     const [small, large] = sets[i].size <= sets[j].size ? [sets[i], sets[j]] : [sets[j], sets[i]];
     if (small.size >= 6 && [...small].every(edge => large.has(edge))) parents[find(j)] = find(i);
   }
