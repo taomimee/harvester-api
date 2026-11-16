@@ -2429,6 +2429,9 @@ const validatePlotsData = (plots) => {
     return null;
 };
 
+const {registerGpsSplit,splitStore}=require('./lib/gps-split-routes');
+registerGpsSplit(app,{store:splitStore(supabase),normalize:normalizeJobPlots});
+
 // 💾 ดึงแปลงตามรถ + วันที่
 app.get('/api/plots-snapshot/:vehicle_id', async (req,res) => {
     if(!validRouteScope(req.params.vehicle_id,req.query.date)) return res.status(400).json({error:'รถหรือวันที่ไม่ถูกต้อง'});

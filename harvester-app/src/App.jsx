@@ -6,6 +6,7 @@ import * as turf from '@turf/turf'
 import 'leaflet/dist/leaflet.css'
 import FieldTrips from './FieldTrips.jsx'
 import GpsManualLock from './GpsManualLock.jsx'
+import GpsSplit from './GpsSplit.jsx'
 import HomeHarvestToday from './HomeHarvestToday.jsx'
 import GpsAreaSummary, { useGpsArea } from './GpsAreaSummary.jsx'
 import { gpsPlotStatus, gpsDisplayTotals } from './gps-display-plots.mjs'
@@ -883,6 +884,7 @@ function TrackingMap({
   fleetFitRequest = 0, onSelectVehicle
 }) {
   const [manualLock,setManualLock]=useState(null);
+  const [splitTarget,setSplitTarget]=useState(null);
   const [linkReview, setLinkReview] = useState(null);
   const [linkNewQueueDrafts, setLinkNewQueueDrafts] = useState({});
   const [linkCreatingQueue, setLinkCreatingQueue] = useState(false);
@@ -1466,6 +1468,7 @@ function TrackingMap({
   useEffect(() => {
     if (!leaveGuardRef) return;
     leaveGuardRef.current = () => {
+      if (splitTarget) return false;
       if (isSavingPlot || isAutoPlotting || routeBusy || linkCreatingQueue) {
         window.alert('กำลังบันทึกหรือประมวลผล กรุณารอให้เสร็จก่อนครับ');
         return false;
@@ -1477,7 +1480,7 @@ function TrackingMap({
       return true;
     };
     return () => { leaveGuardRef.current = null; };
-  }, [leaveGuardRef, isSavingPlot, isAutoPlotting, routeBusy, linkCreatingQueue, drawMode, points.length, cutSelection.length, linkReview]);
+  }, [leaveGuardRef, isSavingPlot, isAutoPlotting, routeBusy, linkCreatingQueue, drawMode, points.length, cutSelection.length, linkReview, splitTarget]);
 
   const fitPlotForReview = (plotPoints) => {
     const map = mapInstance.current;
@@ -1955,6 +1958,7 @@ function TrackingMap({
     if (!mapInstance.current) return;
     if (polylineLayer.current) mapInstance.current.removeLayer(polylineLayer.current);
     if (markerLayer.current) mapInstance.current.removeLayer(markerLayer.current);
+    if (splitTarget) return;
 
     if (pathData.length > 0) {
       const routeGroup = L.layerGroup().addTo(mapInstance.current);
@@ -1992,7 +1996,7 @@ function TrackingMap({
       polylineLayer.current = routeGroup;
       markerLayer.current = markerGroup;
     }
-  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded, vehicleColors, fleetVehicles, vehicleId, autoHarvestEdges]);
+  }, [pathData, excludedEdges, selectedEdges, routeEdit, cutMode, cutAnchor, routeBusy, showExcluded, vehicleColors, fleetVehicles, vehicleId, autoHarvestEdges, splitTarget]);
 
   // 🚜 ภาพรวมรถหลายคัน — รถอื่นใช้สีประจำคัน, รถที่เลือกยังคงเส้นละเอียดเกี่ยว/วิ่งแบบเดิม
   useEffect(() => {
@@ -2004,7 +2008,7 @@ function TrackingMap({
       fleetLayer.current = null;
     }
 
-    if (trackingMode !== 'realtime' || routeEdit || drawMode) return;
+    if (trackingMode !== 'realtime' || routeEdit || drawMode || splitTarget) return;
 
     const group = L.layerGroup().addTo(map);
     fleetVehicles.forEach((vehicle, index) => {
@@ -2057,7 +2061,7 @@ function TrackingMap({
       try { map.removeLayer(group); } catch (_) {}
       if (fleetLayer.current === group) fleetLayer.current = null;
     };
-  }, [fleetPaths, fleetVehicles, vehicleColors, vehicleId, trackingMode, routeEdit, drawMode, onSelectVehicle]);
+  }, [fleetPaths, fleetVehicles, vehicleColors, vehicleId, trackingMode, routeEdit, drawMode, onSelectVehicle, splitTarget]);
 
   // 🌍 ขอภาพรวมรถทั้งหมด
   useEffect(() => {
@@ -2399,6 +2403,7 @@ function TrackingMap({
   useEffect(() => {
     if (!plotsLayer.current || !mapInstance.current) return;
     plotsLayer.current.clearLayers();
+    if (splitTarget) return;
     const map = mapInstance.current;
     const labels = [];
     const connectors = L.layerGroup().addTo(plotsLayer.current);
@@ -2473,7 +2478,7 @@ function TrackingMap({
     arrangeLabels();
     map.on('zoomend moveend resize',arrangeLabels);
     return () => map.off('zoomend moveend resize',arrangeLabels);
-  }, [displayPlots, plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, workspaceMode, selectedPlotId, canLockPlot, openManualLock]);
+  }, [displayPlots, plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, workspaceMode, selectedPlotId, canLockPlot, openManualLock, splitTarget]);
 
   const totalPendingHoles = plots.reduce((sum, p) => sum + (p.holeSuggestions || []).filter(h => h.status === 'pending').length, 0);
   useEffect(() => {
@@ -2501,7 +2506,7 @@ function TrackingMap({
   },[focusPlot,plots,displayPlots,vehicleId,workDate]);
   useEffect(()=>{
     const map=mapInstance.current;
-    if(!map || !fieldEditGroup || drawMode || exclusionPanelIndex!==null)return;
+    if(!map || !fieldEditGroup || drawMode || exclusionPanelIndex!==null || splitTarget)return;
     const layer=L.layerGroup().addTo(map);
     for(const i of fieldEditGroup.indices){
       const net=plotGeometries[i]?.net;if(!net)continue;
@@ -2511,12 +2516,12 @@ function TrackingMap({
       })}).addTo(layer);
     }
     return()=>layer.remove();
-  },[fieldEditGroup,fieldEditAction,plotGeometries,drawMode,exclusionPanelIndex]);
+  },[fieldEditGroup,fieldEditAction,plotGeometries,drawMode,exclusionPanelIndex,splitTarget]);
   const panelPlot = exclusionPanelIndex === null ? null : plots[exclusionPanelIndex];
   const panelPendingHoles = (panelPlot?.holeSuggestions || []).filter(h => h.status === 'pending');
 
   return (
-    <div className={`gps-workspace relative w-full h-full flex flex-col ${routeEdit ? 'gps-cutting' : ''}`}>
+    <div className={`gps-workspace relative w-full h-full flex flex-col ${routeEdit ? 'gps-cutting' : ''} ${splitTarget ? 'gps-splitting' : ''}`}>
 
       {!fieldEditGroup && !drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
         <div className="gps-mode-bar" role="group" aria-label="รูปแบบใช้งานแผนที่">
@@ -2797,6 +2802,10 @@ function TrackingMap({
                     </div>}
                     {!group.indices.length && group.autoPlot?.locked_at && !autoArea?.editable_ready && <button className="gps-primary" type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>useAutoPlot(group.autoPlot,'edit')}>นำส่วนที่ล็อกแล้วมาใช้</button>}
                     {!!group.indices.length && <div className="gps-plot-buttons">
+                      <button type="button" disabled={isSavingPlot || plotRevision===null || displayProjection.pending || group.growing} onClick={()=>{
+                        setWorkspaceMode('manage');selectPlotOnMap(group);setMobileToolsOpen(false);
+                        setSplitTarget({group:{...group,name:displayName(group)},revision:plotRevision,ids:group.indices.map(i=>plots[i].id)});
+                      }}>✂️ แบ่งแปลงย้อนหลัง</button>
                       <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');selectPlotOnMap(group);setFieldEditAction('boundary');setFieldEditGroup(group);}}>✏️ แก้ขอบแปลง</button>
                       <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');selectPlotOnMap(group);setFieldEditAction('holes');setFieldEditGroup(group);}}>หักพื้นที่</button>
                       <button type="button" aria-expanded={plotActionsId===group.id} onClick={()=>setPlotActionsId(id=>id===group.id?null:group.id)}>เพิ่มเติม ⋯</button>
@@ -2818,6 +2827,9 @@ function TrackingMap({
       )}
 
       {manualLock && <GpsManualLock key={manualLock.requestId} selection={manualLock} onClose={()=>setManualLock(null)} onRefresh={onRefreshArea} onLocked={data=>{onManualLocked?.(data);setPlotReload(n=>n+1);setPlotSyncStatus(data.editable_error || '🔒 ล็อกแปลงแล้ว งานที่เกี่ยวต่อจะเริ่มแปลงใหม่');}} />}
+      {splitTarget && <GpsSplit map={mapInstance.current} group={splitTarget.group} vehicle={vehicleId} date={workDate} revision={splitTarget.revision} sourceIds={splitTarget.ids}
+        onClose={()=>{setSplitTarget(null);setPlotReload(n=>n+1);}}
+        onSaved={result=>{setPlots(hydratePlots(result.plots_data));setPlotRevision(result.revision);writePlotBackup(result.plots_data,false);setSplitTarget(null);setMobileToolsOpen(true);setSheetTab('plots');setPlotSyncStatus('✅ แบ่งเป็น 2 แปลงแล้ว · ยอดพื้นที่รวมเท่าเดิม');onPlotsSaved?.();}} />}
       {fieldEditGroup && !drawMode && exclusionPanelIndex===null && <div className="gps-field-pick" role="status"><div><strong>{displayName(fieldEditGroup)} · {formatGpsRaiNgan(fieldEditGroup.areaRai)}</strong><p>แตะบริเวณในแปลงที่ต้องการ{fieldEditAction==='holes'?'หักพื้นที่':'แก้ขอบ'}</p></div><button type="button" onClick={()=>setFieldEditGroup(null)}>กลับ</button></div>}
       {/* Compact editor: real-time net area, movable vertices, undo and cancel. */}
       {drawMode && (
