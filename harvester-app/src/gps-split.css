@@ -1,0 +1,20 @@
+.gps-splitting .gps-mode-bar,.gps-splitting .gps-map-actions,.gps-splitting .gps-sheet,.gps-splitting .gps-plot-launcher {display:none!important}
+.gps-split-panel {position:absolute;z-index:600;bottom:max(10px,env(safe-area-inset-bottom));left:12px;width:min(440px,calc(100% - 24px));padding:14px;background:#fff;border:1px solid #ccdad2;border-radius:16px;box-shadow:0 5px 24px #142b3b30;color:#193b2c}
+.gps-split-title {display:flex;align-items:center;justify-content:space-between;gap:10px}
+.gps-split-panel p {font-size:13px;line-height:1.5;margin:8px 0}
+.gps-split-panel button,.gps-split-dialog button {min-height:44px;padding:8px 12px;border:1px solid #cbd8d0;border-radius:10px;font-weight:700;background:white}
+.gps-split-actions {display:flex;gap:8px;margin-top:10px}
+.gps-split-actions button {flex:1;min-width:0}
+.gps-split-actions .gps-split-primary {background:#176147;color:white;border-color:#176147}
+.gps-split-actions button:disabled {opacity:.45}
+.gps-split-point {background:white;border:3px solid #dc2626;border-radius:50%;display:grid;place-items:center;font-weight:900;color:#9f1239}
+.gps-split-label {padding:5px;background:white;border:1px solid #94a3b8;border-radius:10px;text-align:center;pointer-events:none;color:#172e25;line-height:1.4}
+.gps-split-label span {display:block;font-weight:800;white-space:nowrap}
+.gps-split-dialog {width:min(440px,calc(100% - 24px));max-height:calc(100dvh - 24px);overflow:auto;border:0;border-radius:20px;padding:22px;color:#193b2c}
+.gps-split-dialog::backdrop {background:#102d24a6}
+.gps-split-dialog h2 {font-size:22px;font-weight:900;margin:0 0 16px}
+.gps-split-dialog label {display:block;border-left:4px solid;padding-left:10px;margin:12px 0;font-size:14px;font-weight:700}
+.gps-split-dialog input {display:block;width:100%;min-width:0;min-height:44px;border:1px solid #cbd8d0;border-radius:8px;margin:5px 0;padding:8px;font-size:16px}
+.gps-split-dialog p {font-size:14px;line-height:1.6}
+.gps-split-dialog [role=alert],.gps-split-panel [role=alert] {color:#9a3412;background:#fff7ed;padding:8px;border-radius:8px}
+@media(max-width:700px){.gps-split-panel {padding:10px;left:8px;width:calc(100% - 16px)}.gps-split-panel button{font-size:12px;padding:6px}.gps-split-panel p{margin:5px 0;font-size:12px}.gps-split-actions{margin-top:6px}}

@@ -1,6 +1,8 @@
 export function logicalFieldKey(plot) {
   if(plot.group_id || plot.group_key)return plot.group_id || plot.group_key;
   const scope=`${plot.vehicle_id}/${plot.work_date}`;
+  const split=plot.split_origin;
+  if(split?.field_id && String(split.vehicle_id)===String(plot.vehicle_id) && split.work_date===plot.work_date)return `${scope}/auto:${split.field_id}`;
   const origin=plot.auto_origin;
   if(origin?.plot_id && String(origin.vehicle_id)===String(plot.vehicle_id) && origin.work_date===plot.work_date)return `${scope}/auto:${origin.plot_id}`;
   // Older job responses did not expose origin metadata. Only our own durable

@@ -11,6 +11,7 @@ const subtract = (shape, covered) => shape && covered
 // A previous partial lock does not mean continued work is finished. Missing
 // GPS status and manually saved boundaries must not look automatically locked.
 export function gpsPlotStatus(group) {
+  if (group.splitOrigin?.locked_at) return {key:'locked',label:'🔒 ล็อกแล้ว',lockedAt:group.splitOrigin.locked_at};
   if (group.growing) return { key: 'measuring', label: '⏳ กำลังวัด' };
   const lockedAt = group.autoPlot?.locked_at;
   if (group.autoPlot?.state === 'completed' && Number.isFinite(Date.parse(lockedAt))) {
@@ -40,7 +41,7 @@ export function gpsDisplayPlots(saved, geometries, data, vehicle, date, revision
   saved.forEach((plot, index) => {
     const sourceId = gpsOriginFieldId(plot, aliases, vehicle, date);
     const key = sourceId ? `auto:${sourceId}` : `saved:${plot.id}`;
-    if (!groups.has(key)) groups.set(key, { key, id: plot.id, sourceId, name: plot.name, indices: [], shapes: [] });
+    if (!groups.has(key)) groups.set(key, { key, id: plot.id, sourceId, name: plot.name, splitOrigin:plot.split_origin, indices: [], shapes: [] });
     const group = groups.get(key);
     group.indices.push(index);
     if (geometries[index]?.net) group.shapes.push(geometries[index].net);
@@ -50,6 +51,7 @@ export function gpsDisplayPlots(saved, geometries, data, vehicle, date, revision
     group.savedRai = group.geometry ? area(group.geometry) / 1600 : 0;
   }
   const savedCoverage = merge([...groups.values()].map(g => g.geometry).filter(Boolean));
+  const splitReceipts = new Set(saved.flatMap(p => p.split_origin?.source_receipts || []));
   for (const plot of current?.plots || []) {
     const canonicalId = aliases[plot.id] || plot.id;
     const key = `auto:${canonicalId}`;
@@ -57,7 +59,7 @@ export function gpsDisplayPlots(saved, geometries, data, vehicle, date, revision
     const knownReceipts = new Set((group?.indices || []).map(i => saved[i].auto_origin?.receipt_id));
     // Remove original locked coverage before adding work in progress. This
     // preserves edited holes/edges and never brings a deleted receipt back.
-    const receipts = (current.locked_plots || []).filter(p => p.plot_id === plot.id && (ready || knownReceipts.has(p.id)));
+    const receipts = (current.locked_plots || []).filter(p => p.plot_id === plot.id && (ready || knownReceipts.has(p.id) || splitReceipts.has(p.id)));
     let extra = ready && plot.state === 'completed' ? null : subtract(plot.geometry, merge(receipts.map(p => p.geometry)));
     extra = subtract(extra, savedCoverage);
     if (extra && area(extra) < 1) extra = null;

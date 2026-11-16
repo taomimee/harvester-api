@@ -14,6 +14,8 @@ export function prepareAutoPlotUse(data, plotId, existing, vehicle, date, {allow
     for (const [index, rings] of parts.entries()) {
       const id = `auto-${receipt.id}-${index + 1}`;
       if (id.length > 120) throw new Error('รหัสแปลงยาวเกินไป');
+      const splitCopies=next.filter(p=>p.split_origin?.source_parts?.includes(id));
+      if(splitCopies.length){ids.push(...splitCopies.map(p=>p.id));continue;}
       if (next.some(p => p.id === id)) { ids.push(id); continue; }
       const ring = coordinates => {
         const closed = coordinates.length > 1 && coordinates[0][0] === coordinates.at(-1)[0] && coordinates[0][1] === coordinates.at(-1)[1];

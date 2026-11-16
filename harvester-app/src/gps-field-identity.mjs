@@ -24,6 +24,8 @@ export function gpsFieldAliases(plots = []) {
 }
 
 export function gpsOriginFieldId(plot, aliases, vehicle, date) {
+  const split = plot?.split_origin;
+  if (split?.field_id && String(split.vehicle_id) === String(vehicle) && split.work_date === date) return split.field_id;
   const origin = plot?.auto_origin;
   if (!origin?.plot_id || String(origin.vehicle_id) !== String(vehicle) || origin.work_date !== date) return null;
   return aliases[origin.plot_id] || origin.plot_id;
