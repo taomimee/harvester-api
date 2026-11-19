@@ -1,9 +1,9 @@
 // Choose grab handles on the original ring. Never replace the measured vertices.
-const openLength = points => points.length > 1 && points[0].lat === points.at(-1).lat &&
+export const boundaryPointCount = points => points.length > 1 && points[0].lat === points.at(-1).lat &&
   points[0].lng === points.at(-1).lng ? points.length - 1 : points.length;
 
 export function boundaryHandles(points, detailed = false) {
-  const count = openLength(points);
+  const count = boundaryPointCount(points);
   if (detailed || count <= 8) return Array.from({length: count}, (_, i) => i);
   const scale = Math.cos(points[0].lat * Math.PI / 180);
   const xy = points.slice(0, count).map(p => [p.lng * scale, p.lat]);
@@ -37,7 +37,7 @@ export function boundaryHandles(points, detailed = false) {
 
 // Taper a corner move along each edge until the next visible, stationary handle.
 export function moveBoundaryHandle(points, handles, index, destination) {
-  const count = openLength(points);
+  const count = boundaryPointCount(points);
   const anchor = points[index];
   const scale = Math.cos(anchor.lat * Math.PI / 180);
   const deltaLat = destination.lat - anchor.lat, deltaLng = destination.lng - anchor.lng;
@@ -61,4 +61,82 @@ export function moveBoundaryHandle(points, handles, index, destination) {
   next[index] = {...anchor, lat:destination.lat, lng:destination.lng};
   if (count < points.length) next[count] = {...next[0]};
   return next;
+}
+
+// Lay out tap targets in screen pixels. The underlying ring retains all GPS fixes.
+export function boundaryControls(points, pixels, selected = -1) {
+  const count = boundaryPointCount(points);
+  const main = boundaryHandles(points);
+  const corners = [], additions = [];
+  const grid = new Map();
+  const key = (x, y) => x + ',' + y;
+  const fits = (p, gap) => {
+    const x = Math.floor(p.x / 96), y = Math.floor(p.y / 96);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      if (grid.get(key(x + dx, y + dy))?.some(q => Math.hypot(q.x - p.x, q.y - p.y) < gap)) return false;
+    }
+    return true;
+  };
+  const occupy = p => {
+    const cell = key(Math.floor(p.x / 96), Math.floor(p.y / 96));
+    if (!grid.has(cell)) grid.set(cell, []);
+    grid.get(cell).push(p);
+  };
+  const candidates = new Set([selected, ...main, ...Array.from({length:count}, (_, i) => i)]);
+  for (const i of candidates) {
+    if (i < 0 || i >= count) continue;
+    const number = main.indexOf(i) + 1;
+    if (!fits(pixels[i], number ? 52 : 96)) continue;
+    occupy(pixels[i]);
+    corners.push({index:i, number});
+  }
+  corners.sort((a, b) => a.index - b.index);
+  for (let c = 0; c < corners.length && corners.length > 1; c++) {
+    const from = corners[c].index, to = corners[(c + 1) % corners.length].index;
+    const edges = [];
+    let total = 0;
+    for (let i = from; i !== to; i = (i + 1) % count) {
+      const a = pixels[i], b = pixels[(i + 1) % count];
+      const length = Math.hypot(b.x - a.x, b.y - a.y);
+      if (length) edges.push({i, length, start:total});
+      total += length;
+    }
+    const edge = edges.find(e => e.start + e.length >= total / 2);
+    if (!edge) continue;
+    const fraction = (total / 2 - edge.start) / edge.length;
+    const t = fraction < .1 || fraction > .9 ? .5 : fraction;
+    const a = pixels[edge.i], b = pixels[(edge.i + 1) % count];
+    const p = {x:a.x + (b.x - a.x) * t, y:a.y + (b.y - a.y) * t};
+    if (!fits(p, 44)) continue;
+    occupy(p);
+    additions.push({after:edge.i, t});
+  }
+  return {corners, additions};
+}
+
+export function nearestBoundaryEdge(pixels, target) {
+  let best = null;
+  for (let i = 0; i < pixels.length; i++) {
+    const a = pixels[i], b = pixels[(i + 1) % pixels.length];
+    const dx = b.x - a.x, dy = b.y - a.y, length2 = dx * dx + dy * dy;
+    if (!length2) continue;
+    const t = Math.min(1, Math.max(0, ((target.x - a.x) * dx + (target.y - a.y) * dy) / length2));
+    const distance = Math.hypot(target.x - a.x - t * dx, target.y - a.y - t * dy);
+    if (!best || distance < best.distance) best = {after:i, t, distance};
+  }
+  return best;
+}
+
+export function boundaryPointBetween(points, after, t) {
+  const a = points[after], b = points[(after + 1) % boundaryPointCount(points)];
+  return {lat:a.lat + (b.lat - a.lat) * t, lng:a.lng + (b.lng - a.lng) * t};
+}
+
+export function removeBoundaryPoint(points, index) {
+  const count = boundaryPointCount(points);
+  if (count <= 3 || index < 0 || index >= count) return points;
+  const result = points.slice(0, count);
+  result.splice(index, 1);
+  if (count < points.length) result.push({...result[0]});
+  return result;
 }
