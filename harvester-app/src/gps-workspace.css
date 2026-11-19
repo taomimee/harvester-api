@@ -37,12 +37,7 @@
 .gps-map-actions button { min-height:48px; padding:8px 14px; border:1px solid #d3dfd8; border-radius:12px; background:#fff; color:#204b39; box-shadow:0 3px 12px #142d2820; }
 .gps-page .gps-primary, .gps-map-actions button[aria-pressed=true] { background:#176147; color:#fff; border-color:#176147; }
 .gps-plot-launcher { position:absolute; z-index:430; bottom:calc(12px + env(safe-area-inset-bottom)); left:12px; width:min(440px,calc(100% - 82px)); display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; border:1px solid #cfdbd1; border-radius:16px; background:white; box-shadow:0 3px 16px #172c252b; text-align:left; }
-.gps-plot-launcher strong, .gps-list-launch { flex:1; min-width:0; text-align:left; padding:2px 4px; }
-.gps-page .gps-edit-button { flex-shrink:0; background:#176147; color:white; border-radius:10px; padding:7px 12px; font-size:14px; }
-.gps-card-edit { margin:8px 12px 0; }
-.gps-corner-handle { display:grid; place-items:center; }
-.gps-detail-toggle { background:#edf4ef; color:#176147; padding:5px 9px; border-radius:9px; font-size:13px; }
-.gps-plot-launcher small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gps-plot-launcher strong, .gps-plot-launcher small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .gps-list-launch { flex:1; min-width:0; text-align:left; padding:2px 4px; }
 .gps-page .gps-edit-button { flex-shrink:0; background:#176147; color:white; border-radius:10px; padding:7px 12px; font-size:14px; }
 .gps-card-edit { margin:8px 12px 0; }
