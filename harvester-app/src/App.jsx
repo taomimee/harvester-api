@@ -15,6 +15,7 @@ import { gpsRouteLines } from './gps-route-lines.mjs'
 import { groupJobPlots, fieldPaymentStatus } from './gps-field-groups.mjs'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import { gpsFieldAliases, gpsOriginFieldId } from './gps-field-identity.mjs'
+import { boundaryHandles, moveBoundaryHandle } from './gps-edit-handles.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
@@ -1129,7 +1130,7 @@ function TrackingMap({
   const [draftKind, setDraftKind] = useState('manual'); // manual | auto | edit
   const [isAutoPlotting, setIsAutoPlotting] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
-  const [workspaceMode, setWorkspaceMode] = useState('view');
+  const [detailedHandles, setDetailedHandles] = useState(false);
   const [sheetTab, setSheetTab] = useState('plots');
   const [selectedPlotId, setSelectedPlotId] = useState(null);
   const [plotActionsId, setPlotActionsId] = useState(null);
@@ -1184,6 +1185,7 @@ function TrackingMap({
     setAutoFollow(false);
     setEditingPlotIndex(plotIndex);
     setDraftKind('edit');
+    setDetailedHandles(false);
     setHoleEditor(null);
     setDraftHistory([]);
     setExclusionPanelIndex(null);
@@ -1275,7 +1277,7 @@ function TrackingMap({
       const invalid = prepared.find(p=>p.geometryError);
       if (invalid) throw new Error(invalid.geometryError);
       if (action === 'field' && plan.indices.some(i=>prepared[i].job_id != null)) throw new Error('แปลงนี้อยู่ในคิวลูกค้าแล้ว ให้เปิดคิวนั้นเพื่อลงยอด ป้องกันการลงซ้ำ');
-      setWorkspaceMode('manage'); setSheetTab('plots'); setAutoFollow(false);
+      setSheetTab('plots'); setAutoFollow(false);
       if (action === 'link') {openLinkReview(prepared,plan.indices);return;}
       if (plan.added.length && !await savePlotsToServer(prepared)) return;
       if (action === 'field') {onOpenField?.({vehicle_id:Number(vehicleId),work_date:workDate,plot_ids:plan.ids,skipped_fragments:plan.skipped.length,skipped_square_metres:plan.skipped.reduce((sum,p)=>sum+p.squareMetres,0)});return;}
@@ -1443,10 +1445,22 @@ function TrackingMap({
     });
   };
 
+  const selectedGroup = displayPlots.find(group => group.id === selectedPlotId);
+  const editBoundary = group => {
+    if (!group?.indices.length || isSavingPlot || plotRevision === null || displayProjection.pending) return;
+    selectPlotOnMap(group);
+    if (group.indices.length === 1) {
+      openPlotEditor(group.indices[0]);
+    } else {
+      setFieldEditAction('boundary');
+      setFieldEditGroup(group);
+    }
+  };
+
   const showAllPlots = useCallback(() => {
     const bounds = L.latLngBounds(displayPlots.flatMap(p => (p.points || []).map(p => [Number(p.lat), Number(p.lng)])));
     if (!bounds.isValid()) return;
-    setAutoFollow(false); setMobileToolsOpen(false);
+    setAutoFollow(false); setMobileToolsOpen(false); setSelectedPlotId(null);
     mapInstance.current?.stop();
     mapInstance.current?.fitBounds(bounds, {paddingTopLeft:[45,90],paddingBottomRight:[45,110],maxZoom:18,animate:false});
   }, [displayPlots]);
@@ -1515,6 +1529,7 @@ function TrackingMap({
     setAutoFollow(false);
     setEditingPlotIndex(plotIndex);
     setHoleEditor({ kind, id: item?.id || plotNewId() });
+    setDetailedHandles(false);
     setDraftKind(`hole-${kind}`);
     setPoints(item ? item.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })) : []);
     setDraftHistory([]);
@@ -1570,6 +1585,7 @@ function TrackingMap({
 
   const saveDraft = async () => {
     try {
+      if (draftKind === 'edit' && !draftHistory.length) { exitPlotEditor(); return; }
       const draft = refreshPlotMetrics(buildDraftPlot(points));
       const backTo = editingPlotIndex;
       const next = backTo === null ? [...plots, draft] : plots.map((p, i) => i === backTo ? draft : p);
@@ -1580,7 +1596,7 @@ function TrackingMap({
       if (ok) {
         exitPlotEditor();
         if (backTo !== null) {
-          setExclusionPanelIndex(backTo);
+          if (isHoleDraft) setExclusionPanelIndex(backTo);
           fitPlotForReview(draft.points);
         }
       }
@@ -2355,31 +2371,45 @@ function TrackingMap({
       }
     };
     drawPreview(points);
-    points.forEach((p, idx) => {
+    const editingRing = draftKind === 'edit' || (isHoleDraft && !canAddDraftPoints);
+    const simple = editingRing && !detailedHandles;
+    const handles = editingRing ? boundaryHandles(points, !simple) : points.map((_, i) => i);
+    handles.forEach((idx, handleNumber) => {
+      const p = points[idx];
+      const moved = ll => editingRing
+        ? moveBoundaryHandle(points, handles, idx, ll)
+        : points.map((pt, i) => i === idx ? {lat:ll.lat, lng:ll.lng} : pt);
       const marker = L.marker([p.lat, p.lng], {
         icon: L.divIcon({
-          className: 'bg-transparent border-0',
-          html: `<div style="width:26px;height:26px;border-radius:50%;background:${isHoleDraft ? '#DC2626' : '#EA580C'};color:white;border:2px solid white;box-shadow:0 2px 5px #0006;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;cursor:move">${idx + 1}</div>`,
-          iconSize: [26, 26], iconAnchor: [13, 13]
+          className: simple ? 'gps-corner-handle' : 'bg-transparent border-0',
+          html: `<div style="width:26px;height:26px;border-radius:50%;background:${isHoleDraft ? '#DC2626' : '#EA580C'};color:white;border:2px solid white;box-shadow:0 2px 5px #0006;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;cursor:move">${handleNumber + 1}</div>`,
+          iconSize: simple ? [44, 44] : [26, 26], iconAnchor: simple ? [22, 22] : [13, 13]
         }), draggable: !isSavingPlot, bubblingMouseEvents: false
       }).addTo(drawLayer.current);
-      marker.bindTooltip('ลากเพื่อแก้จุด • คลิกขวาเพื่อลบจุด');
+      marker.bindTooltip(simple ? 'ลากเพื่อปรับขอบแปลง' : 'ลากเพื่อแก้จุด • คลิกขวาเพื่อลบจุด');
       marker.on('drag', e => {
         const ll = e.target.getLatLng();
-        const live = points.map((pt, i) => i === idx ? { lat: ll.lat, lng: ll.lng } : pt);
         if (frame !== null) cancelAnimationFrame(frame);
-        frame = requestAnimationFrame(() => drawPreview(live));
+        frame = requestAnimationFrame(() => {
+          const live = moved(ll);
+          if (!simple) { drawPreview(live); return; }
+          // Recompute holes and net area on release. Dragging only repaints the outline.
+          previewLayer.clearLayers();
+          L.polygon(live.map(pt => [pt.lat, pt.lng]), {
+            color:'#F97316', fillOpacity:.12, weight:2, interactive:false
+          }).addTo(previewLayer);
+        });
       });
       marker.on('dragend', e => {
         if (frame !== null) cancelAnimationFrame(frame);
         const ll = e.target.getLatLng();
-        changeDraftPoints(points.map((pt, i) => i === idx ? { lat: ll.lat, lng: ll.lng } : pt));
+        changeDraftPoints(moved(ll));
       });
       marker.on('contextmenu', e => {
         L.DomEvent.stopPropagation(e);
-        if (points.length > 3) changeDraftPoints(points.filter((_, i) => i !== idx));
+        if (!simple && points.length > 3) changeDraftPoints(points.filter((_, i) => i !== idx));
       });
-      if (points.length >= 3) {
+      if (!simple && points.length >= 3) {
         const next = points[(idx + 1) % points.length];
         const mid = { lat: (p.lat + next.lat) / 2, lng: (p.lng + next.lng) / 2 };
         L.marker([mid.lat, mid.lng], {
@@ -2389,7 +2419,7 @@ function TrackingMap({
       }
     });
     return () => { if (frame !== null) cancelAnimationFrame(frame); };
-  }, [points, drawMode, draftKind, editingPlotIndex, holeEditor, plotGeometries, isSavingPlot]);
+  }, [points, drawMode, draftKind, editingPlotIndex, holeEditor, plotGeometries, isSavingPlot, detailedHandles]);
 
   // GeoJSON preserves inner rings and split polygons (Leaflet renders real holes).
   const canLockPlot=Boolean(Number.isSafeInteger(autoArea?.snapshot_revision) && !displayProjection.pending && !isSavingPlot && !drawMode && !routeEdit);
@@ -2405,6 +2435,7 @@ function TrackingMap({
     plotsLayer.current.clearLayers();
     if (splitTarget) return;
     const map = mapInstance.current;
+    const canSelect = !drawMode && !routeEdit && !fieldEditGroup && !linkReview && exclusionPanelIndex === null && !manualLock;
     const labels = [];
     const connectors = L.layerGroup().addTo(plotsLayer.current);
     displayPlots.forEach((group, index) => {
@@ -2419,7 +2450,8 @@ function TrackingMap({
         const plot = plots[i], job = jobs.find(j => String(j.id) === String(plot.job_id));
         return job && ((job.status === 'DONE' && job.payment_status === 'PAID') || jobMergePaidItems(job).some(item => item.key === `${vehicleId}/${workDate}/${plot.id}`));
       });
-      L.geoJSON(group.geometry, { style: { color: boundaryColor, fillColor: boundaryColor, fillOpacity: selected ? 0.25 : 0.12, weight: selected ? 5 : 3 }, interactive: false }).addTo(plotsLayer.current);
+      L.geoJSON(group.geometry, { style: { color: boundaryColor, fillColor: boundaryColor, fillOpacity: selected ? 0.25 : 0.12, weight: selected ? 5 : 3 }, interactive: canSelect, bubblingMouseEvents:false })
+        .on('click', () => { if (canSelect) selectPlotOnMap(group); }).addTo(plotsLayer.current);
       // Keep each saved part's hole editor attached to its original storage ID.
       for (const partIndex of group.indices) {
         const part = plots[partIndex], geometry = plotGeometries[partIndex];
@@ -2427,14 +2459,14 @@ function TrackingMap({
           try {
             const pending = hole.status === 'pending';
             const inside = plotClip('intersect', geometry?.outer, plotRingFeature(hole.points, 0));
-            if (inside) L.geoJSON(inside, { style: { color: '#DC2626', weight: 2, fill: pending, fillOpacity: .27, dashArray: '6 5' }, bubblingMouseEvents: false, interactive: !drawMode && workspaceMode === 'manage' })
+            if (inside) L.geoJSON(inside, { style: { color: '#DC2626', weight: 2, fill: pending, fillOpacity: .27, dashArray: '6 5' }, bubblingMouseEvents: false, interactive: canSelect && selected })
               .bindTooltip(pending ? 'เสนอให้หัก • แตะเพื่อตรวจแก้' : 'พื้นที่หักแล้ว • แตะเพื่อลากแก้')
               .on('click', () => openHoleEditor(partIndex, pending ? 'suggestion' : 'existing', hole.id)).addTo(plotsLayer.current);
           } catch (_) {}
         }
       }
       const center = plotCenter(group.geometry);
-      if (center && !drawMode) {
+      if (center && canSelect) {
         const label = L.marker([center.lat, center.lng], {
           icon: L.divIcon({ className: 'bg-transparent border-0', html: `<div class="gps-boundary-label" style="border-color:${boundaryColor};color:${boundaryColor}"><span>${String(displayName(group)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</span><strong>${formatGpsRaiNgan(group.areaRai)}</strong>${group.growing ? `<button type="button" data-gps-lock class="gps-plot-status is-measuring gps-lock-trigger" ${canLockPlot ? '' : 'disabled'} aria-label="กำลังวัด — ล็อกแปลงนี้">⏳ กำลังวัด</button>` : ''}${paid && !group.growing ? '<small>✓ จ่ายแล้ว</small>' : ''}</div>`, iconSize: [0, 0] }),
           bubblingMouseEvents: false, keyboard:false
@@ -2447,7 +2479,7 @@ function TrackingMap({
     const arrangeLabels = () => {
       connectors.clearLayers();
       const size = map.getSize(), frame = map.getContainer().getBoundingClientRect();
-      const occupied = [...(map.getContainer().parentElement?.querySelectorAll('.gps-mode-bar, .gps-map-actions, .leaflet-control-zoom, .gps-plot-launcher') || [])].map(el => {
+      const occupied = [...(map.getContainer().parentElement?.querySelectorAll('.gps-map-actions, .leaflet-control-zoom, .gps-plot-launcher') || [])].map(el => {
         const r=el.getBoundingClientRect();
         return {left:r.left-frame.left-4,right:r.right-frame.left+4,top:r.top-frame.top-4,bottom:r.bottom-frame.top+4};
       });
@@ -2478,7 +2510,7 @@ function TrackingMap({
     arrangeLabels();
     map.on('zoomend moveend resize',arrangeLabels);
     return () => map.off('zoomend moveend resize',arrangeLabels);
-  }, [displayPlots, plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, workspaceMode, selectedPlotId, canLockPlot, openManualLock, splitTarget]);
+  }, [displayPlots, plots, plotGeometries, drawMode, editingPlotIndex, isSavingPlot, isAutoPlotting, jobs, vehicleId, workDate, routeEdit, fieldEditGroup, linkReview, exclusionPanelIndex, manualLock, selectedPlotId, canLockPlot, openManualLock, splitTarget]);
 
   const totalPendingHoles = plots.reduce((sum, p) => sum + (p.holeSuggestions || []).filter(h => h.status === 'pending').length, 0);
   useEffect(() => {
@@ -2523,12 +2555,6 @@ function TrackingMap({
   return (
     <div className={`gps-workspace relative w-full h-full flex flex-col ${routeEdit ? 'gps-cutting' : ''} ${splitTarget ? 'gps-splitting' : ''}`}>
 
-      {!fieldEditGroup && !drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
-        <div className="gps-mode-bar" role="group" aria-label="รูปแบบใช้งานแผนที่">
-          <button type="button" aria-pressed={workspaceMode === 'view'} onClick={() => {setWorkspaceMode('view');setSheetTab('plots');setMobileToolsOpen(false);setPlotActionsId(null);}}>🚜 ดูรถ</button>
-          <button type="button" aria-pressed={workspaceMode === 'manage'} onClick={() => {setWorkspaceMode('manage');setAutoFollow(false);setMobileToolsOpen(false);}}>🌾 จัดการแปลง</button>
-        </div>
-      )}
       {routeEdit && <>
         <div className="absolute top-3 left-3 right-16 sm:right-auto sm:w-80 z-[440] bg-slate-900 text-white rounded-2xl shadow-xl p-3">
           <div className="flex justify-between items-center"><strong>🧽 ยางลบเส้นเดินรถ</strong><button disabled={routeBusy} aria-label="ปิดโหมดยางลบ" onClick={() => {if(cutSelection.length && !window.confirm('ออกโดยไม่บันทึกสิ่งที่จิ้มไว้?')) return;setRouteEdit(false);setCutSelection([]);setCutAnchor(null);}}>✕</button></div>
@@ -2749,16 +2775,19 @@ function TrackingMap({
       {!fieldEditGroup && !drawMode && !routeEdit && !linkReview && exclusionPanelIndex === null && (
         <>
           <div className="gps-map-actions">
-            {displayPlots.length > 0 && workspaceMode === 'view' && <button type="button" aria-label="ดูแปลงทั้งหมด" title="ดูแปลงทั้งหมด" onClick={showAllPlots}>🌾 <span className="gps-action-label">ดูแปลงทั้งหมด</span></button>}
-            {pathData.length > 0 && (workspaceMode === 'manage' || !plots.length) && <button type="button" aria-label="ดูเส้นทาง" title="ดูเส้นทาง" onClick={fitAllRoute}>🗺️ <span className="gps-action-label">ดูเส้นทาง</span></button>}
-            {pathData.length > 0 && trackingMode === 'realtime' && <button type="button" aria-pressed={autoFollow} aria-label={autoFollow ? 'หยุดตามรถ' : 'ตามรถ'} title="ตามรถ" onClick={() => {setMobileToolsOpen(false);setAutoFollow(v => !v);}}><span aria-hidden="true">🎯</span><span className="gps-action-label">{autoFollow ? 'กำลังตามรถ' : 'ตามรถ'}</span></button>}
-            {workspaceMode === 'manage' && <button type="button" className="gps-primary" aria-label="เครื่องมือแปลง" title="เครื่องมือแปลง" aria-expanded={mobileToolsOpen && sheetTab === 'tools'} onClick={() => {setSheetTab('tools');setMobileToolsOpen(v => sheetTab === 'tools' ? !v : true);}}>🛠 <span className="gps-action-label">เครื่องมือแปลง</span></button>}
+            {displayPlots.length > 0 && <button type="button" aria-label="ดูแปลงทั้งหมด" title="ดูแปลงทั้งหมด" onClick={showAllPlots}>🌾 <span className="gps-action-label">ดูแปลงทั้งหมด</span></button>}
+            {pathData.length > 0 && trackingMode === 'realtime' && <button type="button" aria-pressed={autoFollow} aria-label={autoFollow ? 'หยุดตามรถ' : 'ตามรถ'} title="ตามรถ" onClick={() => {setMobileToolsOpen(false);setSelectedPlotId(null);setAutoFollow(v => !v);}}><span aria-hidden="true">🎯</span><span className="gps-action-label">{autoFollow ? 'กำลังตามรถ' : 'ตามรถ'}</span></button>}
           </div>
 
-          <button type="button" className="gps-plot-launcher" aria-expanded={mobileToolsOpen && sheetTab === 'plots'} aria-controls="gps-plot-sheet" onClick={() => {setSheetTab('plots');setMobileToolsOpen(v => sheetTab === 'plots' ? !v : true);}}>
-            <span><strong>{displayProjection.pending && !displayPlots.length ? 'กำลังโหลดแปลง…' : `🌾 แปลง${plotDateLabel} ${displayPlots.length} แปลง${displayWorking ? ' · กำลังวัดต่อ' : ''}`}</strong><small>แตะดูยอดแต่ละแปลง</small></span>
-            <span aria-hidden="true">{mobileToolsOpen ? '⌄' : '⌃'}</span>
-          </button>
+          {!mobileToolsOpen && <div className="gps-plot-launcher">
+            <button type="button" className="gps-list-launch" aria-controls="gps-plot-sheet" aria-expanded={false}
+              onClick={() => {setSheetTab('plots');setMobileToolsOpen(true);}}>
+              <strong>{selectedGroup ? displayName(selectedGroup) : displayProjection.pending && !displayPlots.length ? 'กำลังโหลดแปลง…' : `แปลง${plotDateLabel} · ${displayPlots.length} แปลง`}</strong>
+              <small>{selectedGroup ? formatGpsRaiNgan(selectedGroup.areaRai) + ' · ดูรายการแปลง' : 'ดูรายการแปลงและเครื่องมือ'} ↑</small>
+            </button>
+            {!!selectedGroup?.indices.length && <button type="button" className="gps-edit-button"
+              disabled={isSavingPlot || plotRevision === null || displayProjection.pending} onClick={() => editBoundary(selectedGroup)}>แก้ขอบแปลง</button>}
+          </div>}
         </>
       )}
 
@@ -2767,11 +2796,12 @@ function TrackingMap({
           <div className="gps-sheet-header" onTouchStart={e => {sheetSwipeStart.current = e.touches[0].clientY;}} onTouchEnd={e => {if (sheetSwipeStart.current !== null && e.changedTouches[0].clientY - sheetSwipeStart.current > 55) setMobileToolsOpen(false);sheetSwipeStart.current = null;}}>
             <span className="gps-sheet-handle" aria-hidden="true" />
             <div className="gps-sheet-heading"><div><strong>{sheetTab === 'tools' ? 'เครื่องมือจัดการแปลง' : `แปลง${plotDateLabel}`}</strong><small>{sheetTab === 'tools' ? 'เลือกเครื่องมือที่ต้องการ' : displayProjection.pending && !displayPlots.length ? 'กำลังโหลดแปลงล่าสุด…' : `รวม ${displayPlots.length} แปลง${displayWorking ? ' · กำลังวัดต่อ' : ''}`}</small></div><button type="button" onClick={() => setMobileToolsOpen(false)}>พับลง ↓</button></div>
-            {workspaceMode === 'manage' && <div className="gps-sheet-tabs" role="group" aria-label="เนื้อหาแผงแปลง"><button type="button" aria-pressed={sheetTab === 'plots'} onClick={() => setSheetTab('plots')}>รายการแปลง</button><button type="button" aria-pressed={sheetTab === 'tools'} onClick={() => setSheetTab('tools')}>เครื่องมือ</button></div>}
+            <div className="gps-sheet-tabs" role="group" aria-label="เนื้อหาแผงแปลง"><button type="button" aria-pressed={sheetTab === 'plots'} onClick={() => setSheetTab('plots')}>รายการแปลง</button><button type="button" aria-pressed={sheetTab === 'tools'} onClick={() => setSheetTab('tools')}>เครื่องมือ</button></div>
           </div>
           <div className="gps-sheet-body">
-            {sheetTab === 'tools' && workspaceMode === 'manage' ? <>
+            {sheetTab === 'tools' ? <>
               <div className="gps-tool-grid">
+                {pathData.length > 0 && <button type="button" onClick={() => {setMobileToolsOpen(false);fitAllRoute();}}>ดูเส้นทางทั้งวัน</button>}
                 <button type="button" disabled={isAutoPlotting || isSavingPlot || !pathData.length} className="gps-primary" onClick={() => {setMobileToolsOpen(false);generateAutoPlot();}}>{isAutoPlotting ? 'กำลังหาแปลง…' : '✨ หาแปลงอัตโนมัติ'}</button>
                 <button type="button" disabled={isSavingPlot} onClick={() => {setAutoFollow(false);setEditingPlotIndex(null);setDraftKind('manual');setHoleEditor(null);setDraftHistory([]);setExclusionPanelIndex(null);setPoints([]);setDrawMode(true);setMobileToolsOpen(false);}}>📏 วาดแปลงเอง</button>
                 <button type="button" onClick={() => {setMobileToolsOpen(false);setCutMode('erase');setCutSelection([]);setCutAnchor(null);setRouteEdit(true);setAutoFollow(false);}}>✂ ตัดเส้นเดินรถ</button>
@@ -2786,16 +2816,18 @@ function TrackingMap({
               {displayProjection.error && <p role="alert">{displayProjection.error}</p>}
               {displayProjection.pending && <p role="status">กำลังอัปเดตขอบแปลง…</p>}
               {autoArea?.editable_error && <p role="status">{autoArea.editable_error}</p>}
-              {!displayPlots.length && <p className="gps-empty">{plotRevision === null || displayProjection.pending ? 'กำลังรอข้อมูลแปลงและผล GPS ล่าสุด' : 'รอแนวเกี่ยวชัดเจน แล้วระบบจะเก็บแปลงให้อัตโนมัติ'}{workspaceMode === 'manage' && <button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button>}</p>}
+              {!displayPlots.length && <p className="gps-empty">{plotRevision === null || displayProjection.pending ? 'กำลังรอข้อมูลแปลงและผล GPS ล่าสุด' : 'รอแนวเกี่ยวชัดเจน แล้วระบบจะเก็บแปลงให้อัตโนมัติ'}<button type="button" onClick={() => setSheetTab('tools')}>เปิดเครื่องมือเพิ่มแปลง</button></p>}
               {displayPlots.map(group => {
                 const status = gpsPlotStatus(group);
                 const linkedJobs = [...new Set(group.indices.map(i => plots[i].job_id).filter(Boolean))];
                 return <article key={group.key} className={`gps-plot-card ${selectedPlotId === group.id ? 'is-selected' : ''}`}>
                   <div className="gps-plot-heading"><button type="button" className="gps-plot-select" onClick={() => selectPlotOnMap(group)} aria-label={`ดู ${displayName(group)} บนแผนที่`}><strong>{displayName(group)}</strong><b>{formatGpsRaiNgan(group.areaRai)}</b></button><div className="gps-plot-status-row">{group.growing ? <button type="button" className="gps-plot-status is-measuring gps-lock-trigger" disabled={!canLockPlot} onClick={()=>openManualLock(group)} aria-label={`กำลังวัด — ล็อก ${displayName(group)}`}>{status.label} · แตะเพื่อล็อก</button> : <span className={`gps-plot-status is-${status.key}`}>{status.label}</span>}{status.lockedAt && <small>ล็อกเมื่อ {new Date(status.lockedAt).toLocaleTimeString('th-TH',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'})} น.</small>}</div></div>
-                  <details className="gps-plot-controls" open={workspaceMode === 'manage'}><summary>จัดการแปลง</summary>
+                  {!!group.indices.length && <button type="button" className="gps-edit-button gps-card-edit"
+                    disabled={isSavingPlot || plotRevision === null || displayProjection.pending} onClick={() => editBoundary(group)}>แก้ขอบแปลง</button>}
+                  <details className="gps-plot-controls"><summary>ตัวเลือกแปลง</summary>
                     {group.growing && <p className="gps-auto-detail">ยอดรวมยังเพิ่มได้{group.savedRai > 0 ? ` · ส่วนที่ล็อกแล้ว ${formatGpsRaiNgan(group.savedRai)} นำไปใช้ได้` : ' · รอรถออกห่างเพื่อล็อกยอด'}</p>}
                     {!!group.indices.length && <div className="gps-plot-buttons">
-                      <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>{setWorkspaceMode('manage');openLinkReview(plots,group.indices);}}>🔗 ผูกคิว / ยอด{group.growing ? 'ที่ล็อกแล้ว' : ''}</button>
+                      <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>{openLinkReview(plots,group.indices);}}>🔗 ผูกคิว / ยอด{group.growing ? 'ที่ล็อกแล้ว' : ''}</button>
                       {canPostWork && !linkedJobs.length && <button type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>onOpenField?.({vehicle_id:Number(vehicleId),work_date:workDate,plot_ids:group.indices.map(i=>plots[i].id)})}>ใช้ลงยอดนอกพื้นที่{group.growing ? ' (ส่วนที่ล็อกแล้ว)' : ''}</button>}
                       {linkedJobs.map(id=><button key={id} type="button" onClick={()=>onOpenJob?.(id)}>เปิดคิวงาน #{id}</button>)}
                       <button type="button" onClick={()=>copyPlotCenter(plotCenter(group.geometry))}>📍 คัดลอกพิกัด</button>
@@ -2803,11 +2835,10 @@ function TrackingMap({
                     {!group.indices.length && group.autoPlot?.locked_at && !autoArea?.editable_ready && <button className="gps-primary" type="button" disabled={isSavingPlot || plotRevision===null} onClick={()=>useAutoPlot(group.autoPlot,'edit')}>นำส่วนที่ล็อกแล้วมาใช้</button>}
                     {!!group.indices.length && <div className="gps-plot-buttons">
                       <button type="button" disabled={isSavingPlot || plotRevision===null || displayProjection.pending || group.growing} onClick={()=>{
-                        setWorkspaceMode('manage');selectPlotOnMap(group);setMobileToolsOpen(false);
+                        selectPlotOnMap(group);setMobileToolsOpen(false);
                         setSplitTarget({group:{...group,name:displayName(group)},revision:plotRevision,ids:group.indices.map(i=>plots[i].id)});
                       }}>✂️ แบ่งแปลงย้อนหลัง</button>
-                      <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');selectPlotOnMap(group);setFieldEditAction('boundary');setFieldEditGroup(group);}}>✏️ แก้ขอบแปลง</button>
-                      <button type="button" disabled={isSavingPlot} onClick={()=>{setWorkspaceMode('manage');selectPlotOnMap(group);setFieldEditAction('holes');setFieldEditGroup(group);}}>หักพื้นที่</button>
+                      <button type="button" disabled={isSavingPlot} onClick={()=>{selectPlotOnMap(group);setFieldEditAction('holes');setFieldEditGroup(group);}}>หักพื้นที่</button>
                       <button type="button" aria-expanded={plotActionsId===group.id} onClick={()=>setPlotActionsId(id=>id===group.id?null:group.id)}>เพิ่มเติม ⋯</button>
                       {plotActionsId===group.id && <div className="gps-delete-zone"><p>ลบขอบแปลงนี้ออกจากรายการ พื้นที่ GPS ที่ผูกคิวจะเปลี่ยนตาม</p><button type="button" disabled={isSavingPlot || plotRevision===null} onClick={async()=>{if(!window.confirm(`ลบ ${displayName(group)} ทั้งแปลงใช่ไหม? พื้นที่ GPS ที่เชื่อมกับคิวจะเปลี่ยนตาม`))return;const indices=new Set(group.indices);const ok=await savePlotsToServer(plots.filter((_,i)=>!indices.has(i)));if(ok){setPlotActionsId(null);setSelectedPlotId(null);}}}>ลบแปลงนี้</button></div>}
                     </div>}
@@ -2822,7 +2853,7 @@ function TrackingMap({
         </section>
       )}
 
-      {!routeReady && routeMessage && workspaceMode === 'manage' && !routeEdit && !drawMode && (
+      {!routeReady && routeMessage && mobileToolsOpen && sheetTab === 'tools' && !routeEdit && !drawMode && (
         <div role="status" className="gps-route-warning">เครื่องมือตัดเส้นยังไม่พร้อม <button type="button" onClick={() => setReloadRoute(n => n+1)}>ลองใหม่</button></div>
       )}
 
@@ -2838,12 +2869,14 @@ function TrackingMap({
             <p className="font-black text-xs text-orange-800">{isHoleDraft ? '✂️ พื้นที่หัก' : '📏 ขอบแปลง'}{fieldEditGroup ? ` • ${displayName(fieldEditGroup)}` : editingPlotIndex !== null ? ` • ${plots[editingPlotIndex]?.name || 'แปลงที่เลือก'}` : ''}</p>
             <p aria-live="polite" className="text-xs font-bold text-green-800">{fieldEditGroup ? 'บริเวณที่กำลังแก้' : 'สุทธิ'}: {currentArea.text}</p>
             {currentArea.excludedText && <p className="text-[10px] text-red-700">หักรวม: {currentArea.excludedText}</p>}
-            <p className="text-[10px] text-gray-500">{canAddDraftPoints ? 'แตะรอบพื้นที่ • ลากจุดเพื่อปรับวง' : 'ลากจุดเพื่อปรับวง • แตะ + บนเส้นเพื่อเพิ่มมุม'}</p>
+            <p className="text-[10px] text-gray-500">{canAddDraftPoints ? 'แตะรอบพื้นที่ • ลากจุดเพื่อปรับวง' : ((draftKind === 'edit' || isHoleDraft) && !detailedHandles ? 'ลากจุดหลักเพื่อปรับขอบ' : 'ลากจุดเพื่อปรับวง • แตะ + บนเส้นเพื่อเพิ่มมุม')}</p>
             {draftError && <p role="alert" className="text-[10px] font-bold text-red-700">{draftError}</p>}
           </div>
           {canAddDraftPoints && <div className="sm:hidden absolute inset-0 flex items-center justify-center pointer-events-none z-[410]"><span className="text-3xl text-red-600 font-light drop-shadow">＋</span></div>}
           <div className="absolute left-2 right-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-[460] flex flex-wrap sm:flex-nowrap justify-center items-center bg-white/95 backdrop-blur p-2 rounded-2xl shadow-xl border border-gray-200 gap-1.5" style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
             <button onClick={cancelDraft} disabled={isSavingPlot} className="px-3 py-2.5 rounded-xl bg-red-50 text-red-700 font-bold text-xs disabled:opacity-40">ยกเลิก</button>
+            {(draftKind === 'edit' || (isHoleDraft && !canAddDraftPoints)) && <button type="button" aria-pressed={detailedHandles}
+              className="gps-detail-toggle" onClick={() => setDetailedHandles(v => !v)}>{detailedHandles ? 'ใช้จุดหลัก' : 'ดูจุดละเอียด'}</button>}
             <button onClick={undoDraft} disabled={!draftHistory.length || isSavingPlot} className="px-3 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs disabled:opacity-40">↩ ย้อน</button>
             {canAddDraftPoints && <button onClick={() => {
               const center = mapInstance.current?.getCenter();
