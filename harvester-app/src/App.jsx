@@ -15,7 +15,7 @@ import { gpsRouteLines } from './gps-route-lines.mjs'
 import { groupJobPlots, fieldPaymentStatus } from './gps-field-groups.mjs'
 import { prepareAutoPlotUse } from './gps-auto-import.mjs'
 import { gpsFieldAliases, gpsOriginFieldId } from './gps-field-identity.mjs'
-import { boundaryHandles, moveBoundaryHandle } from './gps-edit-handles.mjs'
+import { boundaryControls, boundaryPointCount, boundaryPointBetween, moveBoundaryHandle, nearestBoundaryEdge, removeBoundaryPoint } from './gps-edit-handles.mjs'
 import './gps-workspace.css'
 import './mobile-layout.css'
 import { fieldTripPeriodStats } from './field-trip-reports.mjs'
@@ -1130,7 +1130,7 @@ function TrackingMap({
   const [draftKind, setDraftKind] = useState('manual'); // manual | auto | edit
   const [isAutoPlotting, setIsAutoPlotting] = useState(false);
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
-  const [detailedHandles, setDetailedHandles] = useState(false);
+  const [selectedCorner, setSelectedCorner] = useState(null);
   const [sheetTab, setSheetTab] = useState('plots');
   const [selectedPlotId, setSelectedPlotId] = useState(null);
   const [plotActionsId, setPlotActionsId] = useState(null);
@@ -1143,6 +1143,9 @@ function TrackingMap({
   const [draftError, setDraftError] = useState('');
   const isHoleDraft = draftKind.startsWith('hole-');
   const canAddDraftPoints = draftKind === 'manual' || draftKind === 'hole-new';
+
+  const editingRing = draftKind === 'edit' || (isHoleDraft && !canAddDraftPoints);
+  const selectedCornerIndex = selectedCorner ? points.indexOf(selectedCorner) : -1;
 
   const calculateThaiArea = plotThaiArea;
   const formatThaiRai = (value) => plotThaiArea(Number(value || 0) * 1600).text;
@@ -1185,7 +1188,7 @@ function TrackingMap({
     setAutoFollow(false);
     setEditingPlotIndex(plotIndex);
     setDraftKind('edit');
-    setDetailedHandles(false);
+    setSelectedCorner(null);
     setHoleEditor(null);
     setDraftHistory([]);
     setExclusionPanelIndex(null);
@@ -1529,7 +1532,7 @@ function TrackingMap({
     setAutoFollow(false);
     setEditingPlotIndex(plotIndex);
     setHoleEditor({ kind, id: item?.id || plotNewId() });
-    setDetailedHandles(false);
+    setSelectedCorner(null);
     setDraftKind(`hole-${kind}`);
     setPoints(item ? item.points.map(p => ({ lat: Number(p.lat), lng: Number(p.lng) })) : []);
     setDraftHistory([]);
@@ -1544,11 +1547,13 @@ function TrackingMap({
 
   const changeDraftPoints = (next) => {
     if (isSavingPlot) return;
+    if (next === points) return;
     setDraftHistory(history => [...history.slice(-49), points]);
     setPoints(next);
   };
   const undoDraft = () => {
     if (!draftHistory.length) return;
+    setSelectedCorner(null);
     setPoints(draftHistory[draftHistory.length - 1]);
     setDraftHistory(history => history.slice(0, -1));
   };
@@ -2371,55 +2376,101 @@ function TrackingMap({
       }
     };
     drawPreview(points);
-    const editingRing = draftKind === 'edit' || (isHoleDraft && !canAddDraftPoints);
-    const simple = editingRing && !detailedHandles;
-    const handles = editingRing ? boundaryHandles(points, !simple) : points.map((_, i) => i);
-    handles.forEach((idx, handleNumber) => {
-      const p = points[idx];
-      const moved = ll => editingRing
-        ? moveBoundaryHandle(points, handles, idx, ll)
-        : points.map((pt, i) => i === idx ? {lat:ll.lat, lng:ll.lng} : pt);
-      const marker = L.marker([p.lat, p.lng], {
-        icon: L.divIcon({
-          className: simple ? 'gps-corner-handle' : 'bg-transparent border-0',
-          html: `<div style="width:26px;height:26px;border-radius:50%;background:${isHoleDraft ? '#DC2626' : '#EA580C'};color:white;border:2px solid white;box-shadow:0 2px 5px #0006;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;cursor:move">${handleNumber + 1}</div>`,
-          iconSize: simple ? [44, 44] : [26, 26], iconAnchor: simple ? [22, 22] : [13, 13]
-        }), draggable: !isSavingPlot, bubblingMouseEvents: false
-      }).addTo(drawLayer.current);
-      marker.bindTooltip(simple ? 'ลากเพื่อปรับขอบแปลง' : 'ลากเพื่อแก้จุด • คลิกขวาเพื่อลบจุด');
-      marker.on('drag', e => {
-        const ll = e.target.getLatLng();
-        if (frame !== null) cancelAnimationFrame(frame);
-        frame = requestAnimationFrame(() => {
-          const live = moved(ll);
-          if (!simple) { drawPreview(live); return; }
-          // Recompute holes and net area on release. Dragging only repaints the outline.
-          previewLayer.clearLayers();
-          L.polygon(live.map(pt => [pt.lat, pt.lng]), {
-            color:'#F97316', fillOpacity:.12, weight:2, interactive:false
-          }).addTo(previewLayer);
-        });
-      });
-      marker.on('dragend', e => {
-        if (frame !== null) cancelAnimationFrame(frame);
-        const ll = e.target.getLatLng();
-        changeDraftPoints(moved(ll));
-      });
-      marker.on('contextmenu', e => {
-        L.DomEvent.stopPropagation(e);
-        if (!simple && points.length > 3) changeDraftPoints(points.filter((_, i) => i !== idx));
-      });
-      if (!simple && points.length >= 3) {
-        const next = points[(idx + 1) % points.length];
-        const mid = { lat: (p.lat + next.lat) / 2, lng: (p.lng + next.lng) / 2 };
-        L.marker([mid.lat, mid.lng], {
-          icon: L.divIcon({ className: 'bg-transparent border-0', html: '<div style="width:20px;height:20px;border-radius:50%;background:white;border:1px solid #EA580C;color:#C2410C;text-align:center;line-height:18px;font-size:15px;font-weight:bold">+</div>', iconSize: [20, 20], iconAnchor: [10, 10] }),
-          bubblingMouseEvents: false
-        }).bindTooltip('เพิ่มจุดตรงกลางเส้น').on('click', () => changeDraftPoints([...points.slice(0, idx + 1), mid, ...points.slice(idx + 1)])).addTo(drawLayer.current);
+    const map = mapInstance.current;
+    const controls = L.layerGroup().addTo(drawLayer.current);
+    const count = editingRing ? boundaryPointCount(points) : points.length;
+    const indices = Array.from({length:count}, (_, i) => i);
+    const insertPoint = (after, t) => {
+      if (isSavingPlot) return;
+      const point = boundaryPointBetween(points, after, t);
+      changeDraftPoints([...points.slice(0, after + 1), point, ...points.slice(after + 1)]);
+      setSelectedCorner(point);
+    };
+    const screenPoints = () => points.slice(0, count).map(p => map.project([p.lat, p.lng]));
+    const tapEdge = event => {
+      if (isSavingPlot || !editingRing) return;
+      const pixels = screenPoints(), target = map.project(event.latlng);
+      const hit = nearestBoundaryEdge(pixels, target);
+      if (!hit || hit.distance > 16) return;
+      const next = (hit.after + 1) % count;
+      for (const i of [hit.after, next]) {
+        if (Math.hypot(pixels[i].x - target.x, pixels[i].y - target.y) <= 6) {
+          setSelectedCorner(points[i]);
+          return;
+        }
       }
-    });
-    return () => { if (frame !== null) cancelAnimationFrame(frame); };
-  }, [points, drawMode, draftKind, editingPlotIndex, holeEditor, plotGeometries, isSavingPlot, detailedHandles]);
+      if (hit.t === 0 || hit.t === 1) {
+        setSelectedCorner(points[hit.t === 0 ? hit.after : next]);
+        return;
+      }
+      insertPoint(hit.after, hit.t);
+    };
+    const paintControls = () => {
+      controls.clearLayers();
+      const layout = editingRing ? boundaryControls(points, screenPoints(), selectedCornerIndex) : {
+        corners:indices.map(i => ({index:i, number:i + 1})),
+        additions:count >= 3 ? indices.map(i => ({after:i, t:.5})) : []
+      };
+      for (const {index, number} of layout.corners) {
+        const p = points[index], selected = editingRing && index === selectedCornerIndex;
+        const title = number ? `เลือกจุดที่ ${number}` : 'เลือกจุดย่อย';
+        const marker = L.marker([p.lat, p.lng], {
+          title, alt:title, zIndexOffset:selected ? 1000 : 0,
+          icon:L.divIcon({
+            className:`gps-edit-marker${selected ? ' is-selected' : ''}${!number ? ' is-minor' : ''}${isHoleDraft ? ' is-hole' : ''}`,
+            html:`<span>${number || ''}</span>`, iconSize:editingRing ? [44,44] : [26,26], iconAnchor:editingRing ? [22,22] : [13,13]
+          }),
+          draggable:!isSavingPlot, bubblingMouseEvents:false
+        }).addTo(controls);
+        marker.getElement()?.setAttribute('aria-label',title);
+        if (editingRing) marker.on('click', () => setSelectedCorner(p));
+        const moved = ll => editingRing ? moveBoundaryHandle(points, indices, index, ll)
+          : points.map((pt,i) => i === index ? {lat:ll.lat, lng:ll.lng} : pt);
+        marker.on('drag', event => {
+          const ll = event.target.getLatLng();
+          if (frame !== null) cancelAnimationFrame(frame);
+          frame = requestAnimationFrame(() => {
+            const live = moved(ll);
+            if (!editingRing) { drawPreview(live); return; }
+            previewLayer.clearLayers();
+            L.polygon(live.map(pt => [pt.lat, pt.lng]), {
+              color:'#F97316', fillOpacity:.12, weight:2, interactive:false
+            }).addTo(previewLayer);
+          });
+        });
+        marker.on('dragend', event => {
+          if (frame !== null) cancelAnimationFrame(frame);
+          const next = moved(event.target.getLatLng());
+          if (editingRing) setSelectedCorner(next[index]);
+          changeDraftPoints(next);
+        });
+        marker.on('contextmenu', e => {
+          L.DomEvent.stopPropagation(e);
+          changeDraftPoints(removeBoundaryPoint(points, index));
+          setSelectedCorner(null);
+        });
+      }
+      for (const {after, t} of layout.additions) {
+        const p = boundaryPointBetween(points, after, t);
+        const marker = L.marker([p.lat, p.lng], {
+          title:'เพิ่มจุดบนขอบ', alt:'เพิ่มจุดบนขอบ',
+          icon:L.divIcon({className:'gps-edit-marker is-add', html:'<span>＋</span>', iconSize:editingRing ? [44,44] : [22,22], iconAnchor:editingRing ? [22,22] : [11,11]}),
+          bubblingMouseEvents:false
+        }).on('click', () => insertPoint(after, t)).addTo(controls);
+        marker.getElement()?.setAttribute('aria-label','เพิ่มจุดบนขอบ');
+      }
+    };
+    paintControls();
+    if (editingRing) {
+      map.on('zoomend', paintControls);
+      map.on('click', tapEdge);
+    }
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      map.off('zoomend', paintControls);
+      map.off('click', tapEdge);
+    };
+  }, [points, drawMode, draftKind, editingPlotIndex, holeEditor, plotGeometries, isSavingPlot, selectedCornerIndex]);
 
   // GeoJSON preserves inner rings and split polygons (Leaflet renders real holes).
   const canLockPlot=Boolean(Number.isSafeInteger(autoArea?.snapshot_revision) && !displayProjection.pending && !isSavingPlot && !drawMode && !routeEdit);
@@ -2869,21 +2920,22 @@ function TrackingMap({
             <p className="font-black text-xs text-orange-800">{isHoleDraft ? '✂️ พื้นที่หัก' : '📏 ขอบแปลง'}{fieldEditGroup ? ` • ${displayName(fieldEditGroup)}` : editingPlotIndex !== null ? ` • ${plots[editingPlotIndex]?.name || 'แปลงที่เลือก'}` : ''}</p>
             <p aria-live="polite" className="text-xs font-bold text-green-800">{fieldEditGroup ? 'บริเวณที่กำลังแก้' : 'สุทธิ'}: {currentArea.text}</p>
             {currentArea.excludedText && <p className="text-[10px] text-red-700">หักรวม: {currentArea.excludedText}</p>}
-            <p className="text-[10px] text-gray-500">{canAddDraftPoints ? 'แตะรอบพื้นที่ • ลากจุดเพื่อปรับวง' : ((draftKind === 'edit' || isHoleDraft) && !detailedHandles ? 'ลากจุดหลักเพื่อปรับขอบ' : 'ลากจุดเพื่อปรับวง • แตะ + บนเส้นเพื่อเพิ่มมุม')}</p>
+            <p className="text-[10px] text-gray-500">{canAddDraftPoints ? 'แตะรอบพื้นที่ • ลากจุดเพื่อปรับวง' : editingRing ? 'ลากจุดเพื่อปรับขอบ · แตะ ＋ หรือเส้นเพื่อเพิ่ม · เลือกจุดเพื่อลบ' : 'ลากจุดเพื่อปรับวง · แตะ ＋ เพื่อเพิ่มจุด'}</p>
             {draftError && <p role="alert" className="text-[10px] font-bold text-red-700">{draftError}</p>}
           </div>
           {canAddDraftPoints && <div className="sm:hidden absolute inset-0 flex items-center justify-center pointer-events-none z-[410]"><span className="text-3xl text-red-600 font-light drop-shadow">＋</span></div>}
-          <div className="absolute left-2 right-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-[460] flex flex-wrap sm:flex-nowrap justify-center items-center bg-white/95 backdrop-blur p-2 rounded-2xl shadow-xl border border-gray-200 gap-1.5" style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+          <div className={`absolute left-2 right-2 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 z-[460] flex flex-wrap sm:flex-nowrap justify-center items-center bg-white/95 backdrop-blur p-2 rounded-2xl shadow-xl border border-gray-200 gap-1.5 ${editingRing ? 'gps-corner-actions' : ''}`} style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
             <button onClick={cancelDraft} disabled={isSavingPlot} className="px-3 py-2.5 rounded-xl bg-red-50 text-red-700 font-bold text-xs disabled:opacity-40">ยกเลิก</button>
-            {(draftKind === 'edit' || (isHoleDraft && !canAddDraftPoints)) && <button type="button" aria-pressed={detailedHandles}
-              className="gps-detail-toggle" onClick={() => setDetailedHandles(v => !v)}>{detailedHandles ? 'ใช้จุดหลัก' : 'ดูจุดละเอียด'}</button>}
+            {editingRing && <button type="button" className="gps-delete-corner"
+              disabled={selectedCornerIndex < 0 || boundaryPointCount(points) <= 3 || isSavingPlot}
+              onClick={() => {changeDraftPoints(removeBoundaryPoint(points, selectedCornerIndex));setSelectedCorner(null);}} aria-label="ลบจุดที่เลือก">ลบจุด</button>}
             <button onClick={undoDraft} disabled={!draftHistory.length || isSavingPlot} className="px-3 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold text-xs disabled:opacity-40">↩ ย้อน</button>
             {canAddDraftPoints && <button onClick={() => {
               const center = mapInstance.current?.getCenter();
               if (center) changeDraftPoints([...points, { lat: center.lat, lng: center.lng }]);
             }} disabled={isSavingPlot} className="sm:hidden px-3 py-2.5 rounded-xl bg-blue-100 text-blue-800 font-bold text-xs disabled:opacity-40">+ จุด</button>}
             <button onClick={saveDraft} disabled={points.length < 3 || !!draftError || isSavingPlot || plotRevision===null || !vehicleId || !workDate} className="px-3 sm:px-5 py-2.5 rounded-xl bg-green-600 text-white font-black text-xs whitespace-nowrap disabled:bg-gray-200 disabled:text-gray-400">
-              {isSavingPlot ? '⏳ บันทึก...' : isHoleDraft ? '✅ บันทึกหักพื้นที่' : '💾 บันทึกแปลง'}
+              {isSavingPlot ? '⏳ บันทึก...' : isHoleDraft ? '✅ บันทึกหักพื้นที่' : editingRing ? 'บันทึก' : '💾 บันทึกแปลง'}
             </button>
           </div>
         </>
